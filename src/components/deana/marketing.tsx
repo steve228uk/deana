@@ -66,8 +66,9 @@ export function MarketingFirstVisit({
         </div>
       </section>
 
-      <ExplorerTeaser />
+      <HomepageInfoRow />
       <AssuranceGrid />
+      <HomepageFooter />
     </main>
   );
 }
@@ -133,8 +134,9 @@ export function MarketingReturning({
         </div>
       </section>
 
-      <ExplorerTeaser />
+      <HomepageInfoRow />
       <AssuranceGrid />
+      <HomepageFooter />
     </main>
   );
 }
@@ -393,12 +395,58 @@ function ExplorerTeaser() {
 
   return (
     <section className="dn-explorer-teaser" aria-label="What you can do in Explorer">
-      <h2>Explore in your private Explorer</h2>
+      <div className="dn-explorer-teaser-head">
+        <span className="dn-round-icon"><Icon name="search" /></span>
+        <div>
+          <h2>Explore in your private Explorer</h2>
+          <p>Search, filter, and inspect your local report without sending raw DNA to Deana.</p>
+        </div>
+      </div>
       <div className="dn-teaser-grid">
         {features.map(([icon, label]) => (
           <span key={label}><Icon name={icon} /> {label}</span>
         ))}
       </div>
+    </section>
+  );
+}
+
+function HomepageInfoRow() {
+  return (
+    <div className="dn-home-info-row">
+      <ExplorerTeaser />
+      <DataSourcesCard />
+    </div>
+  );
+}
+
+function DataSourcesCard() {
+  return (
+    <section className="dn-data-sources-card" aria-labelledby="data-sources-title">
+      <div className="dn-data-sources-head">
+        <span className="dn-round-icon"><Icon name="book" /></span>
+        <h2 id="data-sources-title">Data sources</h2>
+      </div>
+      <p>
+        Deana uses public evidence sources for clinical, trait, frequency, and literature context.
+      </p>
+      <dl className="dn-source-summary-list">
+        <div>
+          <dt>Clinical</dt>
+          <dd>ClinVar, CPIC</dd>
+        </div>
+        <div>
+          <dt>Traits</dt>
+          <dd>GWAS Catalog, PubMed</dd>
+        </div>
+        <div>
+          <dt>Context</dt>
+          <dd>gnomAD, SNPedia</dd>
+        </div>
+      </dl>
+      <p className="dn-source-note">
+        <Icon name="globe" /> Live SNPedia lookups run from your browser when enrichment is needed.
+      </p>
     </section>
   );
 }
@@ -442,6 +490,14 @@ function OpenSourceBanner() {
         </a>
       </div>
     </section>
+  );
+}
+
+function HomepageFooter() {
+  return (
+    <footer className="dn-home-footer">
+      &copy; 2026 Stephen Radford
+    </footer>
   );
 }
 
