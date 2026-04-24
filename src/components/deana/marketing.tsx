@@ -1,6 +1,8 @@
 import type { ParsedDnaFile, SnpediaProgressSnapshot } from "../../types";
 import { DeanaWordmark, Icon } from "./ui";
 
+export const DEANA_GITHUB_URL = "https://github.com/steve228uk/deana";
+
 export interface SavedReportCard {
   id: string;
   name: string;
@@ -65,7 +67,7 @@ export function MarketingFirstVisit({
       </section>
 
       <ExplorerTeaser />
-      <PrivacyBanner />
+      <AssuranceGrid />
     </main>
   );
 }
@@ -131,14 +133,8 @@ export function MarketingReturning({
         </div>
       </section>
 
-      <section className="dn-privacy-banner">
-        <span className="dn-round-icon"><Icon name="shield" /></span>
-        <div>
-          <h2>Your reports are saved only in this browser.</h2>
-          <p>We never upload or store your DNA data. You are in control.</p>
-        </div>
-      </section>
       <ExplorerTeaser />
+      <AssuranceGrid />
     </main>
   );
 }
@@ -376,8 +372,10 @@ export function PrivacyModal({ onClose, onGithub }: { onClose?: () => void; onGi
 function Step({ number, icon, title, copy }: { number: string; icon: Parameters<typeof Icon>[0]["name"]; title: string; copy: string }) {
   return (
     <article className="dn-step-card">
-      <span className="dn-step-number">{number}</span>
-      <span className="dn-round-icon"><Icon name={icon} /></span>
+      <span className="dn-step-visual">
+        <span className="dn-round-icon"><Icon name={icon} /></span>
+        <span className="dn-step-number">{number}</span>
+      </span>
       <h3>{title}</h3>
       <p>{copy}</p>
     </article>
@@ -385,17 +383,32 @@ function Step({ number, icon, title, copy }: { number: string; icon: Parameters<
 }
 
 function ExplorerTeaser() {
+  const features = [
+    ["heart", "Health insights"],
+    ["user", "Carrier status"],
+    ["spark", "Traits"],
+    ["book", "Source links"],
+    ["search", "Filters & search"],
+  ] as const;
+
   return (
     <section className="dn-explorer-teaser" aria-label="What you can do in Explorer">
       <h2>Explore in your private Explorer</h2>
       <div className="dn-teaser-grid">
-        <span><Icon name="heart" /> Health insights</span>
-        <span><Icon name="user" /> Carrier status</span>
-        <span><Icon name="spark" /> Traits</span>
-        <span><Icon name="book" /> Source links</span>
-        <span><Icon name="search" /> Filters & search</span>
+        {features.map(([icon, label]) => (
+          <span key={label}><Icon name={icon} /> {label}</span>
+        ))}
       </div>
     </section>
+  );
+}
+
+function AssuranceGrid() {
+  return (
+    <div className="dn-assurance-grid">
+      <PrivacyBanner />
+      <OpenSourceBanner />
+    </div>
   );
 }
 
@@ -405,8 +418,28 @@ function PrivacyBanner() {
       <span className="dn-round-icon"><Icon name="shield" /></span>
       <div>
         <h2>Your data stays private.</h2>
-        <p><Icon name="check" /> Processed locally on your device</p>
-        <p><Icon name="check" /> No raw DNA uploaded to Deana</p>
+        <div className="dn-assurance-points">
+          <p><Icon name="check" /> Processed locally on your device</p>
+          <p><Icon name="check" /> No raw DNA uploaded to Deana</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OpenSourceBanner() {
+  return (
+    <section className="dn-privacy-banner dn-privacy-banner--source">
+      <span className="dn-round-icon"><Icon name="code" /></span>
+      <div>
+        <h2>Free and open source.</h2>
+        <div className="dn-assurance-points">
+          <p><Icon name="check" /> Inspect the code on GitHub</p>
+          <p><Icon name="check" /> No account or subscription required</p>
+        </div>
+        <a className="dn-button dn-button--secondary" href={DEANA_GITHUB_URL} target="_blank" rel="noreferrer">
+          <Icon name="external" /> View on GitHub
+        </a>
       </div>
     </section>
   );

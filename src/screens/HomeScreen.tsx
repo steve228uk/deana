@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  DEANA_GITHUB_URL,
   MarketingFirstVisit,
   MarketingReturning,
   PrivacyModal,
@@ -132,7 +133,7 @@ export function HomeScreen({
       {showPrivacy ? (
         <PrivacyModal
           onClose={() => setShowPrivacy(false)}
-          onGithub={() => window.open("https://github.com", "_blank", "noopener,noreferrer")}
+          onGithub={() => window.open(DEANA_GITHUB_URL, "_blank", "noopener,noreferrer")}
         />
       ) : null}
     </>
