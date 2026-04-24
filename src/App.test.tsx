@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -290,7 +290,8 @@ describe("DeaNA app", () => {
     const user = userEvent.setup();
     const { container } = renderApp("/");
 
-    await screen.findByText("Create a profile");
+    await screen.findByText(/Private DNA reports/i);
+    await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
 
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
@@ -299,10 +300,10 @@ describe("DeaNA app", () => {
     await screen.findByDisplayValue("stephen-kit");
     await user.clear(screen.getByLabelText("Profile name"));
     await user.type(screen.getByLabelText("Profile name"), "Stephen");
-    await user.click(screen.getByRole("button", { name: "Save, enrich, and open Explorer" }));
+    await user.click(screen.getByRole("button", { name: /Save and build report/i }));
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(2));
-    expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1");
+    expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
     expect(await screen.findByText("Current report")).toBeInTheDocument();
   });
 
@@ -316,7 +317,7 @@ describe("DeaNA app", () => {
     await user.click(screen.getByRole("button", { name: "Open" }));
 
     await waitFor(() =>
-      expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-2"),
+      expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-2?tab=overview"),
     );
     expect(screen.getByText("Current report")).toBeInTheDocument();
   });
@@ -356,8 +357,10 @@ describe("DeaNA app", () => {
 
     await user.click(screen.getByRole("button", { name: /Factor V Leiden/i }));
 
-    expect(await screen.findByText("Factor V Leiden", { selector: "h2" })).toBeInTheDocument();
-    expect(screen.getByText("Why it matters")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getAllByText("Factor V Leiden", { selector: "h2" }).length).toBeGreaterThan(0),
+    );
+    expect(screen.getAllByText("Why it matters").length).toBeGreaterThan(0);
   });
 
   it("appends another page when the user loads more category results", async () => {
@@ -367,11 +370,11 @@ describe("DeaNA app", () => {
     renderApp("/explorer/profile-5?tab=medical");
 
     await screen.findByText("Current report");
-    expect(await screen.findByText("50 loaded+")).toBeInTheDocument();
+    expect(await screen.findByText("50 visible results+")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Load more" }));
 
-    expect(await screen.findByText("55 loaded")).toBeInTheDocument();
+    expect(await screen.findByText("55 visible results")).toBeInTheDocument();
     expect(screen.getByText("Medical finding 55")).toBeInTheDocument();
   });
 
@@ -379,10 +382,54 @@ describe("DeaNA app", () => {
     const paginated = makePaginatedProfile("profile-6", 55);
     storedProfiles = [paginated];
 
-    renderApp("/explorer/profile-6?tab=medical&selected=medical-55");
+    const { container } = renderApp("/explorer/profile-6?tab=medical&selected=medical-55");
 
     await screen.findByText("Current report");
     expect(await screen.findByText("Medical finding 55", { selector: "h2" })).toBeInTheDocument();
+    expect(container.querySelector(".dn-mobile-sheet")).toBeInTheDocument();
     expect(loadReportEntry).toHaveBeenCalledWith("profile-6", "medical-55");
+  });
+
+  it("resets the inspector scroll position when the selected finding changes", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makePaginatedProfile("profile-7", 3)];
+
+    renderApp("/explorer/profile-7?tab=medical&selected=medical-1");
+
+    await screen.findByText("Current report");
+    const inspector = await screen.findByLabelText("Finding inspector");
+    inspector.scrollTop = 120;
+
+    await user.click(screen.getByRole("button", { name: /Medical finding 02/i }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toContain("selected=medical-2"),
+    );
+    expect(inspector.scrollTop).toBe(0);
+  });
+
+  it("opens and closes the mobile finding tray only after an explicit result tap", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makePaginatedProfile("profile-8", 3)];
+
+    const { container } = renderApp("/explorer/profile-8?tab=medical");
+
+    await screen.findByText("Current report");
+    await screen.findByText("3 visible results");
+    expect(container.querySelector(".dn-mobile-sheet")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Medical finding 02/i }));
+
+    const sheet = await waitFor(() => {
+      const element = container.querySelector(".dn-mobile-sheet");
+      expect(element).toBeInTheDocument();
+      return element as HTMLElement;
+    });
+    expect(within(sheet).getByText("Genotype found")).toBeInTheDocument();
+    expect(within(sheet).getByText("Sources")).toBeInTheDocument();
+
+    await user.click(within(sheet).getByRole("button", { name: "Close" }));
+
+    await waitFor(() => expect(container.querySelector(".dn-mobile-sheet")).not.toBeInTheDocument());
   });
 });

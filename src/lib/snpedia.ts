@@ -36,6 +36,12 @@ interface SnpediaCategoryResponse {
     cmcontinue?: string;
   };
   query?: {
+    pages?: Array<{
+      categoryinfo?: {
+        pages?: number;
+        size?: number;
+      };
+    }>;
     categorymembers?: Array<{
       title: string;
     }>;
@@ -44,6 +50,13 @@ interface SnpediaCategoryResponse {
 
 let documentedRsidsPromise: Promise<Set<string>> | null = null;
 const SNAPSHOT_TIMEOUT_MS = 30000;
+const SNAPSHOT_PAGE_SIZE = 500;
+
+export interface SnpediaSnapshotProgress {
+  currentPage: number;
+  totalPages: number | null;
+  fetchedRsids: number;
+}
 
 function pageUrl(title: string): string {
   return `${SNPEDIA_SITE_URL}/index.php/${encodeURIComponent(title)
@@ -256,6 +269,7 @@ export async function querySnpediaPages(
 export async function queryDocumentedSnpediaRsids(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = SNAPSHOT_TIMEOUT_MS,
+  onProgress?: (progress: SnpediaSnapshotProgress) => void,
 ): Promise<Set<string>> {
   if (documentedRsidsPromise) {
     return documentedRsidsPromise;
@@ -264,15 +278,20 @@ export async function queryDocumentedSnpediaRsids(
   documentedRsidsPromise = (async () => {
     const documented = new Set<string>();
     let cmcontinue: string | null = null;
+    let currentPage = 0;
+    let totalPages: number | null = null;
 
     do {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       const params = new URLSearchParams({
         action: "query",
+        prop: "categoryinfo",
         list: "categorymembers",
+        titles: "Category:Is_a_snp",
         cmtitle: "Category:Is_a_snp",
-        cmlimit: "500",
+        cmlimit: String(SNAPSHOT_PAGE_SIZE),
+        formatversion: "2",
         format: "json",
         origin: "*",
       });
@@ -290,11 +309,22 @@ export async function queryDocumentedSnpediaRsids(
         }
 
         const data = (await response.json()) as SnpediaCategoryResponse;
+        const categorySize = data.query?.pages?.[0]?.categoryinfo?.pages ?? data.query?.pages?.[0]?.categoryinfo?.size;
+        if (typeof categorySize === "number" && categorySize > 0) {
+          totalPages = Math.max(1, Math.ceil(categorySize / SNAPSHOT_PAGE_SIZE));
+        }
+
         for (const member of data.query?.categorymembers ?? []) {
           if (/^rs\d+$/i.test(member.title)) {
             documented.add(member.title.toLowerCase());
           }
         }
+        currentPage += 1;
+        onProgress?.({
+          currentPage,
+          totalPages,
+          fetchedRsids: documented.size,
+        });
         cmcontinue = data.continue?.cmcontinue ?? null;
       } catch (error) {
         documentedRsidsPromise = null;

@@ -6,6 +6,7 @@ import { ParsedDnaFile, SavedProfileSummary, SnpediaProgressSnapshot, SnpediaSup
 import { HomeScreen } from "./screens/HomeScreen";
 import { ExplorerScreen } from "./screens/ExplorerScreen";
 import { generateReport } from "./lib/reportEngine";
+import { PendingProfileBuild, ProcessingScreen } from "./screens/ProcessingScreen";
 
 type ParserWorkerResponse =
   | { ok: true; data: ParsedDnaFile }
@@ -21,6 +22,7 @@ export default function App() {
   const enrichmentWorkerRef = useRef<Worker | null>(null);
   const [profiles, setProfiles] = useState<SavedProfileSummary[]>([]);
   const [isLibraryReady, setIsLibraryReady] = useState(false);
+  const [pendingBuild, setPendingBuild] = useState<PendingProfileBuild | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -184,8 +186,18 @@ export default function App() {
             profiles={profiles}
             isLibraryReady={isLibraryReady}
             parseFile={parseFile}
-            createProfile={createProfile}
             removeProfile={removeProfile}
+            startProcessing={(name, parsed) => setPendingBuild({ name, parsed })}
+          />
+        }
+      />
+      <Route
+        path="/processing"
+        element={
+          <ProcessingScreen
+            pendingBuild={pendingBuild}
+            createProfile={createProfile}
+            clearPendingBuild={() => setPendingBuild(null)}
           />
         }
       />
@@ -205,8 +217,8 @@ export default function App() {
             profiles={profiles}
             isLibraryReady={isLibraryReady}
             parseFile={parseFile}
-            createProfile={createProfile}
             removeProfile={removeProfile}
+            startProcessing={(name, parsed) => setPendingBuild({ name, parsed })}
           />
         }
       />

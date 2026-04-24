@@ -178,6 +178,9 @@ export interface SnpediaProgressSnapshot {
   failedRsids: number;
   retries: number;
   currentRsid: string | null;
+  snpediaSnapshotPage?: number;
+  snpediaSnapshotTotalPages?: number | null;
+  snpediaSnapshotRsids?: number;
 }
 
 export interface SnpediaSupplement {

@@ -159,7 +159,26 @@ async function processAllMarkers(markers: CompactMarker[], post: (message: Worke
     },
   });
 
-  const documentedRsids = await queryDocumentedSnpediaRsids();
+  const documentedRsids = await queryDocumentedSnpediaRsids(fetch, undefined, (progress) => {
+    post({
+      type: "progress",
+      snapshot: {
+        status: "running",
+        totalRsids: markers.length,
+        processedRsids: 0,
+        matchedFindings: 0,
+        unmatchedRsids: 0,
+        failedRsids: 0,
+        retries: 0,
+        currentRsid: progress.totalPages
+          ? `Syncing SNPedia rsID snapshot: page ${progress.currentPage.toLocaleString()} of ${progress.totalPages.toLocaleString()}`
+          : `Syncing SNPedia rsID snapshot: page ${progress.currentPage.toLocaleString()}`,
+        snpediaSnapshotPage: progress.currentPage,
+        snpediaSnapshotTotalPages: progress.totalPages,
+        snpediaSnapshotRsids: progress.fetchedRsids,
+      },
+    });
+  });
   const matchedMarkers = markers.filter((marker) => documentedRsids.has(marker[0].toLowerCase()));
   const skippedRsids = markers.length - matchedMarkers.length;
   const batches = chunk(matchedMarkers, BATCH_SIZE);
