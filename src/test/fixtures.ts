@@ -1,4 +1,5 @@
-import { ParsedDnaFile, SavedProfile } from "../types";
+import { buildEntrySearchText } from "../lib/explorer";
+import { ParsedDnaFile, ProfileMeta, SavedProfile, SavedProfileSummary, StoredReportEntry } from "../types";
 import { createProfile } from "../lib/profiles";
 
 export function makeParsedDnaFile(): ParsedDnaFile {
@@ -30,4 +31,58 @@ export function makeSavedProfile(overrides: Partial<SavedProfile> = {}): SavedPr
     ...createProfile("Stephen", makeParsedDnaFile()),
     ...overrides,
   };
+}
+
+export function makeProfileSummary(overrides: Partial<SavedProfileSummary> = {}): SavedProfileSummary {
+  const profile = makeSavedProfile();
+
+  return {
+    id: profile.id,
+    name: profile.name,
+    fileName: profile.fileName,
+    createdAt: profile.createdAt,
+    dna: {
+      provider: profile.dna.provider,
+      build: profile.dna.build,
+      markerCount: profile.dna.markerCount,
+    },
+    reportVersion: profile.reportVersion,
+    evidencePackVersion: profile.evidencePackVersion,
+    report: {
+      overview: profile.report.overview,
+    },
+    ...overrides,
+  };
+}
+
+export function makeProfileMeta(overrides: Partial<ProfileMeta> = {}): ProfileMeta {
+  const profile = makeSavedProfile();
+
+  return {
+    id: profile.id,
+    name: profile.name,
+    fileName: profile.fileName,
+    createdAt: profile.createdAt,
+    dna: profile.dna,
+    supplements: profile.supplements,
+    reportVersion: profile.reportVersion,
+    evidencePackVersion: profile.evidencePackVersion,
+    report: {
+      reportVersion: profile.report.reportVersion,
+      evidencePackVersion: profile.report.evidencePackVersion,
+      overview: profile.report.overview,
+      tabs: profile.report.tabs,
+      facets: profile.report.facets,
+    },
+    ...overrides,
+  };
+}
+
+export function makeStoredReportEntries(profileId = "profile-1"): StoredReportEntry[] {
+  const profile = makeSavedProfile({ id: profileId });
+  return profile.report.entries.map((entry) => ({
+    ...entry,
+    profileId,
+    searchText: buildEntrySearchText(entry),
+  }));
 }

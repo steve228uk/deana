@@ -26,6 +26,19 @@ export const DEFAULT_FILTERS: ExplorerFilters = {
   sort: "severity",
 };
 
+type SearchableEntry = {
+  searchText?: string;
+  title: string;
+  summary: string;
+  detail: string;
+  whyItMatters: string;
+  genotypeSummary: string;
+  genes: string[];
+  topics: string[];
+  conditions: string[];
+  matchedMarkers: ReportEntry["matchedMarkers"];
+};
+
 export function buildEntrySearchText(entry: Pick<
   ReportEntry,
   | "title"
@@ -49,13 +62,13 @@ export function buildEntrySearchText(entry: Pick<
     ...entry.conditions,
     ...entry.matchedMarkers.map((marker) => marker.rsid),
   ]
-    .join(" ")
-    .toLowerCase();
+	    .join(" ")
+	    .toLowerCase();
 }
 
-function matchesSearch(entry: Pick<ReportEntry, "searchText"> | ReportEntry, query: string): boolean {
+function matchesSearch(entry: SearchableEntry, query: string): boolean {
   if (!query) return true;
-  const haystack = "searchText" in entry ? entry.searchText : buildEntrySearchText(entry);
+  const haystack = typeof entry.searchText === "string" ? entry.searchText : buildEntrySearchText(entry);
   return haystack.includes(query.toLowerCase());
 }
 
@@ -73,9 +86,7 @@ export function matchesEntryFilters(
     | "topics"
     | "conditions"
   > &
-    (Pick<ReportEntry, "matchedMarkers" | "title" | "summary" | "detail" | "whyItMatters" | "genotypeSummary"> | {
-      searchText: string;
-    }),
+    SearchableEntry,
   filters: ExplorerFilters,
   category?: ReportEntry["category"],
 ): boolean {

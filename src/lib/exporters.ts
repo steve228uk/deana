@@ -1,4 +1,4 @@
-import { SavedProfile } from "../types";
+import { ProfileMeta, ReportEntry } from "../types";
 
 function escapeHtml(value: string): string {
   return value
@@ -9,16 +9,16 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#039;");
 }
 
-export function exportReportHtml(profile: SavedProfile): void {
-  const groupedEntries: Array<[string, SavedProfile["report"]["entries"]]> = [];
+export function exportReportHtml(profile: ProfileMeta, entries: ReportEntry[]): void {
+  const groupedEntries: Array<[string, ReportEntry[]]> = [];
 
-  for (const [label, entries] of [
-    ["Medical", profile.report.entries.filter((entry) => entry.category === "medical")],
-    ["Traits", profile.report.entries.filter((entry) => entry.category === "traits")],
-    ["Drug Response", profile.report.entries.filter((entry) => entry.category === "drug")],
-  ] as Array<[string, SavedProfile["report"]["entries"]]>) {
-    if (entries.length > 0) {
-      groupedEntries.push([label, entries]);
+  for (const [label, grouped] of [
+    ["Medical", entries.filter((entry) => entry.category === "medical")],
+    ["Traits", entries.filter((entry) => entry.category === "traits")],
+    ["Drug Response", entries.filter((entry) => entry.category === "drug")],
+  ] as Array<[string, ReportEntry[]]>) {
+    if (grouped.length > 0) {
+      groupedEntries.push([label, grouped]);
     }
   }
 

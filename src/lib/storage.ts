@@ -183,7 +183,6 @@ function sortSummaries(records: StoredProfileMetaRecord[]): SavedProfileSummary[
       fileName: record.fileName,
       createdAt: record.createdAt,
       dna: record.dna,
-      supplements: record.supplements,
       reportVersion: record.reportVersion,
       evidencePackVersion: record.evidencePackVersion,
       report: {
@@ -229,9 +228,13 @@ function openSortCursor(
   const { name, direction } = indexForSort(sort);
   const index = store.index(name);
   const lower =
-    name === ENTRY_ALPHABETICAL_INDEX ? [profileId, category, ""] : [profileId, category, Number.NEGATIVE_INFINITY];
+    name === ENTRY_ALPHABETICAL_INDEX
+      ? [profileId, category, "", ""]
+      : [profileId, category, -1_000_000_000, ""];
   const upper =
-    name === ENTRY_ALPHABETICAL_INDEX ? [profileId, category, "\uffff"] : [profileId, category, Number.POSITIVE_INFINITY];
+    name === ENTRY_ALPHABETICAL_INDEX
+      ? [profileId, category, "\uffff", "\uffff"]
+      : [profileId, category, 1_000_000_000, "\uffff"];
 
   return index.openCursor(IDBKeyRange.bound(lower, upper), direction);
 }
@@ -307,6 +310,8 @@ export async function loadProfileSummaries(): Promise<SavedProfileSummary[]> {
   const records = await requestToPromise(transaction.objectStore(PROFILE_META_STORE).getAll() as IDBRequest<StoredProfileMetaRecord[]>);
   return sortSummaries(records);
 }
+
+export const loadProfiles = loadProfileSummaries;
 
 export async function loadProfileMeta(profileId: string): Promise<ProfileMeta | null> {
   const db = await openDb();
