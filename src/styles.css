@@ -610,7 +610,7 @@ a { color: inherit; }
     border-radius: 0;
     padding: 0;
   }
-  .dn-overview-two-col { display: grid; padding: 0 18px; }
+  .dn-overview-two-col { display: grid; padding: 0; }
   .dn-category-card p { min-height: 0; }
   .dn-category-screen { display: block; min-height: auto; overflow: visible; }
   .dn-filter-sidebar { display: none; }
