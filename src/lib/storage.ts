@@ -122,8 +122,9 @@ function openDb(): Promise<IDBDatabase> {
 
 function hasCurrentReportShape(profile: SavedProfile): boolean {
   return Boolean(
-    profile.report?.entries?.every((entry) => entry.entryKind) &&
-      profile.report?.tabs?.some((tab) => tab.tab === "other") &&
+    profile.report?.entries?.every((entry) => entry.entryKind && entry.outcome && entry.normalizedClinicalSignificance !== undefined) &&
+      !profile.report?.tabs?.some((tab) => (tab.tab as string) === "other") &&
+      profile.report?.facets?.clinicalSignificanceLabels &&
       typeof profile.report?.overview?.localEvidenceEntryMatches === "number" &&
       typeof profile.report?.overview?.localEvidenceRecordMatches === "number" &&
       typeof profile.report?.overview?.localEvidenceMatchedRsids === "number",

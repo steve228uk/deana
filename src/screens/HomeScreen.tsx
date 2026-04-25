@@ -106,7 +106,6 @@ export function HomeScreen({
         <MarketingFirstVisit
           onUpload={openUpload}
           onPrivacy={() => setShowPrivacy(true)}
-          onHowItWorks={scrollHowItWorks}
         />
       ) : (
         <MarketingReturning

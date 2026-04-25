@@ -12,8 +12,13 @@ import {
   ReportFacets,
   TabSummary,
 } from "../types";
+import {
+  clinicalSignificanceLabel,
+  normalizeClinicalSignificance,
+  normalizeConditions,
+} from "./normalization";
 
-export const REPORT_VERSION = 5;
+export const REPORT_VERSION = 6;
 
 type MarkerMap = Map<string, CompactMarker>;
 
@@ -30,6 +35,12 @@ function facetValues<T extends string>(values: readonly T[], preferred: readonly
 }
 
 function buildFacets(entries: ReportEntry[]): ReportFacets {
+  const clinicalSignificances = uniq(
+    entries
+      .map((entry) => entry.normalizedClinicalSignificance)
+      .filter((value): value is string => Boolean(value)),
+  );
+
   return {
     sources: uniq(entries.flatMap((entry) => entry.sources.map((source) => source.name))),
     evidenceTiers: facetValues(
@@ -44,12 +55,13 @@ function buildFacets(entries: ReportEntry[]): ReportFacets {
       uniq(entries.map((entry) => entry.repute)) as Array<ReportEntry["repute"]>,
       ["bad", "mixed", "good", "not-set"],
     ),
-    clinicalSignificances: uniq(
-      entries.map((entry) => entry.clinicalSignificance).filter((value): value is string => Boolean(value)),
+    clinicalSignificances,
+    clinicalSignificanceLabels: Object.fromEntries(
+      clinicalSignificances.map((value) => [value, clinicalSignificanceLabel(value)]),
     ),
     genes: uniq(entries.flatMap((entry) => entry.genes)),
     tags: uniq(entries.flatMap((entry) => entry.topics)),
-    conditions: uniq(entries.flatMap((entry) => entry.conditions)),
+    conditions: normalizeConditions(entries.flatMap((entry) => entry.conditions)),
     publicationBuckets: facetValues(
       uniq(entries.map((entry) => entry.publicationBucket)) as Array<ReportEntry["publicationBucket"]>,
       ["0", "1-5", "6-20", "21+"],
@@ -121,19 +133,20 @@ function buildTabs(entries: ReportEntry[]): TabSummary[] {
       description: "PGx preview cards kept clearly below a clinical-report certainty bar.",
       count: drug,
     },
-    {
-      tab: "other",
-      label: "Other",
-      description: "Source-derived local evidence entries grouped separately from the primary category navigation.",
-      count: entries.filter((entry) => entry.entryKind === "local-evidence").length,
-    },
-    {
-      tab: "raw",
-      label: "Raw Markers",
-      description: "Uploaded markers linked to local evidence-pack context where DeaNA has interpretation context.",
-      count: 0,
-    },
   ];
+}
+
+function outcomeForLocalEvidence(record: EvidencePackMatch["record"]): ReportEntry["outcome"] {
+  if (record.tone === "good" || record.repute === "good") return "positive";
+  if (record.tone === "caution" || record.repute === "bad" || record.repute === "mixed") return "negative";
+  return "informational";
+}
+
+function severityForLocalEvidence(record: EvidencePackMatch["record"], category: ReportEntry["category"]): number {
+  const outcome = outcomeForLocalEvidence(record);
+  if (outcome === "positive") return category === "medical" ? 22 : 18;
+  if (outcome === "informational") return category === "drug" ? 34 : category === "medical" ? 30 : 24;
+  return category === "medical" ? (record.repute === "bad" ? 82 : 62) : category === "drug" ? 66 : 34;
 }
 
 function publicationBucket(publicationCount: number): ReportEntry["publicationBucket"] {
@@ -169,6 +182,8 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
       const publicationCount = record.pmids.length;
       const category = record.category ?? "traits";
       const sourceName = SOURCE_LIBRARY[record.sourceId]?.name ?? record.sourceId;
+      const normalizedClinicalSignificance = normalizeClinicalSignificance(record.clinicalSignificance);
+      const conditions = normalizeConditions(record.conditions ?? []);
 
       return {
         id: record.entryId,
@@ -190,7 +205,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         matchedMarkers: match.matchedMarkers,
         genes: record.genes,
         topics: record.topics ?? [],
-        conditions: record.conditions ?? [],
+        conditions,
         warnings: [
           "This is local evidence-pack context, not a diagnosis or treatment recommendation.",
           "Consumer-array coverage and genotype orientation can limit interpretation fidelity.",
@@ -211,6 +226,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         ],
         evidenceTier: record.evidenceLevel,
         clinicalSignificance: record.clinicalSignificance,
+        normalizedClinicalSignificance,
         repute: record.repute ?? "not-set",
         publicationCount,
         publicationBucket: publicationBucket(publicationCount),
@@ -219,15 +235,9 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         sourcePageUrl: record.url,
         coverage: "full",
         tone: record.tone ?? "neutral",
+        outcome: outcomeForLocalEvidence(record),
         sort: {
-          severity:
-            category === "medical"
-              ? record.repute === "bad"
-                ? 82
-                : 62
-              : category === "drug"
-                ? 66
-                : 34,
+          severity: severityForLocalEvidence(record, category),
           evidence:
             record.evidenceLevel === "high"
               ? 4

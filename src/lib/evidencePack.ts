@@ -11,6 +11,7 @@ import {
   ReputeStatus,
   ReportEntry,
 } from "../types";
+import { normalizeClinicalSignificance } from "./normalization";
 
 export const EVIDENCE_PACK_VERSION = "2026-04-core";
 
@@ -186,6 +187,29 @@ function combinedDisclaimer(sourceIds: string[]): string {
   return Array.from(new Set(sourceIds.map((sourceId) => SOURCE_LIBRARY[sourceId].disclaimer))).join(" ");
 }
 
+function outcomeFromEvaluation(evaluation: ReturnType<EvidenceDefinition["evaluate"]>): ReportEntry["outcome"] {
+  if (evaluation.coverage === "missing" || (evaluation.coverage === "partial" && evaluation.tone === "neutral")) return "missing";
+  if (evaluation.tone === "caution") return "negative";
+  if (evaluation.tone === "good") return "positive";
+  return "informational";
+}
+
+function severityForDefinition(
+  definition: EvidenceDefinition,
+  evaluation: ReturnType<EvidenceDefinition["evaluate"]>,
+): number {
+  const outcome = outcomeFromEvaluation(evaluation);
+  if (outcome === "missing") return 5;
+  if (outcome === "positive") return definition.category === "medical" ? 22 : 18;
+  if (outcome === "informational") return definition.category === "drug" ? 34 : definition.category === "medical" ? 30 : 24;
+
+  if (definition.category === "medical") {
+    return definition.repute === "bad" ? 100 : definition.repute === "mixed" ? 80 : 60;
+  }
+
+  return definition.category === "drug" ? 70 : 40;
+}
+
 export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
   {
     id: "medical-apoe",
@@ -315,7 +339,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
       const markers = [readMarker(map, "rs1799963", "F2")];
       const genotype = markers[0].genotype;
       return {
-        tone: genotype && genotype !== "GG" ? "caution" : "neutral",
+        tone: genotype && genotype !== "GG" ? "caution" : "good",
         coverage: coverageFrom(markers),
         summary:
           genotype === null
@@ -744,6 +768,8 @@ export function createEntryFromDefinition(
   );
   const frequencyNote =
     evidenceMatches.map((match) => match.record.frequencyNote).find(Boolean) ?? definition.frequencyNote;
+  const normalizedClinicalSignificance = normalizeClinicalSignificance(definition.clinicalSignificance);
+
   return {
     id: definition.id,
     entryKind: "curated",
@@ -763,6 +789,7 @@ export function createEntryFromDefinition(
     sourceNotes: sourceNotes(definition.sourceIds, evidenceMatches),
     evidenceTier: definition.evidenceTier,
     clinicalSignificance: definition.clinicalSignificance,
+    normalizedClinicalSignificance,
     repute: definition.repute,
     publicationCount,
     publicationBucket:
@@ -776,17 +803,9 @@ export function createEntryFromDefinition(
     frequencyNote,
     coverage: evaluation.coverage,
     tone: evaluation.tone,
+    outcome: outcomeFromEvaluation(evaluation),
     sort: {
-      severity:
-        definition.category === "medical"
-          ? definition.repute === "bad"
-            ? 100
-            : definition.repute === "mixed"
-              ? 80
-              : 60
-          : definition.category === "drug"
-            ? 70
-            : 40,
+      severity: severityForDefinition(definition, evaluation),
       evidence:
         definition.evidenceTier === "high"
           ? 4

@@ -5,21 +5,16 @@ import {
   ExplorerReportCard,
   ExplorerShell,
   OverviewContent,
-  RawMarkersContent,
 } from "../components/deana/explorer";
 import {
   DEFAULT_FILTERS,
   ExplorerFilters,
-  buildRawMarkerResults,
-  compareEntries,
   matchesEntryFilters,
 } from "../lib/explorer";
-import { exportReportHtml } from "../lib/exporters";
 import {
   loadCategoryPage,
   loadProfileMeta,
   loadReportEntry,
-  streamReportEntries,
 } from "../lib/storage";
 import { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types";
 
@@ -31,16 +26,26 @@ interface ExplorerScreenProps {
 const PAGE_SIZE = 50;
 
 function formatFilters(searchParams: URLSearchParams): ExplorerFilters {
+  const multiValue = (key: string): string[] => {
+    const values = searchParams.getAll(key);
+    const legacyValue = searchParams.get(key);
+    return values.length > 0
+      ? values.flatMap((value) => value.split(",")).filter(Boolean)
+      : legacyValue
+        ? legacyValue.split(",").filter(Boolean)
+        : [];
+  };
+
   return {
     q: searchParams.get("q") ?? DEFAULT_FILTERS.q,
     source: searchParams.get("source") ?? DEFAULT_FILTERS.source,
-    evidence: searchParams.get("evidence") ?? DEFAULT_FILTERS.evidence,
-    significance: searchParams.get("significance") ?? DEFAULT_FILTERS.significance,
-    repute: searchParams.get("repute") ?? DEFAULT_FILTERS.repute,
-    coverage: searchParams.get("coverage") ?? DEFAULT_FILTERS.coverage,
-    publications: searchParams.get("publications") ?? DEFAULT_FILTERS.publications,
-    gene: searchParams.get("gene") ?? DEFAULT_FILTERS.gene,
-    tag: searchParams.get("tag") ?? DEFAULT_FILTERS.tag,
+    evidence: multiValue("evidence"),
+    significance: multiValue("significance"),
+    repute: multiValue("repute"),
+    coverage: multiValue("coverage"),
+    publications: multiValue("publications"),
+    gene: multiValue("gene"),
+    tag: multiValue("tag"),
     sort: searchParams.get("sort") ?? DEFAULT_FILTERS.sort,
   };
 }
@@ -53,7 +58,7 @@ function categoryForTab(tab: ExplorerTab): ReportEntry["category"] | undefined {
 }
 
 function normalizeTab(value: string | null): ExplorerTab {
-  if (value === "medical" || value === "traits" || value === "drug" || value === "other" || value === "raw") {
+  if (value === "medical" || value === "traits" || value === "drug") {
     return value;
   }
   return "overview";
@@ -61,14 +66,18 @@ function normalizeTab(value: string | null): ExplorerTab {
 
 function updateSearchParams(
   searchParams: URLSearchParams,
-  patch: Partial<Record<string, string | null>>,
+  patch: Partial<Record<string, string | string[] | null>>,
   setSearchParams: ReturnType<typeof useSearchParams>[1],
 ) {
   const next = new URLSearchParams(searchParams);
 
   Object.entries(patch).forEach(([key, value]) => {
-    if (!value) {
-      next.delete(key);
+    next.delete(key);
+    if (!value || (Array.isArray(value) && value.length === 0)) {
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => next.append(key, item));
       return;
     }
     next.set(key, value);
@@ -90,26 +99,20 @@ function toReportCard(profile: ProfileMeta): ExplorerReportCard {
 
 export function ExplorerScreen({
   isLibraryReady,
-  refreshProfileEvidence,
+  refreshProfileEvidence: _refreshProfileEvidence,
 }: ExplorerScreenProps) {
   const { profileId } = useParams<{ profileId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [isRetryingEvidence, setIsRetryingEvidence] = useState(false);
   const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(() => Boolean(searchParams.get("selected")));
   const [isProfileLoading, setIsProfileLoading] = useState(true);
   const [isPageLoading, setIsPageLoading] = useState(false);
-  const [isEvidenceLoading, setIsEvidenceLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [isRawLoading, setIsRawLoading] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
   const [profile, setProfile] = useState<ProfileMeta | null>(null);
   const [visibleEntries, setVisibleEntries] = useState<StoredReportEntry[]>([]);
   const [pageCursor, setPageCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [selectedEntryFallback, setSelectedEntryFallback] = useState<StoredReportEntry | null>(null);
-  const [evidenceEntries, setEvidenceEntries] = useState<StoredReportEntry[]>([]);
-  const [rawEntries, setRawEntries] = useState<StoredReportEntry[]>([]);
 
   const searchKey = searchParams.toString();
   const tab = useMemo(() => normalizeTab(searchParams.get("tab")), [searchKey]);
@@ -189,79 +192,7 @@ export function ExplorerScreen({
   useEffect(() => {
     let cancelled = false;
 
-    if (!profile || tab !== "other") {
-      startTransition(() => {
-        setEvidenceEntries([]);
-      });
-      return;
-    }
-
-    setIsEvidenceLoading(true);
-
-    void (async () => {
-      const entries: StoredReportEntry[] = [];
-      for await (const entry of streamReportEntries(profile.id)) {
-        if (entry.entryKind === "local-evidence" && matchesEntryFilters(entry, filters)) {
-          entries.push(entry);
-        }
-      }
-
-      entries.sort((left, right) => compareEntries(left, right, filters.sort));
-
-      if (cancelled) return;
-      startTransition(() => {
-        setEvidenceEntries(entries);
-        setVisibleEntries(entries.slice(0, PAGE_SIZE));
-        setPageCursor(entries.length > PAGE_SIZE ? String(PAGE_SIZE) : null);
-        setHasMore(entries.length > PAGE_SIZE);
-        setSelectedEntryFallback(null);
-      });
-    })().finally(() => {
-      if (cancelled) return;
-      setIsEvidenceLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [filters, profile, tab]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!profile || tab !== "raw") {
-      startTransition(() => {
-        setRawEntries([]);
-      });
-      return;
-    }
-
-    setIsRawLoading(true);
-
-    void (async () => {
-      const entries: StoredReportEntry[] = [];
-      for await (const entry of streamReportEntries(profile.id)) {
-        entries.push(entry);
-      }
-
-      if (cancelled) return;
-      startTransition(() => {
-        setRawEntries(entries);
-      });
-    })().finally(() => {
-      if (cancelled) return;
-      setIsRawLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [profile, tab]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!profile || (!category && tab !== "other") || !selectedEntryId) {
+    if (!profile || !category || !selectedEntryId) {
       startTransition(() => {
         setSelectedEntryFallback(null);
       });
@@ -280,9 +211,7 @@ export function ExplorerScreen({
       startTransition(() => {
         setSelectedEntryFallback(
           entry &&
-            (tab === "other"
-              ? entry.entryKind === "local-evidence" && matchesEntryFilters(entry, filters)
-              : matchesEntryFilters(entry, filters, category))
+            matchesEntryFilters(entry, filters, category)
             ? entry
             : null,
         );
@@ -299,15 +228,10 @@ export function ExplorerScreen({
   }, [selectedEntryFallback, selectedEntryId, visibleEntries]);
 
   useEffect(() => {
-    if ((!category && tab !== "other") || tab === "overview" || tab === "raw") return;
+    if (!category || tab === "overview") return;
     if (selectedEntryId || visibleEntries.length === 0) return;
     updateSearchParams(searchParams, { selected: visibleEntries[0].id }, setSearchParams);
   }, [category, searchParams, selectedEntryId, setSearchParams, tab, visibleEntries]);
-
-  const rawMarkers = useMemo(() => {
-    if (!profile) return [];
-    return buildRawMarkerResults(profile.dna.markers, rawEntries, filters.q || filters.gene || filters.tag);
-  }, [filters.gene, filters.q, filters.tag, profile, rawEntries]);
 
   if (!isLibraryReady || isProfileLoading) {
     return (
@@ -327,7 +251,7 @@ export function ExplorerScreen({
     setIsMobileSheetOpen(false);
     updateSearchParams(
       searchParams,
-      { tab: nextTab, selected: nextTab === "overview" || nextTab === "raw" ? null : "" },
+      { tab: nextTab, selected: nextTab === "overview" ? null : "" },
       setSearchParams,
     );
   }
@@ -358,35 +282,12 @@ export function ExplorerScreen({
     );
   }
 
-  function jumpToEntry(entryId: string, categoryValue: ReportEntry["category"]) {
-    setIsMobileSheetOpen(true);
-    updateSearchParams(searchParams, { tab: categoryValue, selected: entryId }, setSearchParams);
-  }
-
   function selectCategoryEntry(id: string) {
     setIsMobileSheetOpen(true);
     updateSearchParams(searchParams, { selected: id }, setSearchParams);
   }
 
   async function handleLoadMore() {
-    if (tab === "other") {
-      const currentOffset = Number(pageCursor ?? 0);
-      if (!pageCursor || isLoadingMore) return;
-
-      setIsLoadingMore(true);
-      try {
-        const nextOffset = currentOffset + PAGE_SIZE;
-        startTransition(() => {
-          setVisibleEntries(evidenceEntries.slice(0, nextOffset));
-          setPageCursor(evidenceEntries.length > nextOffset ? String(nextOffset) : null);
-          setHasMore(evidenceEntries.length > nextOffset);
-        });
-      } finally {
-        setIsLoadingMore(false);
-      }
-      return;
-    }
-
     if (!profile || !category || !pageCursor || isLoadingMore) return;
 
     setIsLoadingMore(true);
@@ -409,72 +310,15 @@ export function ExplorerScreen({
     }
   }
 
-  async function handleExport() {
-    const currentProfile = profile;
-    if (!currentProfile) return;
-
-    setIsExporting(true);
-
-    try {
-      const entries: StoredReportEntry[] = [];
-      for await (const entry of streamReportEntries(currentProfile.id)) {
-        entries.push(entry);
-      }
-      exportReportHtml(currentProfile, entries);
-    } finally {
-      setIsExporting(false);
-    }
-  }
-
-  async function handleRefreshEvidence() {
-    if (!profile || isRetryingEvidence) return;
-
-    setIsRetryingEvidence(true);
-    try {
-      await refreshProfileEvidence(profile.id);
-      const nextProfile = await loadProfileMeta(profile.id);
-      startTransition(() => {
-        setProfile(nextProfile);
-      });
-    } finally {
-      setIsRetryingEvidence(false);
-    }
-  }
-
-  const localEvidenceEntryMatches =
-    profile.report.overview.localEvidenceEntryMatches ?? profile.report.overview.evidenceMatchedFindings ?? 0;
-  const localEvidenceNeedsAttention =
-    profile.report.overview.evidenceStatus !== "complete" ||
-    profile.report.overview.evidenceProcessedRsids < profile.dna.markerCount ||
-    (profile.dna.markerCount > 100_000 && localEvidenceEntryMatches < 100);
-
   return (
     <ExplorerShell
       report={toReportCard(profile)}
       activeTab={tab}
-      isExporting={isExporting}
       onTabChange={setTab}
-      onExportHtml={() => void handleExport()}
-      onPrint={() => window.print()}
       onBackHome={() => navigate("/")}
     >
       {tab === "overview" ? (
-        <>
-          <OverviewContent profile={profile} onExploreCategory={setTab} />
-          <section className="dn-overview-retry">
-            <div className={localEvidenceNeedsAttention ? "dn-callout dn-callout--error" : "dn-callout"}>
-              <span>
-                Local evidence is {profile.report.overview.evidenceStatus}.{" "}
-                {localEvidenceEntryMatches.toLocaleString()} entries are matched from the bundled evidence pack.
-              </span>
-              <button className="dn-button dn-button--secondary" onClick={() => void handleRefreshEvidence()} disabled={isRetryingEvidence}>
-                <span>{isRetryingEvidence ? "Refreshing evidence..." : "Refresh local evidence"}</span>
-              </button>
-            </div>
-          </section>
-        </>
-      ) : tab === "raw" ? (
-        <RawMarkersContent markers={rawMarkers} isLoading={isRawLoading} onJump={jumpToEntry} />
+        <OverviewContent profile={profile} onExploreCategory={setTab} />
       ) : (
         <CategoryExplorerContent
           activeTab={tab}
@@ -482,7 +326,7 @@ export function ExplorerScreen({
           filters={filters}
           entries={visibleEntries}
           selectedEntry={selectedEntry}
-          isLoading={tab === "other" ? isEvidenceLoading : isPageLoading}
+          isLoading={isPageLoading}
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
           isMobileSheetOpen={isMobileSheetOpen}

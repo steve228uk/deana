@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { ExplorerFilters } from "../../lib/explorer";
-import type { ExplorerTab, ProfileMeta, RawMarkerResult, ReportEntry, StoredReportEntry } from "../../types";
+import type { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../../types";
+import { DEANA_GITHUB_URL, PrivacyModal } from "./marketing";
 import { DeanaWordmark, Icon, IconName } from "./ui";
 
 export interface ExplorerReportCard {
@@ -17,8 +18,6 @@ const tabs: Array<{ id: ExplorerTab; label: string }> = [
   { id: "medical", label: "Medical" },
   { id: "traits", label: "Traits" },
   { id: "drug", label: "Drug response" },
-  { id: "other", label: "Other" },
-  { id: "raw", label: "Raw markers" },
 ];
 
 const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = [
@@ -26,40 +25,28 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = [
   { id: "medical", label: "Medical", icon: "heart" },
   { id: "traits", label: "Traits", icon: "leaf" },
   { id: "drug", label: "Drug response", icon: "pill" },
-  { id: "other", label: "Other", icon: "database" },
-  { id: "raw", label: "Raw markers", icon: "list" },
 ];
 
 export function ExplorerShell({
   report,
   activeTab,
   children,
-  isExporting,
   onTabChange,
-  onExportHtml,
-  onPrint,
   onBackHome,
 }: {
   report: ExplorerReportCard;
   activeTab: ExplorerTab;
   children: ReactNode;
-  isExporting?: boolean;
   onTabChange?: (tab: ExplorerTab) => void;
-  onExportHtml?: () => void;
-  onPrint?: () => void;
   onBackHome?: () => void;
 }) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
-
-  function runExportAction(action?: () => void) {
-    setIsExportMenuOpen(false);
-    action?.();
-  }
+  const [modal, setModal] = useState<"privacy" | "help" | null>(null);
 
   return (
-    <div className={`dn-explorer-shell ${isSidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
-      <aside className={`dn-explorer-sidebar ${isSidebarCollapsed ? "is-collapsed" : ""}`} aria-label="Explorer navigation">
+    <>
+      <div className={`dn-explorer-shell ${isSidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
+        <aside className={`dn-explorer-sidebar ${isSidebarCollapsed ? "is-collapsed" : ""}`} aria-label="Explorer navigation">
         <div className="dn-sidebar-head">
           <DeanaWordmark />
           <button
@@ -86,13 +73,12 @@ export function ExplorerShell({
           <button onClick={onBackHome}><Icon name="upload" /> <span>Upload DNA</span></button>
           <button onClick={onBackHome}><Icon name="file" /> <span>Reports</span></button>
           <hr />
-          <button><Icon name="settings" /> <span>Settings</span></button>
-          <button><Icon name="help" /> <span>Help</span></button>
+          <button onClick={() => setModal("help")}><Icon name="help" /> <span>Help</span></button>
         </nav>
-        <div className="dn-sidebar-privacy"><Icon name="lock" /> Your data stays on this device. <button>Learn more</button></div>
-      </aside>
+        <div className="dn-sidebar-privacy"><Icon name="lock" /> Your data stays on this device. <button onClick={() => setModal("privacy")}>Learn more</button></div>
+        </aside>
 
-      <div className="dn-explorer-main">
+        <div className="dn-explorer-main">
         <header className="dn-explorer-topbar">
           {activeTab === "overview" ? null : <span className="dn-screen-reader-text">Current report</span>}
           <DeanaWordmark compact className="dn-show-mobile" />
@@ -100,29 +86,8 @@ export function ExplorerShell({
             <Icon name="file" />
             <span><strong>{report.name}</strong><small>{report.provider} · {report.build} · {report.markerCount.toLocaleString()} markers</small></span>
           </button>
-          <span className="dn-local-status"><Icon name="shield" /> All analysis is local <i /></span>
-          <div className="dn-export-menu">
-            <button
-              className="dn-button dn-button--secondary"
-              aria-haspopup="menu"
-              aria-expanded={isExportMenuOpen}
-              onClick={() => setIsExportMenuOpen((value) => !value)}
-            >
-              <Icon name="download" /> Export
-            </button>
-            {isExportMenuOpen ? (
-              <div className="dn-export-menu__panel" role="menu">
-                <button role="menuitem" onClick={() => runExportAction(onExportHtml)} disabled={isExporting}>
-                  <Icon name="download" /> {isExporting ? "Preparing..." : "Export HTML"}
-                </button>
-                <button role="menuitem" onClick={() => runExportAction(onPrint)}>
-                  <Icon name="print" /> Print / PDF
-                </button>
-              </div>
-            ) : null}
-          </div>
-          <button className="dn-icon-button dn-hide-mobile" aria-label="Help"><Icon name="help" /></button>
-          <button className="dn-avatar dn-hide-mobile">{initials(report.name)}</button>
+          <button className="dn-local-status" onClick={() => setModal("privacy")}><Icon name="shield" /> All analysis is local <i /></button>
+          <button className="dn-icon-button dn-hide-mobile" aria-label="Help" onClick={() => setModal("help")}><Icon name="help" /></button>
           <button className="dn-icon-button dn-show-mobile" aria-label="Menu"><Icon name="menu" /></button>
         </header>
 
@@ -133,7 +98,51 @@ export function ExplorerShell({
         </nav>
 
         {children}
+        </div>
       </div>
+      {modal === "privacy" ? (
+        <PrivacyModal
+          onClose={() => setModal(null)}
+          onGithub={() => window.open(DEANA_GITHUB_URL, "_blank", "noopener,noreferrer")}
+        />
+      ) : null}
+      {modal === "help" ? <HelpModal onClose={() => setModal(null)} /> : null}
+    </>
+  );
+}
+
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="dn-modal-backdrop" role="presentation">
+      <section className="dn-modal dn-help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
+        <button className="dn-icon-button dn-modal-close" onClick={onClose} aria-label="Close"><Icon name="x" /></button>
+        <DeanaWordmark compact />
+        <h1 id="help-title">About DeaNA</h1>
+        <p className="dn-modal-intro">
+          DeaNA reads a consumer DNA export in your browser and matches markers against bundled evidence for medical,
+          trait, and drug-response context.
+        </p>
+        <div className="dn-help-point-list">
+          <article>
+            <Icon name="shield" />
+            <h2>Local by default</h2>
+            <p>Your raw DNA file, saved profiles, and matched report entries stay in this browser.</p>
+          </article>
+          <article>
+            <Icon name="filter" />
+            <h2>Evidence first</h2>
+            <p>Findings are labelled by source, confidence, coverage, and whether they are negative, positive, missing, or informational.</p>
+          </article>
+          <article>
+            <Icon name="alert" />
+            <h2>Not clinical advice</h2>
+            <p>Consumer-array results are incomplete and should not be used for diagnosis, treatment, or medication changes.</p>
+          </article>
+        </div>
+        <div className="dn-modal-actions">
+          <button className="dn-button dn-button--primary" onClick={onClose}>Close</button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -145,8 +154,7 @@ export function OverviewContent({
   profile: ProfileMeta;
   onExploreCategory: (tab: ExplorerTab) => void;
 }) {
-  const categories = profile.report.tabs.filter((tab) => tab.tab !== "overview" && tab.tab !== "raw");
-  const interpretedTabs = categories.filter((tab) => tab.tab !== "other");
+  const categories = profile.report.tabs.filter((tab) => tab.tab !== "overview");
   const totalFindings = profile.report.tabs.find((tab) => tab.tab === "overview")?.count ?? 0;
   const localEvidenceEntryMatches =
     profile.report.overview.localEvidenceEntryMatches ?? profile.report.overview.evidenceMatchedFindings ?? 0;
@@ -175,7 +183,7 @@ export function OverviewContent({
       <section className="dn-simple-card dn-category-jump-card">
         <h2>Start with the strongest signal</h2>
         <div className="dn-category-grid">
-          {interpretedTabs.map((category) => (
+          {categories.map((category) => (
             <article key={category.tab} className={`dn-category-card dn-tone-${toneForTab(category.tab)}`}>
               <span className="dn-round-icon"><Icon name={iconForTab(category.tab)} /></span>
               <h3>{labelForTab(category.tab)}</h3>
@@ -184,22 +192,6 @@ export function OverviewContent({
               <button className="dn-button dn-button--secondary" onClick={() => onExploreCategory(category.tab)}>Explore {labelForTab(category.tab).toLowerCase()} <Icon name="external" /></button>
             </article>
           ))}
-        </div>
-      </section>
-
-      <section className="dn-simple-card dn-category-jump-card">
-        <h2>Other evidence</h2>
-        <div className="dn-category-grid">
-          <article className="dn-category-card dn-tone-green">
-            <span className="dn-round-icon"><Icon name="database" /></span>
-            <h3>Source-derived matches</h3>
-            <strong>{localEvidenceEntryMatches.toLocaleString()} <span>unique entries</span></strong>
-            <p>
-              {localEvidenceRecordMatches.toLocaleString()} local evidence records matched{" "}
-              {localEvidenceMatchedRsids.toLocaleString()} uploaded rsIDs.
-            </p>
-            <button className="dn-button dn-button--secondary" onClick={() => onExploreCategory("other")}>Explore other evidence <Icon name="external" /></button>
-          </article>
         </div>
       </section>
 
@@ -270,7 +262,7 @@ export function CategoryExplorerContent({
   onCloseMobileSheet,
   onLoadMore,
 }: {
-  activeTab: Exclude<ExplorerTab, "overview" | "raw">;
+  activeTab: Exclude<ExplorerTab, "overview">;
   profile: ProfileMeta;
   filters: ExplorerFilters;
   entries: StoredReportEntry[];
@@ -323,14 +315,23 @@ export function CategoryExplorerContent({
             </label>
             <FilterSelect label="Sort" value={filters.sort} onChange={(value) => onFilterChange("sort", value)} options={[["severity", "Severity / priority"], ["evidence", "Evidence strength"], ["publications", "Publication count"], ["alphabetical", "Alphabetical"]]} />
             <FilterSelect label="Source" value={filters.source} onChange={(value) => onFilterChange("source", value)} options={optionList(profile.report.facets.sources, "All sources")} />
-            <FilterSelect label="Evidence level" value={filters.evidence} onChange={(value) => onFilterChange("evidence", value)} options={optionList(profile.report.facets.evidenceTiers, "All evidence")} />
-            <FilterSelect label="Clinical significance" value={filters.significance} onChange={(value) => onFilterChange("significance", value)} options={optionList(profile.report.facets.clinicalSignificances, "All significance")} />
-            <FilterSelect label="Repute" value={filters.repute} onChange={(value) => onFilterChange("repute", value)} options={optionList(profile.report.facets.reputes, "All repute")} />
-            <FilterSelect label="Coverage" value={filters.coverage} onChange={(value) => onFilterChange("coverage", value)} options={optionList(profile.report.facets.coverages, "All coverage")} />
-            <FilterSelect label="Publication bucket" value={filters.publications} onChange={(value) => onFilterChange("publications", value)} options={optionList(profile.report.facets.publicationBuckets, "All publication buckets")} />
-            <FilterSelect label="Gene" value={filters.gene} onChange={(value) => onFilterChange("gene", value)} options={optionList(profile.report.facets.genes, "All genes")} />
-            <FilterSelect label="Topic / condition" value={filters.tag} onChange={(value) => onFilterChange("tag", value)} options={optionList([...profile.report.facets.tags, ...profile.report.facets.conditions].filter((value, index, array) => array.indexOf(value) === index).sort(), "All topics")} />
-            <div className="dn-callout dn-callout--success"><Icon name="shield" /> Filters saved locally</div>
+            <MultiFilterSelect label="Evidence level" values={filters.evidence} onChange={(value) => onFilterChange("evidence", value)} options={profile.report.facets.evidenceTiers.map((value) => [value, value])} />
+            <MultiFilterSelect
+              label="Clinical significance"
+              values={filters.significance}
+              onChange={(value) => onFilterChange("significance", value)}
+              options={profile.report.facets.clinicalSignificances.map((value) => [value, profile.report.facets.clinicalSignificanceLabels[value] ?? value])}
+            />
+            <MultiFilterSelect label="Repute" values={filters.repute} onChange={(value) => onFilterChange("repute", value)} options={profile.report.facets.reputes.map((value) => [value, value])} />
+            <MultiFilterSelect label="Coverage" values={filters.coverage} onChange={(value) => onFilterChange("coverage", value)} options={profile.report.facets.coverages.map((value) => [value, value])} />
+            <MultiFilterSelect label="Publication bucket" values={filters.publications} onChange={(value) => onFilterChange("publications", value)} options={profile.report.facets.publicationBuckets.map((value) => [value, value])} />
+            <MultiFilterSelect label="Gene" values={filters.gene} onChange={(value) => onFilterChange("gene", value)} options={profile.report.facets.genes.map((value) => [value, value])} />
+            <MultiFilterSelect
+              label="Topic / condition"
+              values={filters.tag}
+              onChange={(value) => onFilterChange("tag", value)}
+              options={[...profile.report.facets.tags, ...profile.report.facets.conditions].filter((value, index, array) => array.indexOf(value) === index).sort().map((value) => [value, value])}
+            />
           </>
         )}
       </aside>
@@ -342,13 +343,6 @@ export function CategoryExplorerContent({
             <p>{isLoading ? "Loading..." : `${entries.length.toLocaleString()} visible results${hasMore ? "+" : ""}`}</p>
           </div>
           <button className="dn-button dn-button--secondary dn-show-mobile"><Icon name="filter" /> Filters</button>
-        </div>
-
-        <div className="dn-chip-row">
-          <span>Sort: {sortLabel(filters.sort)} <button onClick={() => onFilterChange("sort", "severity")}>x</button></span>
-          {filters.source ? <span>Source: {filters.source} <button onClick={() => onFilterChange("source", "")}>x</button></span> : null}
-          {filters.q ? <span>Search: {filters.q} <button onClick={() => onFilterChange("q", "")}>x</button></span> : null}
-          <button onClick={onResetFilters}>Clear all</button>
         </div>
 
         <div className="dn-finding-list">
@@ -378,52 +372,9 @@ export function CategoryExplorerContent({
   );
 }
 
-export function RawMarkersContent({
-  markers,
-  isLoading,
-  onJump,
-}: {
-  markers: RawMarkerResult[];
-  isLoading: boolean;
-  onJump: (entryId: string, category: ReportEntry["category"]) => void;
-}) {
-  return (
-    <main className="dn-category-screen dn-raw-screen">
-      <section className="dn-finding-list-panel dn-raw-list-panel">
-        <div className="dn-category-title-row">
-          <div>
-            <h1>Raw markers</h1>
-            <p>{isLoading ? "Loading links..." : `${markers.length.toLocaleString()} visible markers`}</p>
-          </div>
-        </div>
-        <div className="dn-finding-list">
-          {markers.map((marker) => (
-            <article className="dn-raw-marker-card" key={marker.rsid}>
-              <div>
-                <h2>{marker.rsid}</h2>
-                <p>Chr {marker.chromosome} · {marker.position.toLocaleString()} · genotype {marker.genotype}</p>
-              </div>
-              <div className="dn-raw-marker-links">
-                {marker.linkedEntries.length === 0 ? (
-                  <span>No curated interpretation linked</span>
-                ) : (
-                  marker.linkedEntries.map((entry) => (
-                    <button key={entry.id} className="dn-button dn-button--secondary" onClick={() => onJump(entry.id, entry.category)}>
-                      {entry.title}
-                    </button>
-                  ))
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-    </main>
-  );
-}
-
 function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; selected?: boolean; onClick?: () => void }) {
   const firstMarker = entry.matchedMarkers[0];
+  const summary = summaryUnlessTitle(entry.summary, entry.title);
 
   return (
     <button className={`dn-finding-card ${selected ? "is-selected" : ""} dn-finding-tone-${toneForEntry(entry)}`} onClick={onClick}>
@@ -436,7 +387,7 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
           <span className="dn-priority-pill">{priorityLabel(entry)}</span>
         </div>
         <h2>{entry.title} {firstMarker ? <small>{firstMarker.rsid} ({firstMarker.genotype ?? "n/a"})</small> : null}</h2>
-        <p>{entry.summary}</p>
+        {summary ? <p>{summary}</p> : null}
         <div className="dn-finding-card__foot">
           <span><Icon name="file" /> {entry.publicationCount.toLocaleString()} publications</span>
           {entry.genes[0] ? <span><Icon name="dna" /> {entry.genes.join(", ")}</span> : null}
@@ -492,13 +443,20 @@ function FindingDetailContent({
   titleLevel: "h1" | "h2";
 }) {
   const Title = titleLevel;
+  const summary = summaryUnlessTitle(finding.summary, finding.title);
 
   return (
     <>
       <p className="dn-eyebrow">Inspector</p>
       <Title id={titleId}>{finding.title}</Title>
       <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
-      <p className="dn-inspector__intro">{finding.summary}</p>
+      {summary ? <p className="dn-inspector__intro">{summary}</p> : null}
+      {finding.detail.trim() ? (
+        <section>
+          <h3>Details</h3>
+          <p>{finding.detail}</p>
+        </section>
+      ) : null}
       <section>
         <h3>Genotype found</h3>
         <p>{finding.genotypeSummary}</p>
@@ -571,8 +529,72 @@ function FilterSelect({
   );
 }
 
+function MultiFilterSelect({
+  label,
+  values,
+  options,
+  onChange,
+}: {
+  label: string;
+  values: string[];
+  options: Array<[string, string]>;
+  onChange: (value: string[]) => void;
+}) {
+  const fieldId = useId();
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleOptions = normalizedQuery
+    ? options.filter(([, optionLabel]) => optionLabel.toLowerCase().includes(normalizedQuery))
+    : options;
+
+  function toggle(value: string) {
+    onChange(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
+  }
+
+  return (
+    <div className="dn-filter-group">
+      <span>{label}</span>
+      <div className="dn-filter-checklist">
+        <div className="dn-filter-checklist__actions">
+          <span>{values.length === 0 ? "All" : `${values.length} selected`}</span>
+          {values.length > 0 ? <button type="button" onClick={() => onChange([])}>Clear</button> : null}
+        </div>
+        <label className="dn-filter-search">
+          <Icon name="search" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${label.toLowerCase()}`} />
+        </label>
+        <div className="dn-filter-checklist__options" role="listbox" aria-multiselectable="true">
+          {visibleOptions.map(([optionValue, optionLabel], optionIndex) => {
+            const optionId = `${fieldId}-${optionIndex}-${optionValue.replace(/[^a-z0-9_-]+/gi, "-")}`;
+            return (
+              <label key={optionValue} className="dn-filter-check" htmlFor={optionId}>
+                <input
+                  id={optionId}
+                  className="dn-filter-check__input"
+                  type="checkbox"
+                  checked={values.includes(optionValue)}
+                  onChange={() => toggle(optionValue)}
+                />
+                <span className="dn-filter-check__label">{optionLabel}</span>
+              </label>
+            );
+          })}
+          {visibleOptions.length === 0 ? <p>No matching options</p> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function optionList(values: string[], emptyLabel: string): Array<[string, string]> {
   return [["", emptyLabel], ...values.map((value): [string, string] => [value, value])];
+}
+
+function summaryUnlessTitle(summary: string, title: string): string | null {
+  const cleanedSummary = summary.trim();
+  const normalizedSummary = cleanedSummary.replace(/\s+/g, " ").toLowerCase();
+  const normalizedTitle = title.trim().replace(/\s+/g, " ").toLowerCase();
+  return normalizedSummary && normalizedSummary !== normalizedTitle ? cleanedSummary : null;
 }
 
 function OverviewMetric({ icon, label, value }: { icon: IconName; label: string; value: string }) {
@@ -585,24 +607,12 @@ function OverviewMetric({ icon, label, value }: { icon: IconName; label: string;
   );
 }
 
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("") || "D";
-}
-
 function labelForTab(tab: ExplorerTab): string {
   if (tab === "drug") return "Drug response";
-  if (tab === "other") return "Other";
-  if (tab === "raw") return "Raw markers";
   return tab[0].toUpperCase() + tab.slice(1);
 }
 
-function titleForTab(tab: Exclude<ExplorerTab, "overview" | "raw">): string {
-  if (tab === "other") return "Other evidence explorer";
+function titleForTab(tab: Exclude<ExplorerTab, "overview">): string {
   return tab === "drug" ? "Drug response explorer" : `${labelForTab(tab)} explorer`;
 }
 
@@ -610,8 +620,6 @@ function iconForTab(tab: ExplorerTab): IconName {
   if (tab === "medical") return "heart";
   if (tab === "traits") return "leaf";
   if (tab === "drug") return "pill";
-  if (tab === "other") return "database";
-  if (tab === "raw") return "list";
   return "home";
 }
 
@@ -632,23 +640,18 @@ function iconForSource(source: string): IconName {
 }
 
 function toneForEntry(entry: StoredReportEntry): "low" | "moderate" | "elevated" | "high" | "info" {
-  if (entry.tone === "good") return "low";
-  if (entry.tone === "caution") return entry.sort.severity > 70 ? "elevated" : "moderate";
+  if (entry.outcome === "missing") return "info";
+  if (entry.outcome === "positive") return "low";
+  if (entry.outcome === "negative") return entry.sort.severity > 70 ? "elevated" : "moderate";
   if (entry.evidenceTier === "high") return "high";
   return "info";
 }
 
 function priorityLabel(entry: StoredReportEntry): string {
+  if (entry.outcome === "missing") return "Missing";
   if (entry.category === "drug") return entry.evidenceTier === "high" ? "High relevance" : "PGx preview";
-  if (entry.tone === "good") return "Low";
+  if (entry.outcome === "positive") return "Low";
   if (entry.sort.severity > 70) return "Elevated";
   if (entry.sort.severity > 30) return "Moderate";
   return "Informational";
-}
-
-function sortLabel(sort: string): string {
-  if (sort === "alphabetical") return "Alphabetical";
-  if (sort === "publications") return "Publication count";
-  if (sort === "evidence") return "Evidence strength";
-  return "Severity / priority";
 }

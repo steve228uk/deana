@@ -12,12 +12,14 @@ describe("reportEngine", () => {
     expect(report.reportVersion).toBe(REPORT_VERSION);
     expect(report.evidencePackVersion).toBe(EVIDENCE_PACK_VERSION);
     expect(report.entries.length).toBeGreaterThan(6);
-    expect(report.tabs.map((tab) => tab.tab)).toEqual(["overview", "medical", "traits", "drug", "other", "raw"]);
+    expect(report.tabs.map((tab) => tab.tab)).toEqual(["overview", "medical", "traits", "drug"]);
     expect(report.facets.sources).toContain("ClinVar");
     expect(report.facets.genes).toContain("APOE");
+    expect(report.facets.clinicalSignificanceLabels["risk-context"]).toBe("Risk context");
     expect(report.entries[0]).toMatchObject({
       id: expect.any(String),
       category: expect.any(String),
+      outcome: expect.any(String),
       sources: expect.any(Array),
       matchedMarkers: expect.any(Array),
       sort: expect.any(Object),
@@ -58,6 +60,7 @@ describe("reportEngine", () => {
           coverages: [],
           reputes: [],
           clinicalSignificances: [],
+          clinicalSignificanceLabels: {},
           genes: [],
           tags: [],
           conditions: [],
@@ -71,9 +74,10 @@ describe("reportEngine", () => {
     expect(migrated.reportVersion).toBe(REPORT_VERSION);
     expect(migrated.evidencePackVersion).toBe(EVIDENCE_PACK_VERSION);
     expect(migrated.report.entries.length).toBeGreaterThan(0);
-    expect(migrated.report.tabs.length).toBe(6);
-    expect(migrated.report.tabs.map((tab) => tab.tab)).toContain("other");
+    expect(migrated.report.tabs.length).toBe(4);
+    expect(migrated.report.tabs.map((tab) => tab.tab)).not.toContain("other");
     expect(migrated.report.entries.every((entry) => entry.entryKind)).toBe(true);
+    expect(migrated.report.entries.every((entry) => entry.outcome)).toBe(true);
   });
 
   it("tracks bulk local evidence separately from curated marker coverage", () => {
@@ -130,7 +134,25 @@ describe("reportEngine", () => {
     expect(report.overview.localEvidenceEntryMatches).toBe(1);
     expect(report.overview.localEvidenceMatchedRsids).toBe(1);
     expect(report.tabs.find((tab) => tab.tab === "traits")?.count).toBeGreaterThan(4);
-    expect(report.tabs.find((tab) => tab.tab === "other")?.count).toBe(1);
+    expect(report.tabs.find((tab) => tab.tab === "traits")?.count).toBeGreaterThan(4);
     expect(report.overview.curatedMarkerMatches).toBeGreaterThan(1);
+  });
+
+  it("demotes unresolved missing findings below actual elevated findings", () => {
+    const dna = {
+      ...makeParsedDnaFile(),
+      markers: [
+        ["rs7412", "19", 45412079, "CC"],
+        ["rs6025", "1", 169519049, "CT"],
+      ] as [string, string, number, string][],
+      markerCount: 2,
+    };
+    const report = generateReport(dna);
+    const apoe = report.entries.find((entry) => entry.id === "medical-apoe");
+    const factorV = report.entries.find((entry) => entry.id === "medical-factor-v");
+
+    expect(apoe?.outcome).toBe("missing");
+    expect(factorV?.outcome).toBe("negative");
+    expect(apoe?.sort.severity).toBeLessThan(factorV?.sort.severity ?? 0);
   });
 });

@@ -1,28 +1,28 @@
-import { CompactMarker, RawMarkerResult, ReportEntry } from "../types";
+import { ReportEntry } from "../types";
 
 export interface ExplorerFilters {
   q: string;
   source: string;
-  evidence: string;
-  significance: string;
-  repute: string;
-  coverage: string;
-  publications: string;
-  gene: string;
-  tag: string;
+  evidence: string[];
+  significance: string[];
+  repute: string[];
+  coverage: string[];
+  publications: string[];
+  gene: string[];
+  tag: string[];
   sort: string;
 }
 
 export const DEFAULT_FILTERS: ExplorerFilters = {
   q: "",
   source: "",
-  evidence: "",
-  significance: "",
-  repute: "",
-  coverage: "",
-  publications: "",
-  gene: "",
-  tag: "",
+  evidence: [],
+  significance: [],
+  repute: [],
+  coverage: [],
+  publications: [],
+  gene: [],
+  tag: [],
   sort: "severity",
 };
 
@@ -62,14 +62,56 @@ export function buildEntrySearchText(entry: Pick<
     ...entry.conditions,
     ...entry.matchedMarkers.map((marker) => marker.rsid),
   ]
-	    .join(" ")
-	    .toLowerCase();
+    .join(" ")
+    .toLowerCase();
+}
+
+function levenshtein(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  const current = Array.from({ length: right.length + 1 }, () => 0);
+
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    current[0] = leftIndex;
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const cost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + cost,
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+
+  return previous[right.length];
+}
+
+function isLooseTokenMatch(query: string, token: string): boolean {
+  if (token.includes(query)) return true;
+  if (query.length < 4 || token.length < 4) return false;
+  const distance = levenshtein(query, token);
+  return distance <= (query.length <= 6 ? 1 : 2);
 }
 
 function matchesSearch(entry: SearchableEntry, query: string): boolean {
-  if (!query) return true;
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
   const haystack = typeof entry.searchText === "string" ? entry.searchText : buildEntrySearchText(entry);
-  return haystack.includes(query.toLowerCase());
+  if (haystack.includes(normalizedQuery)) return true;
+
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  const tokens = Array.from(new Set(haystack.split(/[^a-z0-9]+/).filter(Boolean)));
+  return queryTokens.every((queryToken) => tokens.some((token) => isLooseTokenMatch(queryToken, token)));
+}
+
+function matchesAny<T extends string | null>(value: T, filters: string[]): boolean {
+  if (filters.length === 0) return true;
+  return Boolean(value && filters.includes(value));
+}
+
+function overlaps(values: string[], filters: string[]): boolean {
+  if (filters.length === 0) return true;
+  return values.some((value) => filters.includes(value));
 }
 
 export function matchesEntryFilters(
@@ -85,6 +127,7 @@ export function matchesEntryFilters(
     | "genes"
     | "topics"
     | "conditions"
+    | "normalizedClinicalSignificance"
   > &
     SearchableEntry,
   filters: ExplorerFilters,
@@ -93,13 +136,13 @@ export function matchesEntryFilters(
   return (category ? entry.category === category : true)
     && matchesSearch(entry, filters.q)
     && (filters.source ? entry.sources.some((source) => source.name === filters.source) : true)
-    && (filters.evidence ? entry.evidenceTier === filters.evidence : true)
-    && (filters.significance ? entry.clinicalSignificance === filters.significance : true)
-    && (filters.repute ? entry.repute === filters.repute : true)
-    && (filters.coverage ? entry.coverage === filters.coverage : true)
-    && (filters.publications ? entry.publicationBucket === filters.publications : true)
-    && (filters.gene ? entry.genes.includes(filters.gene) : true)
-    && (filters.tag ? entry.topics.includes(filters.tag) || entry.conditions.includes(filters.tag) : true);
+    && matchesAny(entry.evidenceTier, filters.evidence)
+    && matchesAny(entry.normalizedClinicalSignificance, filters.significance)
+    && matchesAny(entry.repute, filters.repute)
+    && matchesAny(entry.coverage, filters.coverage)
+    && matchesAny(entry.publicationBucket, filters.publications)
+    && overlaps(entry.genes, filters.gene)
+    && overlaps([...entry.topics, ...entry.conditions], filters.tag);
 }
 
 export function compareEntries(
@@ -128,47 +171,4 @@ export function filterEntries(
   return [...entries].filter((entry) => matchesEntryFilters(entry, filters, category)).sort((left, right) => {
     return compareEntries(left, right, filters.sort);
   });
-}
-
-export function buildRawMarkerResults(
-  markers: CompactMarker[],
-  entries: ReportEntry[],
-  query: string,
-): RawMarkerResult[] {
-  const lowerQuery = query.trim().toLowerCase();
-  const linkedByRsid = new Map<string, RawMarkerResult["linkedEntries"]>();
-
-  for (const entry of entries) {
-    for (const marker of entry.matchedMarkers) {
-      const linked = linkedByRsid.get(marker.rsid) ?? [];
-      linked.push({
-        id: entry.id,
-        title: entry.title,
-        category: entry.category,
-        genes: entry.genes,
-      });
-      linkedByRsid.set(marker.rsid, linked);
-    }
-  }
-
-  return markers
-    .filter((marker) => {
-      if (!lowerQuery) return true;
-      const linked = linkedByRsid.get(marker[0]) ?? [];
-      const geneText = linked.flatMap((entry) => entry.genes).join(" ").toLowerCase();
-      return (
-        marker[0].toLowerCase().includes(lowerQuery) ||
-        marker[1].toLowerCase().includes(lowerQuery) ||
-        marker[3].toLowerCase().includes(lowerQuery) ||
-        geneText.includes(lowerQuery)
-      );
-    })
-    .slice(0, 200)
-    .map((marker) => ({
-      rsid: marker[0],
-      chromosome: marker[1],
-      position: marker[2],
-      genotype: marker[3],
-      linkedEntries: linkedByRsid.get(marker[0]) ?? [],
-    }));
 }

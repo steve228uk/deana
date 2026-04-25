@@ -2,6 +2,7 @@ import type { EvidenceProgressSnapshot, ParsedDnaFile } from "../../types";
 import { DeanaWordmark, Icon } from "./ui";
 
 export const DEANA_GITHUB_URL = "https://github.com/steve228uk/deana";
+export const DEANA_LICENSE_URL = `${DEANA_GITHUB_URL}/blob/HEAD/LICENSE.md`;
 
 export interface SavedReportCard {
   id: string;
@@ -26,11 +27,9 @@ function formatDate(value: string) {
 export function MarketingFirstVisit({
   onUpload,
   onPrivacy,
-  onHowItWorks,
 }: {
   onUpload?: () => void;
   onPrivacy?: () => void;
-  onHowItWorks?: () => void;
 }) {
   return (
     <main className="dn-marketing-shell dn-marketing-shell--first">
@@ -38,8 +37,6 @@ export function MarketingFirstVisit({
         <DeanaWordmark />
         <nav className="dn-header-actions" aria-label="Homepage actions">
           <button className="dn-button dn-button--ghost" onClick={onPrivacy}><Icon name="lock" /> About privacy</button>
-          <button className="dn-button dn-button--ghost dn-hide-mobile" onClick={onHowItWorks}><Icon name="help" /> How it works</button>
-          <button className="dn-icon-button dn-show-mobile" aria-label="Menu"><Icon name="menu" /></button>
         </nav>
       </header>
 
@@ -53,7 +50,6 @@ export function MarketingFirstVisit({
         </p>
         <div className="dn-hero-actions">
           <button className="dn-button dn-button--primary dn-button--large" onClick={onUpload}><Icon name="upload" /> Upload your DNA export</button>
-          <button className="dn-button dn-button--secondary dn-button--large" onClick={onHowItWorks}><Icon name="help" /> How it works</button>
         </div>
         <p className="dn-support-line">Supports .zip, .txt, .csv, and .gz files</p>
       </section>
@@ -94,9 +90,8 @@ export function MarketingReturning({
       <header className="dn-marketing-header">
         <DeanaWordmark />
         <nav className="dn-header-actions" aria-label="Homepage actions">
-          <button className="dn-button dn-button--ghost dn-hide-mobile" onClick={onPrivacy}><Icon name="lock" /> About privacy</button>
+          <button className="dn-button dn-button--ghost" onClick={onPrivacy}><Icon name="lock" /> About privacy</button>
           <button className="dn-button dn-button--primary dn-hide-mobile" onClick={onCreateNew}><Icon name="plus" /> Create new report</button>
-          <button className="dn-icon-button dn-show-mobile" aria-label="Menu"><Icon name="menu" /></button>
         </nav>
       </header>
 
@@ -266,8 +261,7 @@ export function MarketingProcessing({
       <header className="dn-marketing-header">
         <DeanaWordmark />
         <nav className="dn-header-actions" aria-label="Processing actions">
-          <button className="dn-button dn-button--ghost dn-hide-mobile" onClick={onPrivacy}><Icon name="lock" /> About privacy</button>
-          <button className="dn-icon-button dn-show-mobile" aria-label="Menu"><Icon name="menu" /></button>
+          <button className="dn-button dn-button--ghost" onClick={onPrivacy}><Icon name="lock" /> About privacy</button>
         </nav>
       </header>
 
@@ -320,7 +314,7 @@ export function MarketingProcessing({
         </section>
       ) : null}
 
-      <section className="dn-privacy-banner">
+      <section className="dn-privacy-banner dn-processing-privacy">
         <span className="dn-round-icon"><Icon name="shield" /></span>
         <div>
           <h2>Your raw DNA stays private on your device.</h2>
@@ -338,7 +332,7 @@ export function PrivacyModal({ onClose, onGithub }: { onClose?: () => void; onGi
     ["shield", "Your raw DNA stays on your device", "Deana does not upload or store your raw DNA file or finished reports on its own servers."],
     ["folder", "Saved only in this browser", "Reports are stored locally in this browser, so you can reopen them later or remove them at any time."],
     ["globe", "Evidence matching is local", "Deana uses a fixed local evidence pack without sending marker requests from your browser."],
-    ["code", "Open source and transparent", "You can inspect the code, understand how the tool works, and review the project on GitHub."],
+    ["code", "Source available and transparent", "You can inspect the code, understand how the tool works, and review the project on GitHub."],
   ] as const;
 
   return (
@@ -477,9 +471,9 @@ function OpenSourceBanner() {
     <section className="dn-privacy-banner dn-privacy-banner--source">
       <span className="dn-round-icon"><Icon name="code" /></span>
       <div>
-        <h2>Free and open source.</h2>
+        <h2>Free for non-commercial use.</h2>
         <div className="dn-assurance-points">
-          <p><Icon name="check" /> Inspect the code on GitHub</p>
+          <p><Icon name="check" /> Source available on GitHub</p>
           <p><Icon name="check" /> No account or subscription required</p>
         </div>
         <a className="dn-button dn-button--secondary" href={DEANA_GITHUB_URL} target="_blank" rel="noreferrer">
@@ -493,7 +487,8 @@ function OpenSourceBanner() {
 function HomepageFooter() {
   return (
     <footer className="dn-home-footer">
-      &copy; 2026 Stephen Radford
+      <span>&copy; 2026 Stephen Radford</span>
+      <a href={DEANA_LICENSE_URL} target="_blank" rel="noreferrer">Non-commercial license</a>
     </footer>
   );
 }

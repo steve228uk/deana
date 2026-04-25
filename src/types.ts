@@ -6,8 +6,9 @@ export type ProviderName =
   | "Unknown";
 
 export type InsightCategory = "medical" | "traits" | "drug";
-export type ExplorerTab = "overview" | "medical" | "traits" | "drug" | "other" | "raw";
+export type ExplorerTab = "overview" | "medical" | "traits" | "drug";
 export type InsightTone = "neutral" | "good" | "caution";
+export type FindingOutcome = "negative" | "positive" | "informational" | "missing";
 export type CoverageStatus = "full" | "partial" | "missing";
 export type EvidenceTier = "high" | "moderate" | "emerging" | "preview" | "supplementary";
 export type ReputeStatus = "good" | "bad" | "mixed" | "not-set";
@@ -129,6 +130,7 @@ export interface ReportEntry {
   sourceNotes: string[];
   evidenceTier: EvidenceTier;
   clinicalSignificance: string | null;
+  normalizedClinicalSignificance: string | null;
   repute: ReputeStatus;
   publicationCount: number;
   publicationBucket: PublicationBucket;
@@ -138,6 +140,7 @@ export interface ReportEntry {
   sourcePageUrl?: string;
   coverage: CoverageStatus;
   tone: InsightTone;
+  outcome: FindingOutcome;
   sort: {
     severity: number;
     evidence: number;
@@ -181,6 +184,7 @@ export interface ReportFacets {
   coverages: CoverageStatus[];
   reputes: ReputeStatus[];
   clinicalSignificances: string[];
+  clinicalSignificanceLabels: Record<string, string>;
   genes: string[];
   tags: string[];
   conditions: string[];
@@ -297,12 +301,4 @@ export interface ExplorerPage {
   nextCursor: string | null;
   totalLoaded: number;
   hasMore: boolean;
-}
-
-export interface RawMarkerResult {
-  rsid: string;
-  chromosome: string;
-  position: number;
-  genotype: string;
-  linkedEntries: Pick<ReportEntry, "id" | "title" | "category" | "genes">[];
 }

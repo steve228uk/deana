@@ -14,6 +14,7 @@ import type {
   InsightCategory,
   ReputeStatus,
 } from "../src/types";
+import { normalizeConditions } from "../src/lib/normalization";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
@@ -230,14 +231,14 @@ function cleanCondition(value: string): string | null {
 }
 
 function conditionList(value: string): string[] {
-  return Array.from(
+  return normalizeConditions(Array.from(
     new Set(
       value
         .split(/[|;]/)
         .map(cleanCondition)
         .filter((condition): condition is string => Boolean(condition)),
     ),
-  ).slice(0, 8);
+  )).slice(0, 8);
 }
 
 function primaryCondition(conditions: string[], fallback: string): string {

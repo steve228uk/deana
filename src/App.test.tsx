@@ -266,7 +266,7 @@ function makePaginatedProfile(id: string, count: number): SavedProfile {
           ? { ...tab, count }
           : tab.tab === "overview"
             ? { ...tab, count }
-            : { ...tab, count: tab.tab === "raw" ? 0 : 0 },
+            : { ...tab, count: 0 },
       ),
       facets: {
         ...profile.report.facets,
@@ -435,6 +435,9 @@ describe("DeaNA app", () => {
     await waitFor(() =>
       expect(screen.getAllByText("Factor V Leiden", { selector: "h2" }).length).toBeGreaterThan(0),
     );
+    const inspector = screen.getByLabelText("Finding inspector");
+    expect(within(inspector).getByText("Details")).toBeInTheDocument();
+    expect(within(inspector).getByText(/This is one of the clearer consumer-array medical markers/i)).toBeInTheDocument();
     expect(screen.getAllByText("Why it matters").length).toBeGreaterThan(0);
   });
 
@@ -463,6 +466,31 @@ describe("DeaNA app", () => {
     expect(await screen.findByText("Medical finding 55", { selector: "h2" })).toBeInTheDocument();
     expect(container.querySelector(".dn-mobile-sheet")).toBeInTheDocument();
     expect(loadReportEntry).toHaveBeenCalledWith("profile-6", "medical-55");
+  });
+
+  it("hides duplicate finding summaries when the summary matches the title", async () => {
+    const profile = makePaginatedProfile("profile-9", 1);
+    storedProfiles = [{
+      ...profile,
+      report: {
+        ...profile.report,
+        entries: profile.report.entries.map((entry) => ({
+          ...entry,
+          title: "Duplicate finding title",
+          summary: "Duplicate finding title",
+          detail: "The detail remains visible even when the summary is redundant.",
+        })),
+      },
+    }];
+
+    renderApp("/explorer/profile-9?tab=medical&selected=medical-1");
+
+    await screen.findByText("Current report");
+    const inspector = await screen.findByLabelText("Finding inspector");
+
+    expect(within(inspector).getByRole("heading", { name: "Duplicate finding title" })).toBeInTheDocument();
+    expect(inspector.querySelector(".dn-inspector__intro")).toBeNull();
+    expect(within(inspector).getByText("The detail remains visible even when the summary is redundant.")).toBeInTheDocument();
   });
 
   it("resets the inspector scroll position when the selected finding changes", async () => {
