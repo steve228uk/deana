@@ -480,12 +480,44 @@ function FindingInspector({ finding }: { finding: StoredReportEntry | null }) {
 }
 
 function MobileFindingSheet({ finding, onClose }: { finding: StoredReportEntry; onClose: () => void }) {
+  const [isVisible, setIsVisible] = useState(false);
+  const closeTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => setIsVisible(true));
+    return () => window.cancelAnimationFrame(frameId);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current !== null) {
+        window.clearTimeout(closeTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function handleClose() {
+    if (closeTimeoutRef.current !== null) return;
+    setIsVisible(false);
+    closeTimeoutRef.current = window.setTimeout(() => {
+      onClose();
+      closeTimeoutRef.current = null;
+    }, 180);
+  }
+
   return (
-    <section className="dn-mobile-sheet" role="dialog" aria-modal="true" aria-labelledby="mobile-finding-title">
-      <div className="dn-sheet-handle" />
-      <button className="dn-icon-button dn-modal-close" aria-label="Close" onClick={onClose}><Icon name="x" /></button>
-      <FindingDetailContent finding={finding} titleId="mobile-finding-title" titleLevel="h1" />
-    </section>
+    <div className="dn-mobile-sheet-backdrop" role="presentation" onClick={handleClose}>
+      <section
+        className={`dn-mobile-sheet ${isVisible ? "is-visible" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mobile-finding-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button className="dn-icon-button dn-modal-close" aria-label="Close" onClick={handleClose}><Icon name="x" /></button>
+        <FindingDetailContent finding={finding} titleId="mobile-finding-title" titleLevel="h1" />
+      </section>
+    </div>
   );
 }
 
