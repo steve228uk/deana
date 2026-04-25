@@ -84,7 +84,13 @@ export function ExplorerShell({
           <DeanaWordmark compact className="dn-show-mobile" />
           <button className="dn-report-selector" onClick={onBackHome}>
             <Icon name="file" />
-            <span><strong>{report.name}</strong><small>{report.provider} · {report.build} · {report.markerCount.toLocaleString()} markers</small></span>
+            <span>
+              <strong>{report.name}</strong>
+              <small>
+                <span className="dn-report-selector__meta">{report.provider} · {report.build}</span>
+                <span className="dn-report-selector__markers">{report.markerCount.toLocaleString()} markers</span>
+              </small>
+            </span>
           </button>
           <button className="dn-local-status" onClick={() => setModal("privacy")}><Icon name="shield" /> All analysis is local <i /></button>
           <button className="dn-icon-button dn-hide-mobile" aria-label="Help" onClick={() => setModal("help")}><Icon name="help" /></button>
@@ -360,16 +366,18 @@ export function CategoryExplorerContent({
             aria-labelledby="filters-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <button
-              className="dn-icon-button dn-modal-close"
-              onClick={() => setIsMobileFiltersOpen(false)}
-              aria-label="Close filters"
-            >
-              <Icon name="x" />
-            </button>
-            <h1 id="filters-title">Filters</h1>
-            <div className="dn-filters-modal__actions">
-              <button className="dn-button dn-button--secondary" onClick={onResetFilters}>Reset filters</button>
+            <div className="dn-filters-modal__header">
+              <h1 id="filters-title">Filters</h1>
+              <div className="dn-filters-modal__actions">
+                <button className="dn-button dn-button--secondary" onClick={onResetFilters}>Reset filters</button>
+                <button
+                  className="dn-icon-button dn-filters-modal__close"
+                  onClick={() => setIsMobileFiltersOpen(false)}
+                  aria-label="Close filters"
+                >
+                  <Icon name="x" />
+                </button>
+              </div>
             </div>
             <ExplorerFiltersForm profile={profile} filters={filters} onFilterChange={onFilterChange} />
             <div className="dn-modal-actions">
