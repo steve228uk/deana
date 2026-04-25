@@ -480,35 +480,14 @@ function FindingInspector({ finding }: { finding: StoredReportEntry | null }) {
 }
 
 function MobileFindingSheet({ finding, onClose }: { finding: StoredReportEntry; onClose: () => void }) {
-  const [isVisible, setIsVisible] = useState(false);
-  const closeTimeoutRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    const frameId = window.requestAnimationFrame(() => setIsVisible(true));
-    return () => window.cancelAnimationFrame(frameId);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (closeTimeoutRef.current !== null) {
-        window.clearTimeout(closeTimeoutRef.current);
-      }
-    };
-  }, []);
-
   function handleClose() {
-    if (closeTimeoutRef.current !== null) return;
-    setIsVisible(false);
-    closeTimeoutRef.current = window.setTimeout(() => {
-      onClose();
-      closeTimeoutRef.current = null;
-    }, 180);
+    onClose();
   }
 
   return (
     <div className="dn-mobile-sheet-backdrop" role="presentation" onClick={handleClose}>
       <section
-        className={`dn-mobile-sheet ${isVisible ? "is-visible" : ""}`}
+        className="dn-mobile-sheet"
         role="dialog"
         aria-modal="true"
         aria-labelledby="mobile-finding-title"
