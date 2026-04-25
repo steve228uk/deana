@@ -603,6 +603,13 @@ a { color: inherit; }
   .dn-overview-metrics .dn-overview-metric:last-child { grid-column: 1 / -1; }
   .dn-category-jump-card,
   .dn-overview-two-col { margin-inline: 18px; padding-inline: 0; }
+  .dn-category-jump-card {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+  }
   .dn-overview-two-col { display: grid; padding: 0 18px; }
   .dn-category-card p { min-height: 0; }
   .dn-category-screen { display: block; min-height: auto; overflow: visible; }
