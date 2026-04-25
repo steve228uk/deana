@@ -16,6 +16,7 @@
     "evidence:seed:bulk": "bun run scripts/seedEvidenceBulk.ts"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "fflate": "^0.8.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

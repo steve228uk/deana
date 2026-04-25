@@ -39,5 +39,6 @@ The evidence pack is built from local caches under `.evidence-cache` and shipped
 ## Notes
 
 - DNA stays in the browser in the current architecture.
+- Vercel Analytics is enabled for page-level product analytics only; do not send raw DNA, profile names, genotype metadata, or report content as analytics events.
 - The medical and pharmacogenomic cards are intentionally conservative starter cards.
 - A proper ancestry-reference panel and deeper evidence packs should be added before calling this production-ready.
