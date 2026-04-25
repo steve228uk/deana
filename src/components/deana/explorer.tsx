@@ -88,7 +88,6 @@ export function ExplorerShell({
           </button>
           <button className="dn-local-status" onClick={() => setModal("privacy")}><Icon name="shield" /> All analysis is local <i /></button>
           <button className="dn-icon-button dn-hide-mobile" aria-label="Help" onClick={() => setModal("help")}><Icon name="help" /></button>
-          <button className="dn-icon-button dn-show-mobile" aria-label="Menu"><Icon name="menu" /></button>
         </header>
 
         <nav className="dn-tabbar" aria-label="Explorer sections">
@@ -278,6 +277,7 @@ export function CategoryExplorerContent({
   onLoadMore: () => void;
 }) {
   const [areFiltersCollapsed, setAreFiltersCollapsed] = useState(false);
+  const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
 
   return (
     <main className={`dn-category-screen ${areFiltersCollapsed ? "is-filter-collapsed" : ""}`}>
@@ -309,29 +309,7 @@ export function CategoryExplorerContent({
                 </button>
               </div>
             </div>
-            <label className="dn-field dn-field--search">
-              <span>Search</span>
-              <div><Icon name="search" /><input value={filters.q} onChange={(event) => onFilterChange("q", event.target.value)} placeholder="Search findings..." /></div>
-            </label>
-            <FilterSelect label="Sort" value={filters.sort} onChange={(value) => onFilterChange("sort", value)} options={[["severity", "Severity / priority"], ["evidence", "Evidence strength"], ["publications", "Publication count"], ["alphabetical", "Alphabetical"]]} />
-            <FilterSelect label="Source" value={filters.source} onChange={(value) => onFilterChange("source", value)} options={optionList(profile.report.facets.sources, "All sources")} />
-            <MultiFilterSelect label="Evidence level" values={filters.evidence} onChange={(value) => onFilterChange("evidence", value)} options={profile.report.facets.evidenceTiers.map((value) => [value, value])} />
-            <MultiFilterSelect
-              label="Clinical significance"
-              values={filters.significance}
-              onChange={(value) => onFilterChange("significance", value)}
-              options={profile.report.facets.clinicalSignificances.map((value) => [value, profile.report.facets.clinicalSignificanceLabels[value] ?? value])}
-            />
-            <MultiFilterSelect label="Repute" values={filters.repute} onChange={(value) => onFilterChange("repute", value)} options={profile.report.facets.reputes.map((value) => [value, value])} />
-            <MultiFilterSelect label="Coverage" values={filters.coverage} onChange={(value) => onFilterChange("coverage", value)} options={profile.report.facets.coverages.map((value) => [value, value])} />
-            <MultiFilterSelect label="Publication bucket" values={filters.publications} onChange={(value) => onFilterChange("publications", value)} options={profile.report.facets.publicationBuckets.map((value) => [value, value])} />
-            <MultiFilterSelect label="Gene" values={filters.gene} onChange={(value) => onFilterChange("gene", value)} options={profile.report.facets.genes.map((value) => [value, value])} />
-            <MultiFilterSelect
-              label="Topic / condition"
-              values={filters.tag}
-              onChange={(value) => onFilterChange("tag", value)}
-              options={[...profile.report.facets.tags, ...profile.report.facets.conditions].filter((value, index, array) => array.indexOf(value) === index).sort().map((value) => [value, value])}
-            />
+            <ExplorerFiltersForm profile={profile} filters={filters} onFilterChange={onFilterChange} />
           </>
         )}
       </aside>
@@ -342,7 +320,12 @@ export function CategoryExplorerContent({
             <h1>{titleForTab(activeTab)}</h1>
             <p>{isLoading ? "Loading..." : `${entries.length.toLocaleString()} visible results${hasMore ? "+" : ""}`}</p>
           </div>
-          <button className="dn-button dn-button--secondary dn-show-mobile"><Icon name="filter" /> Filters</button>
+          <button
+            className="dn-button dn-button--secondary dn-show-mobile"
+            onClick={() => setIsMobileFiltersOpen(true)}
+          >
+            <Icon name="filter" /> Filters
+          </button>
         </div>
 
         <div className="dn-finding-list">
@@ -368,7 +351,72 @@ export function CategoryExplorerContent({
 
       <FindingInspector finding={selectedEntry} />
       {selectedEntry && isMobileSheetOpen ? <MobileFindingSheet finding={selectedEntry} onClose={onCloseMobileSheet} /> : null}
+      {isMobileFiltersOpen ? (
+        <div className="dn-modal-backdrop" role="presentation" onClick={() => setIsMobileFiltersOpen(false)}>
+          <section
+            className="dn-modal dn-filters-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="filters-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="dn-icon-button dn-modal-close"
+              onClick={() => setIsMobileFiltersOpen(false)}
+              aria-label="Close filters"
+            >
+              <Icon name="x" />
+            </button>
+            <h1 id="filters-title">Filters</h1>
+            <div className="dn-filters-modal__actions">
+              <button className="dn-button dn-button--secondary" onClick={onResetFilters}>Reset filters</button>
+            </div>
+            <ExplorerFiltersForm profile={profile} filters={filters} onFilterChange={onFilterChange} />
+            <div className="dn-modal-actions">
+              <button className="dn-button dn-button--primary" onClick={() => setIsMobileFiltersOpen(false)}>Done</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
+  );
+}
+
+function ExplorerFiltersForm({
+  profile,
+  filters,
+  onFilterChange,
+}: {
+  profile: ProfileMeta;
+  filters: ExplorerFilters;
+  onFilterChange: <K extends keyof ExplorerFilters>(key: K, value: ExplorerFilters[K]) => void;
+}) {
+  return (
+    <div className="dn-filter-form">
+      <label className="dn-field dn-field--search">
+        <span>Search</span>
+        <div><Icon name="search" /><input value={filters.q} onChange={(event) => onFilterChange("q", event.target.value)} placeholder="Search findings..." /></div>
+      </label>
+      <FilterSelect label="Sort" value={filters.sort} onChange={(value) => onFilterChange("sort", value)} options={[["severity", "Severity / priority"], ["evidence", "Evidence strength"], ["publications", "Publication count"], ["alphabetical", "Alphabetical"]]} />
+      <FilterSelect label="Source" value={filters.source} onChange={(value) => onFilterChange("source", value)} options={optionList(profile.report.facets.sources, "All sources")} />
+      <MultiFilterSelect label="Evidence level" values={filters.evidence} onChange={(value) => onFilterChange("evidence", value)} options={profile.report.facets.evidenceTiers.map((value) => [value, value])} />
+      <MultiFilterSelect
+        label="Clinical significance"
+        values={filters.significance}
+        onChange={(value) => onFilterChange("significance", value)}
+        options={profile.report.facets.clinicalSignificances.map((value) => [value, profile.report.facets.clinicalSignificanceLabels[value] ?? value])}
+      />
+      <MultiFilterSelect label="Repute" values={filters.repute} onChange={(value) => onFilterChange("repute", value)} options={profile.report.facets.reputes.map((value) => [value, value])} />
+      <MultiFilterSelect label="Coverage" values={filters.coverage} onChange={(value) => onFilterChange("coverage", value)} options={profile.report.facets.coverages.map((value) => [value, value])} />
+      <MultiFilterSelect label="Publication bucket" values={filters.publications} onChange={(value) => onFilterChange("publications", value)} options={profile.report.facets.publicationBuckets.map((value) => [value, value])} />
+      <MultiFilterSelect label="Gene" values={filters.gene} onChange={(value) => onFilterChange("gene", value)} options={profile.report.facets.genes.map((value) => [value, value])} />
+      <MultiFilterSelect
+        label="Topic / condition"
+        values={filters.tag}
+        onChange={(value) => onFilterChange("tag", value)}
+        options={[...profile.report.facets.tags, ...profile.report.facets.conditions].filter((value, index, array) => array.indexOf(value) === index).sort().map((value) => [value, value])}
+      />
+    </div>
   );
 }
 

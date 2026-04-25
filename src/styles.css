@@ -435,11 +435,15 @@ a { color: inherit; }
 .dn-category-screen { display: grid; grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr); flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .dn-category-screen.is-filter-collapsed { grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1fr); }
 .dn-filter-sidebar { min-height: 0; overflow: auto; border-right: 1px solid var(--dn-line); padding: 24px; background: rgba(255, 255, 255, 0.45); }
+.dn-filter-form { display: grid; gap: 14px; margin-top: 14px; }
 .dn-filter-heading { display: flex; justify-content: space-between; align-items: center; text-transform: uppercase; letter-spacing: 0.12em; color: var(--dn-muted); font-size: 0.8rem; font-weight: 800; }
 .dn-filter-heading button { background: transparent; color: var(--dn-forest); }
 .dn-filter-heading-actions { display: flex; align-items: center; gap: 10px; }
 .dn-filter-heading-actions .dn-icon-button { width: 34px; min-height: 34px; color: var(--dn-muted); }
 .dn-filter-sidebar.is-collapsed { display: flex; justify-content: center; overflow: hidden; padding: 14px 10px; }
+.dn-filters-modal { width: min(540px, 100%); max-height: 92vh; overflow: auto; }
+.dn-filters-modal h1 { margin: 0; font-family: var(--dn-font-display); color: var(--dn-ink); }
+.dn-filters-modal__actions { display: flex; justify-content: flex-end; margin: 12px 0 18px; }
 .dn-filter-rail-button { width: 100%; min-height: 128px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px solid var(--dn-line); border-radius: 14px; background: #fff; color: var(--dn-forest); font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.72rem; }
 .dn-filter-rail-button span { writing-mode: vertical-rl; transform: rotate(180deg); }
 .dn-field--search div { position: relative; }
