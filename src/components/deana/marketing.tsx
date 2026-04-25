@@ -221,7 +221,7 @@ export function UploadReportModal({
               <input id="profile-name" value={profileName} onChange={(event) => onProfileNameChange?.(event.target.value)} placeholder="Stephen" />
             </label>
             <div className="dn-callout dn-callout--success"><Icon name="shield" /> Your file is parsed locally. No DNA is uploaded to Deana.</div>
-            <div className="dn-callout"><Icon name="help" /> ClinVar, CPIC, GWAS Catalog, and SNPedia-derived context are matched locally from the bundled evidence pack.</div>
+            <div className="dn-callout"><Icon name="help" /> Public evidence sources are matched locally from the bundled evidence pack.</div>
             <div className="dn-modal-actions">
               <button className="dn-button dn-button--secondary" onClick={onCancel}>Cancel</button>
               <button className="dn-button dn-button--primary" disabled={isSaving || !profileName.trim()} onClick={onConfirm}><Icon name="upload" /> {isSaving ? "Building report..." : "Save and build report"}</button>
@@ -252,6 +252,7 @@ export function MarketingProcessing({
     : snapshot.totalRsids > 0
       ? Math.round((snapshot.processedRsids / snapshot.totalRsids) * 100)
       : 0;
+  const isSavingReport = snapshot.packStage === "saving";
   const progressSummary = isPreparingPack
     ? <span>Loading fixed evidence pack <strong>{snapshot.packVersion ?? "locally"}</strong></span>
     : (
@@ -280,14 +281,23 @@ export function MarketingProcessing({
 
       <section className="dn-simple-card dn-processing-card" aria-label="Processing progress">
         <h2>Processing your data</h2>
-        <div className="dn-linear-progress" aria-label={`${percent}% complete`}>
-          <span style={{ width: `${percent}%` }} />
-        </div>
-        <div className="dn-progress-line">
-          {progressSummary}
-          <strong>{percent}%</strong>
-        </div>
-        <p className="dn-muted">{currentLabel}: <strong>{currentValue}</strong></p>
+        {isSavingReport ? (
+          <div className="dn-processing-saving" role="status" aria-live="polite">
+            <div className="dn-loading-indicator" aria-hidden="true" />
+            <p>Saving your report…</p>
+          </div>
+        ) : (
+          <>
+            <div className="dn-linear-progress" aria-label={`${percent}% complete`}>
+              <span style={{ width: `${percent}%` }} />
+            </div>
+            <div className="dn-progress-line">
+              {progressSummary}
+              <strong>{percent}%</strong>
+            </div>
+            <p className="dn-muted">{currentLabel}: <strong>{currentValue}</strong></p>
+          </>
+        )}
       </section>
 
       <section className="dn-metric-grid" aria-label="Processing metrics">
@@ -314,7 +324,7 @@ export function MarketingProcessing({
         <span className="dn-round-icon"><Icon name="shield" /></span>
         <div>
           <h2>Your raw DNA stays private on your device.</h2>
-          <p>Local evidence and SNPedia-derived context are matched on your device from the bundled pack.</p>
+          <p>Evidence is matched on your device from the bundled local pack.</p>
         </div>
       </section>
 
@@ -327,7 +337,7 @@ export function PrivacyModal({ onClose, onGithub }: { onClose?: () => void; onGi
   const points = [
     ["shield", "Your raw DNA stays on your device", "Deana does not upload or store your raw DNA file or finished reports on its own servers."],
     ["folder", "Saved only in this browser", "Reports are stored locally in this browser, so you can reopen them later or remove them at any time."],
-    ["globe", "Evidence matching is local", "Deana uses a fixed local evidence pack, including bundled SNPedia-derived genotype context, without sending marker requests from your browser."],
+    ["globe", "Evidence matching is local", "Deana uses a fixed local evidence pack without sending marker requests from your browser."],
     ["code", "Open source and transparent", "You can inspect the code, understand how the tool works, and review the project on GitHub."],
   ] as const;
 
@@ -432,7 +442,7 @@ function DataSourcesCard() {
         </div>
       </dl>
       <p className="dn-source-note">
-        <Icon name="globe" /> Processing uses bundled public sources. SNPedia-derived context is matched locally from the evidence pack.
+        <Icon name="globe" /> Processing uses bundled public sources matched locally from the evidence pack.
       </p>
     </section>
   );

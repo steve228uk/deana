@@ -5,6 +5,7 @@ import {
   ExplorerPage,
   ParsedDnaFile,
   ProfileMeta,
+  ProfileSupplements,
   ReportEntryKind,
   ReportDataMeta,
   SavedProfile,
@@ -17,7 +18,7 @@ const LEGACY_STORE = "profiles";
 const PROFILE_META_STORE = "profile_meta";
 const PROFILE_DNA_STORE = "profile_dna";
 const REPORT_ENTRY_STORE = "report_entries";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const PAGE_SIZE = 50;
 
 const ENTRY_PROFILE_INDEX = "profileId";
@@ -33,8 +34,9 @@ type SortIndexName =
   | typeof ENTRY_PUBLICATIONS_INDEX
   | typeof ENTRY_ALPHABETICAL_INDEX;
 
-interface StoredProfileMetaRecord extends Omit<ProfileMeta, "dna"> {
+interface StoredProfileMetaRecord extends Omit<ProfileMeta, "dna" | "supplements"> {
   dna: SavedProfileSummary["dna"];
+  supplements?: ProfileSupplements;
 }
 
 interface StoredProfileDnaRecord {
@@ -107,6 +109,10 @@ function openDb(): Promise<IDBDatabase> {
       if (event.oldVersion > 0 && db.objectStoreNames.contains(LEGACY_STORE)) {
         migrateLegacyProfiles(transaction);
       }
+
+      if (event.oldVersion > 0 && event.oldVersion < 3 && db.objectStoreNames.contains(PROFILE_META_STORE)) {
+        stripStoredProfileMetadata(transaction);
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -137,6 +143,35 @@ function profileNeedsRegeneration(profile: {
   );
 }
 
+export function stripProfileSupplementsForMetaStorage(
+  supplements?: ProfileSupplements,
+): ProfileSupplements | undefined {
+  if (!supplements?.evidence) return undefined;
+
+  return {
+    evidence: {
+      ...supplements.evidence,
+      matchedRecords: [],
+    },
+  };
+}
+
+function supplementsForRegeneration(profile: SavedProfile): ProfileSupplements | undefined {
+  const supplements = profile.supplements;
+  const evidence = supplements?.evidence;
+  if (!evidence) return supplements;
+
+  if (
+    evidence.status === "complete" &&
+    evidence.matchedRecords.length === 0 &&
+    (profile.report?.overview?.localEvidenceRecordMatches ?? 0) > 0
+  ) {
+    return undefined;
+  }
+
+  return supplements;
+}
+
 export function ensureCurrentProfile(profile: SavedProfile): SavedProfile {
   if (
     !profileNeedsRegeneration(profile) &&
@@ -147,11 +182,14 @@ export function ensureCurrentProfile(profile: SavedProfile): SavedProfile {
     return profile;
   }
 
+  const supplements = supplementsForRegeneration(profile);
+
   return {
     ...profile,
+    supplements,
     reportVersion: REPORT_VERSION,
     evidencePackVersion: EVIDENCE_PACK_VERSION,
-    report: generateReport(profile.dna, profile.supplements),
+    report: generateReport(profile.dna, supplements),
   };
 }
 
@@ -176,10 +214,27 @@ function toStoredProfileMeta(profile: SavedProfile): StoredProfileMetaRecord {
       build: profile.dna.build,
       markerCount: profile.dna.markerCount,
     },
-    supplements: profile.supplements,
+    supplements: stripProfileSupplementsForMetaStorage(profile.supplements),
     reportVersion: profile.reportVersion,
     evidencePackVersion: profile.evidencePackVersion,
     report: toReportMeta(profile.report),
+  };
+}
+
+function stripStoredProfileMetadata(transaction: IDBTransaction) {
+  const metaStore = transaction.objectStore(PROFILE_META_STORE);
+  const request = metaStore.openCursor();
+
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+
+    const value = cursor.value as StoredProfileMetaRecord;
+    metaStore.put({
+      ...value,
+      supplements: stripProfileSupplementsForMetaStorage(value.supplements),
+    });
+    cursor.continue();
   };
 }
 

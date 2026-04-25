@@ -304,6 +304,8 @@ a { color: inherit; }
 .dn-linear-progress span { display: block; height: 100%; border-radius: inherit; background: var(--dn-forest-2); transition: width 180ms ease; }
 .dn-progress-line { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 18px; font-size: 1.08rem; color: var(--dn-muted); }
 .dn-progress-line strong { color: var(--dn-forest); }
+.dn-processing-saving { display: grid; place-items: center; gap: 16px; padding: 6px 0 4px; color: var(--dn-forest); }
+.dn-processing-saving p { margin: 0; font-size: 1.1rem; font-weight: 800; }
 .dn-metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 20px; }
 .dn-metric-card { display: flex; align-items: center; gap: 18px; padding: 20px; }
 .dn-metric-card span:not(.dn-round-icon) { color: var(--dn-muted); display: block; }

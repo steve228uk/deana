@@ -6,6 +6,7 @@ import {
   EvidenceProgressSnapshot,
   EvidenceSupplement,
   ParsedDnaFile,
+  SavedProfile,
   SavedProfileSummary,
 } from "./types";
 import { HomeScreen } from "./screens/HomeScreen";
@@ -22,19 +23,22 @@ type EvidenceWorkerResponse =
   | { type: "done"; supplement: EvidenceSupplement }
   | { type: "error"; error: string };
 
-function createRunningEvidenceSupplement(parsed: ParsedDnaFile): EvidenceSupplement {
+function summaryFromProfile(profile: SavedProfile): SavedProfileSummary {
   return {
-    status: "running",
-    fetchedAt: null,
-    attribution: "Local evidence pack is being loaded in this browser.",
-    packVersion: "pending",
-    manifest: null,
-    totalRsids: parsed.markerCount,
-    processedRsids: 0,
-    matchedRecords: [],
-    unmatchedRsids: 0,
-    failedItems: [],
-    retries: 0,
+    id: profile.id,
+    name: profile.name,
+    fileName: profile.fileName,
+    createdAt: profile.createdAt,
+    dna: {
+      provider: profile.dna.provider,
+      build: profile.dna.build,
+      markerCount: profile.dna.markerCount,
+    },
+    reportVersion: profile.reportVersion,
+    evidencePackVersion: profile.evidencePackVersion,
+    report: {
+      overview: profile.report.overview,
+    },
   };
 }
 
@@ -128,23 +132,25 @@ export default function App() {
     parsed: ParsedDnaFile,
     onProgress?: (snapshot: EvidenceProgressSnapshot) => void,
   ): Promise<SavedProfileSummary> {
-    const draftSupplement = createRunningEvidenceSupplement(parsed);
-
-    const draftProfile = buildProfile(name, parsed, { evidence: draftSupplement });
-    await saveProfile(draftProfile);
-    const draftSummaries = await loadProfileSummaries();
-    setProfiles(draftSummaries);
-
     const evidenceSupplement = await enrichWithEvidence(parsed, onProgress);
-    const nextProfile = {
-      ...draftProfile,
-      supplements: { evidence: evidenceSupplement },
-      report: generateReport(parsed, { evidence: evidenceSupplement }),
-    };
+    const nextProfile = buildProfile(name, parsed, { evidence: evidenceSupplement });
+    onProgress?.({
+      status: "complete",
+      totalRsids: evidenceSupplement.totalRsids,
+      processedRsids: evidenceSupplement.processedRsids,
+      matchedFindings: new Set(evidenceSupplement.matchedRecords.map((match) => match.record.entryId)).size,
+      unmatchedRsids: evidenceSupplement.unmatchedRsids,
+      failedRsids: evidenceSupplement.failedItems.length,
+      retries: evidenceSupplement.retries,
+      currentRsid: "Saving your report…",
+      packStage: "saving",
+      packVersion: evidenceSupplement.packVersion,
+    });
     await saveProfile(nextProfile);
-    const nextSummaries = await loadProfileSummaries();
-    setProfiles(nextSummaries);
-    return nextSummaries.find((candidate) => candidate.id === nextProfile.id) ?? draftSummaries[0];
+    const summary = summaryFromProfile(nextProfile);
+    setProfiles((current) => [summary, ...current.filter((candidate) => candidate.id !== summary.id)]);
+    void loadProfileSummaries().then(setProfiles).catch(() => {});
+    return summary;
   }
 
   async function refreshProfileEvidence(profileId: string): Promise<void> {

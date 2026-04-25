@@ -465,7 +465,7 @@ export function ExplorerScreen({
             <div className={localEvidenceNeedsAttention ? "dn-callout dn-callout--error" : "dn-callout"}>
               <span>
                 Local evidence is {profile.report.overview.evidenceStatus}.{" "}
-                {localEvidenceEntryMatches.toLocaleString()} entries are matched from the bundled evidence pack, including local SNPedia-derived genotype context.
+                {localEvidenceEntryMatches.toLocaleString()} entries are matched from the bundled evidence pack.
               </span>
               <button className="dn-button dn-button--secondary" onClick={() => void handleRefreshEvidence()} disabled={isRetryingEvidence}>
                 <span>{isRetryingEvidence ? "Refreshing evidence..." : "Refresh local evidence"}</span>

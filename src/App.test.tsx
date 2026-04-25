@@ -325,7 +325,7 @@ describe("DeaNA app", () => {
     expect(screen.queryByLabelText(/SNPedia/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Save and build report/i }));
 
-    await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(1));
     expect(workerPostCounts.evidence).toBe(1);
     expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
     expect(await screen.findByText("Current report")).toBeInTheDocument();
@@ -347,9 +347,39 @@ describe("DeaNA app", () => {
     await user.type(screen.getByLabelText("Profile name"), "Stephen");
     await user.click(screen.getByRole("button", { name: /Save and build report/i }));
 
-    await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(1));
     expect(workerPostCounts.evidence).toBe(1);
     expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
+  });
+
+  it("shows a saving state after evidence matching finishes", async () => {
+    const user = userEvent.setup();
+    let resolveSave: (() => void) | undefined;
+    vi.mocked(saveProfile).mockImplementationOnce(async (profile: SavedProfile) => {
+      storedProfiles = [profile, ...storedProfiles.filter((candidate) => candidate.id !== profile.id)];
+      await new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      });
+    });
+    const { container } = renderApp("/");
+
+    await screen.findByText(/Private DNA reports/i);
+    await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
+    await user.upload(input, file);
+
+    await screen.findByDisplayValue("stephen-kit");
+    await user.click(screen.getByRole("button", { name: /Save and build report/i }));
+
+    expect(await screen.findByText("Saving your report…")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/complete/i)).not.toBeInTheDocument();
+
+    resolveSave?.();
+    await waitFor(() => {
+      expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
+    });
   });
 
   it("opens an existing local report from the home screen", async () => {

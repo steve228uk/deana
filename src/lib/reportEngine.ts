@@ -10,7 +10,6 @@ import {
   ReportData,
   ReportEntry,
   ReportFacets,
-  SnpediaSupplement,
   TabSummary,
 } from "../types";
 
@@ -75,10 +74,6 @@ function buildWarnings(entries: ReportEntry[], supplements?: ProfileSupplements)
     warnings.push("Local evidence-pack matching did not finish, so this report may be incomplete until you retry.");
   }
 
-  if (supplements?.snpedia?.status === "partial" || supplements?.snpedia?.status === "failed") {
-    warnings.push("Some local SNPedia-derived matches failed, so this report may be incomplete until you retry enrichment.");
-  }
-
   return warnings;
 }
 
@@ -135,86 +130,10 @@ function buildTabs(entries: ReportEntry[]): TabSummary[] {
     {
       tab: "raw",
       label: "Raw Markers",
-      description: "Local genotype-page context with links back into SNPedia where DeaNA has interpretation context.",
+      description: "Uploaded markers linked to local evidence-pack context where DeaNA has interpretation context.",
       count: 0,
     },
   ];
-}
-
-function createSnpediaEntries(supplement?: SnpediaSupplement): ReportEntry[] {
-  if (!supplement) return [];
-
-  return supplement.matchedFindings.map((finding) => ({
-    id: finding.id,
-    entryKind: "snpedia",
-    category: finding.category,
-    subcategory: "snpedia",
-    title: finding.pageTitle,
-    summary: finding.summary,
-    detail: finding.detail,
-    whyItMatters: "This entry was discovered by looking up the uploaded rsID directly in SNPedia.",
-    genotypeSummary: `${finding.rsid} ${finding.genotype ?? "page-level"}`,
-    matchedMarkers: [
-      {
-        rsid: finding.rsid,
-        genotype: finding.genotype,
-        chromosome: finding.chromosome,
-        position: finding.position,
-        gene: finding.genes[0],
-      },
-    ],
-    genes: finding.genes,
-    topics: finding.topics,
-    conditions: finding.conditions,
-    warnings: [
-      "SNPedia is a supplementary source and does not replace clinical interpretation.",
-      "Consumer-array coverage and genotype orientation can limit interpretation fidelity.",
-    ],
-    sources: [
-      {
-        id: "snpedia",
-        name: "SNPedia",
-        url: finding.pageUrl,
-      },
-    ],
-    sourceNotes: [
-      "Matched from DeaNA's local SNPedia evidence pack using the uploaded rsID and genotype.",
-      "SNPedia content is supplemental and should be treated cautiously for health decisions.",
-    ],
-    evidenceTier: "supplementary",
-    clinicalSignificance: finding.clinicalSignificance,
-    repute: finding.repute,
-    publicationCount: finding.publicationCount,
-    publicationBucket:
-      finding.publicationCount === 0
-        ? "0"
-        : finding.publicationCount <= 5
-          ? "1-5"
-          : finding.publicationCount <= 20
-            ? "6-20"
-            : "21+",
-    magnitude: finding.magnitude,
-    sourcePageKey: finding.pageKey,
-    sourcePageUrl: finding.pageUrl,
-    coverage: "full",
-    tone: finding.repute === "bad" ? "caution" : finding.repute === "good" ? "good" : "neutral",
-    sort: {
-      severity:
-        finding.category === "medical"
-          ? finding.repute === "bad"
-            ? 90
-            : 65
-          : finding.category === "drug"
-            ? 68
-            : 38,
-      evidence: 0,
-      alphabetical: finding.pageTitle.toLowerCase(),
-      publications: finding.publicationCount,
-    },
-    confidenceNote: "This SNPedia entry was matched locally from the bundled evidence pack.",
-    disclaimer:
-      "Supplementary reference only. SNPedia content is informational and should not be used alone for diagnosis or treatment.",
-  }));
 }
 
 function publicationBucket(publicationCount: number): ReportEntry["publicationBucket"] {
@@ -326,25 +245,14 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
     });
 }
 
-function normalizeSupplements(supplements?: ProfileSupplements | SnpediaSupplement): ProfileSupplements | undefined {
-  if (!supplements) return undefined;
-  if ("matchedFindings" in supplements) {
-    return { snpedia: supplements };
-  }
-  return supplements;
-}
-
-export function generateReport(dna: ParsedDnaFile, supplementsInput?: ProfileSupplements | SnpediaSupplement): ReportData {
-  const supplements = normalizeSupplements(supplementsInput);
+export function generateReport(dna: ParsedDnaFile, supplements?: ProfileSupplements): ReportData {
   const evidenceSupplement: EvidenceSupplement | undefined = supplements?.evidence;
-  const snpediaSupplement = supplements?.snpedia;
   const map = markerMap(dna.markers);
   const curatedEntries = EVIDENCE_DEFINITIONS.map((definition) =>
     createEntryFromDefinition(definition, map, evidenceSupplement),
   );
   const localEvidenceEntries = createLocalEvidenceEntries(evidenceSupplement);
-  const snpediaEntries = createSnpediaEntries(snpediaSupplement);
-  const entries = [...curatedEntries, ...localEvidenceEntries, ...snpediaEntries];
+  const entries = [...curatedEntries, ...localEvidenceEntries];
   const curatedMarkerMatches = curatedEntries.flatMap((entry) => entry.matchedMarkers).filter((marker) => marker.genotype).length;
   const totalTrackedMarkers = curatedEntries.flatMap((entry) => entry.matchedMarkers).length;
   const coverageScore = totalTrackedMarkers === 0 ? 0 : Math.round((curatedMarkerMatches / totalTrackedMarkers) * 100);
@@ -381,12 +289,6 @@ export function generateReport(dna: ParsedDnaFile, supplementsInput?: ProfileSup
       localEvidenceMatchedRsids,
       evidenceUnmatchedRsids: evidenceSupplement?.unmatchedRsids ?? dna.markerCount,
       evidenceFailedItems: evidenceSupplement?.failedItems.length ?? 0,
-      snpediaStatus: snpediaSupplement?.status ?? "idle",
-      snpediaProcessedRsids: snpediaSupplement?.processedRsids ?? 0,
-      snpediaTotalRsids: snpediaSupplement?.totalRsids ?? dna.markerCount,
-      snpediaMatchedFindings: snpediaSupplement?.matchedFindings.length ?? 0,
-      snpediaUnmatchedRsids: snpediaSupplement?.unmatchedRsids ?? 0,
-      snpediaFailedRsids: snpediaSupplement?.failedItems.length ?? 0,
     },
     tabs: buildTabs(entries),
     entries,
