@@ -509,6 +509,7 @@ a { color: inherit; }
 .dn-empty-state h2 { color: var(--dn-forest); font-family: var(--dn-font-display); margin: 0 0 8px; }
 .dn-result-footer { margin-top: 18px; text-align: center; }
 
+.dn-mobile-sheet-backdrop { display: none; }
 .dn-mobile-sheet { display: none; }
 .dn-raw-screen { grid-template-columns: 1fr; }
 .dn-raw-list-panel { grid-column: 1 / -1; }
@@ -528,13 +529,17 @@ a { color: inherit; }
 @media (max-width: 1100px) {
   .dn-category-screen { grid-template-columns: 260px minmax(0, 1fr); }
   .dn-inspector { display: none; }
-  .dn-mobile-sheet { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; max-height: min(82vh, 680px); overflow: auto; overscroll-behavior: contain; background: var(--dn-paper); border: 1px solid var(--dn-line); border-bottom: 0; border-radius: 28px 28px 0 0; box-shadow: var(--dn-shadow); padding: 26px 20px 20px; }
-  .dn-sheet-handle { width: 64px; height: 5px; border-radius: 999px; background: var(--dn-line-strong); margin: 0 auto 18px; }
+  .dn-mobile-sheet-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(29, 27, 24, 0.56); backdrop-filter: blur(10px); }
+  .dn-mobile-sheet { display: block; width: 100%; max-height: min(82vh, 680px); overflow: auto; overscroll-behavior: contain; background: var(--dn-paper); border: 1px solid var(--dn-line); border-bottom: 0; border-radius: 28px 28px 0 0; box-shadow: var(--dn-shadow); padding: 26px 20px 20px; transform: translateY(28px); opacity: 0; transition: transform 180ms ease, opacity 180ms ease; }
+  .dn-mobile-sheet.is-visible { transform: translateY(0); opacity: 1; }
   .dn-mobile-sheet h1 { font-family: var(--dn-font-display); color: var(--dn-ink); font-size: 1.8rem; margin: 0 48px 8px 0; }
   .dn-mobile-sheet h2,
   .dn-mobile-sheet h3 { font-size: 0.95rem; margin: 18px 0 6px; color: var(--dn-ink); }
   .dn-mobile-sheet p,
   .dn-mobile-sheet li { color: var(--dn-muted); line-height: 1.5; }
+  @media (prefers-reduced-motion: reduce) {
+    .dn-mobile-sheet { transition: none; }
+  }
 }
 
 @media (max-width: 980px) {

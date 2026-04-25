@@ -488,7 +488,7 @@ describe("DeaNA app", () => {
     await screen.findByText("Current report");
     const inspector = await screen.findByLabelText("Finding inspector");
 
-    expect(within(inspector).getByRole("heading", { name: "Duplicate finding title" })).toBeInTheDocument();
+    expect(await within(inspector).findByRole("heading", { name: "Duplicate finding title" })).toBeInTheDocument();
     expect(inspector.querySelector(".dn-inspector__intro")).toBeNull();
     expect(within(inspector).getByText("The detail remains visible even when the summary is redundant.")).toBeInTheDocument();
   });
@@ -503,7 +503,7 @@ describe("DeaNA app", () => {
     const inspector = await screen.findByLabelText("Finding inspector");
     inspector.scrollTop = 120;
 
-    await user.click(screen.getByRole("button", { name: /Medical finding 02/i }));
+    await user.click(await screen.findByRole("button", { name: /Medical finding 02/i }));
 
     await waitFor(() =>
       expect(screen.getByTestId("location").textContent).toContain("selected=medical-2"),
