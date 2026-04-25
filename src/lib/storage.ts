@@ -5,6 +5,7 @@ import {
   ExplorerPage,
   ParsedDnaFile,
   ProfileMeta,
+  ReportEntryKind,
   ReportDataMeta,
   SavedProfile,
   SavedProfileSummary,
@@ -53,6 +54,7 @@ interface CategoryPageRequest {
   filters: ExplorerFilters;
   cursor?: string | null;
   pageSize?: number;
+  entryKinds?: ReportEntryKind[];
 }
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
@@ -112,12 +114,35 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-function ensureCurrentProfile(profile: SavedProfile): SavedProfile {
+function hasCurrentReportShape(profile: SavedProfile): boolean {
+  return Boolean(
+    profile.report?.entries?.every((entry) => entry.entryKind) &&
+      profile.report?.tabs?.some((tab) => tab.tab === "other") &&
+      typeof profile.report?.overview?.localEvidenceEntryMatches === "number" &&
+      typeof profile.report?.overview?.localEvidenceRecordMatches === "number" &&
+      typeof profile.report?.overview?.localEvidenceMatchedRsids === "number",
+  );
+}
+
+function profileNeedsRegeneration(profile: {
+  reportVersion: number;
+  evidencePackVersion: string;
+  report: Pick<ReportDataMeta, "reportVersion" | "evidencePackVersion">;
+}): boolean {
+  return (
+    profile.reportVersion !== REPORT_VERSION ||
+    profile.evidencePackVersion !== EVIDENCE_PACK_VERSION ||
+    profile.report.reportVersion !== REPORT_VERSION ||
+    profile.report.evidencePackVersion !== EVIDENCE_PACK_VERSION
+  );
+}
+
+export function ensureCurrentProfile(profile: SavedProfile): SavedProfile {
   if (
-    profile.reportVersion === REPORT_VERSION &&
-    profile.evidencePackVersion === EVIDENCE_PACK_VERSION &&
+    !profileNeedsRegeneration(profile) &&
     profile.report?.entries &&
-    profile.report?.tabs
+    profile.report?.tabs &&
+    hasCurrentReportShape(profile)
   ) {
     return profile;
   }
@@ -126,7 +151,7 @@ function ensureCurrentProfile(profile: SavedProfile): SavedProfile {
     ...profile,
     reportVersion: REPORT_VERSION,
     evidencePackVersion: EVIDENCE_PACK_VERSION,
-    report: generateReport(profile.dna, profile.supplements?.snpedia),
+    report: generateReport(profile.dna, profile.supplements),
   };
 }
 
@@ -239,8 +264,12 @@ function openSortCursor(
   return index.openCursor(IDBKeyRange.bound(lower, upper), direction);
 }
 
-function matchesStoredEntry(entry: StoredReportEntry, filters: ExplorerFilters): boolean {
-  return matchesEntryFilters(entry, filters, entry.category);
+function matchesStoredEntry(
+  entry: StoredReportEntry,
+  filters: ExplorerFilters,
+  entryKinds?: ReportEntryKind[],
+): boolean {
+  return (!entryKinds || entryKinds.includes(entry.entryKind)) && matchesEntryFilters(entry, filters, entry.category);
 }
 
 function deleteEntriesForProfile(store: IDBObjectStore, profileId: string): Promise<void> {
@@ -327,10 +356,21 @@ export async function loadProfileMeta(profileId: string): Promise<ProfileMeta | 
     return null;
   }
 
-  return {
+  const profile = {
     ...metaRecord,
     dna: dnaRecord.dna,
   };
+
+  if (profileNeedsRegeneration(profile)) {
+    const refreshed = ensureCurrentProfile(profile as SavedProfile);
+    await saveProfile(refreshed);
+    return {
+      ...toStoredProfileMeta(refreshed),
+      dna: refreshed.dna,
+    };
+  }
+
+  return profile;
 }
 
 export async function loadCategoryPage({
@@ -339,6 +379,7 @@ export async function loadCategoryPage({
   filters,
   cursor,
   pageSize = PAGE_SIZE,
+  entryKinds,
 }: CategoryPageRequest): Promise<ExplorerPage> {
   const db = await openDb();
   const transaction = db.transaction(REPORT_ENTRY_STORE, "readonly");
@@ -372,7 +413,7 @@ export async function loadCategoryPage({
       }
 
       const value = cursorResult.value as StoredReportEntry;
-      if (matchesStoredEntry(value, filters)) {
+      if (matchesStoredEntry(value, filters, entryKinds)) {
         if (entries.length < pageSize) {
           entries.push(value);
           lastReturnedCursor = {
@@ -464,4 +505,4 @@ export async function deleteProfile(id: string): Promise<void> {
   await transactionToPromise(transaction);
 }
 
-export { DB_NAME, DB_VERSION, ensureCurrentProfile };
+export { DB_NAME, DB_VERSION };

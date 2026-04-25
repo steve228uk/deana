@@ -1,4 +1,4 @@
-import type { ParsedDnaFile, SnpediaProgressSnapshot } from "../../types";
+import type { EvidenceProgressSnapshot, ParsedDnaFile } from "../../types";
 import { DeanaWordmark, Icon } from "./ui";
 
 export const DEANA_GITHUB_URL = "https://github.com/steve228uk/deana";
@@ -10,7 +10,8 @@ export interface SavedReportCard {
   build: string;
   markerCount: number;
   coverageScore: number;
-  totalFindings: number;
+  interpretedFindings: number;
+  localEvidenceFindings: number;
   createdAt: string;
 }
 
@@ -124,7 +125,9 @@ export function MarketingReturning({
               <div className="dn-report-row__main">
                 <strong>{report.name}</strong>
                 <span>{report.provider} · {report.build} · {report.markerCount.toLocaleString()} markers</span>
-                <span>Saved {formatDate(report.createdAt)}</span>
+                <span>
+                  Saved {formatDate(report.createdAt)} · {report.localEvidenceFindings.toLocaleString()} local evidence entries
+                </span>
               </div>
               <div className="dn-coverage-badge" aria-label={`${report.coverageScore}% tracked coverage`}>{report.coverageScore}%</div>
               <button className="dn-button dn-button--secondary" onClick={() => onOpenReport?.(report.id)}><Icon name="folder" /> Open</button>
@@ -218,7 +221,7 @@ export function UploadReportModal({
               <input id="profile-name" value={profileName} onChange={(event) => onProfileNameChange?.(event.target.value)} placeholder="Stephen" />
             </label>
             <div className="dn-callout dn-callout--success"><Icon name="shield" /> Your file is parsed locally. No DNA is uploaded to Deana.</div>
-            <div className="dn-callout"><Icon name="help" /> When you continue, your browser may request matching rsIDs from public sources such as SNPedia.</div>
+            <div className="dn-callout"><Icon name="help" /> ClinVar, CPIC, GWAS Catalog, and SNPedia-derived context are matched locally from the bundled evidence pack.</div>
             <div className="dn-modal-actions">
               <button className="dn-button dn-button--secondary" onClick={onCancel}>Cancel</button>
               <button className="dn-button dn-button--primary" disabled={isSaving || !profileName.trim()} onClick={onConfirm}><Icon name="upload" /> {isSaving ? "Building report..." : "Save and build report"}</button>
@@ -238,40 +241,24 @@ export function MarketingProcessing({
   onPrivacy,
   onBackHome,
 }: {
-  snapshot: SnpediaProgressSnapshot;
+  snapshot: EvidenceProgressSnapshot;
   error?: string | null;
   onPrivacy?: () => void;
   onBackHome?: () => void;
 }) {
-  const isSyncingSnpediaSnapshot = typeof snapshot.snpediaSnapshotPage === "number";
-  const snapshotTotalPages = snapshot.snpediaSnapshotTotalPages ?? null;
-  const percent = isSyncingSnpediaSnapshot
-    ? snapshotTotalPages
-      ? Math.round((snapshot.snpediaSnapshotPage! / snapshotTotalPages) * 100)
-      : Math.min(95, snapshot.snpediaSnapshotPage! * 5)
+  const isPreparingPack = snapshot.packStage && snapshot.packStage !== "matching";
+  const percent = isPreparingPack
+    ? 20
     : snapshot.totalRsids > 0
       ? Math.round((snapshot.processedRsids / snapshot.totalRsids) * 100)
       : 0;
-  const progressSummary = isSyncingSnpediaSnapshot
-    ? snapshotTotalPages
-      ? (
-        <span>
-          Syncing SNPedia page <strong>{snapshot.snpediaSnapshotPage!.toLocaleString()}</strong> of{" "}
-          <strong>{snapshotTotalPages.toLocaleString()}</strong>
-        </span>
-      )
-      : (
-        <span>
-          Syncing SNPedia page <strong>{snapshot.snpediaSnapshotPage!.toLocaleString()}</strong>
-        </span>
-      )
+  const progressSummary = isPreparingPack
+    ? <span>Loading fixed evidence pack <strong>{snapshot.packVersion ?? "locally"}</strong></span>
     : (
-      <span>Comparing <strong>{snapshot.processedRsids.toLocaleString()}</strong> of <strong>{snapshot.totalRsids.toLocaleString()}</strong> uploaded rsIDs</span>
+      <span>Comparing <strong>{snapshot.processedRsids.toLocaleString()}</strong> of <strong>{snapshot.totalRsids.toLocaleString()}</strong> uploaded rsIDs locally</span>
     );
-  const currentLabel = isSyncingSnpediaSnapshot ? "SNPedia snapshot" : "Current marker";
-  const currentValue = isSyncingSnpediaSnapshot
-    ? `${(snapshot.snpediaSnapshotRsids ?? 0).toLocaleString()} documented rsIDs found so far`
-    : snapshot.currentRsid ?? "Starting...";
+  const currentLabel = isPreparingPack ? "Evidence pack" : "Current step";
+  const currentValue = snapshot.currentRsid ?? "Starting...";
 
   return (
     <main className="dn-marketing-shell dn-processing-shell">
@@ -287,7 +274,7 @@ export function MarketingProcessing({
         <div className="dn-leaf dn-leaf--left" aria-hidden="true" />
         <div className="dn-leaf dn-leaf--right" aria-hidden="true" />
         <h1>Building <em>your</em> private report</h1>
-        <p>Keep this tab open while Deana processes matching rsIDs locally and saves your report in this browser.</p>
+        <p>Keep this tab open while Deana processes bundled evidence sources and saves your report in this browser.</p>
         <div className="dn-warning"><Icon name="alert" /> Do not close your browser while processing.</div>
       </section>
 
@@ -327,7 +314,7 @@ export function MarketingProcessing({
         <span className="dn-round-icon"><Icon name="shield" /></span>
         <div>
           <h2>Your raw DNA stays private on your device.</h2>
-          <p>Requests to public sources happen from your browser.</p>
+          <p>Local evidence and SNPedia-derived context are matched on your device from the bundled pack.</p>
         </div>
       </section>
 
@@ -340,7 +327,7 @@ export function PrivacyModal({ onClose, onGithub }: { onClose?: () => void; onGi
   const points = [
     ["shield", "Your raw DNA stays on your device", "Deana does not upload or store your raw DNA file or finished reports on its own servers."],
     ["folder", "Saved only in this browser", "Reports are stored locally in this browser, so you can reopen them later or remove them at any time."],
-    ["globe", "Public-source lookups happen from your browser", "When Deana enriches findings, requests may go directly from your browser to public sources such as SNPedia. Those services may see marker requests and your IP address."],
+    ["globe", "Evidence matching is local", "Deana uses a fixed local evidence pack, including bundled SNPedia-derived genotype context, without sending marker requests from your browser."],
     ["code", "Open source and transparent", "You can inspect the code, understand how the tool works, and review the project on GitHub."],
   ] as const;
 
@@ -445,7 +432,7 @@ function DataSourcesCard() {
         </div>
       </dl>
       <p className="dn-source-note">
-        <Icon name="globe" /> Live SNPedia lookups run from your browser when enrichment is needed.
+        <Icon name="globe" /> Processing uses bundled public sources. SNPedia-derived context is matched locally from the evidence pack.
       </p>
     </section>
   );

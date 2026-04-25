@@ -7,7 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "evidence:update": "bun run evidence:sources:sync && bun run evidence:snpedia:sync && bun run evidence:pack:build",
+    "evidence:check": "bun run scripts/buildEvidencePack.ts --check",
+    "evidence:sources:sync": "bun run scripts/syncEvidenceSources.ts",
+    "evidence:snpedia:sync": "bun run scripts/syncSnpedia.ts",
+    "evidence:pack:build": "bun run scripts/buildEvidencePack.ts",
+    "evidence:seed:bulk": "bun run scripts/seedEvidenceBulk.ts"
   },
   "dependencies": {
     "fflate": "^0.8.2",

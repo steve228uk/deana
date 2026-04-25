@@ -1,0 +1,55 @@
+name: Update evidence pack
+
+on:
+  schedule:
+    - cron: "15 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-evidence-pack:
+    name: Update evidence pack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Sync evidence sources
+        run: bun run evidence:sources:sync
+
+      - name: Build evidence pack
+        run: bun run evidence:pack:build
+
+      - name: Run tests
+        run: bun run test
+
+      - name: Build
+        run: bun run build
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: automation/update-evidence-pack
+          title: Update evidence pack
+          commit-message: Update evidence pack
+          body: |
+            ## Summary
+            - Syncs bulk evidence sources.
+            - Rebuilds the compact standalone evidence pack.
+            - Updates manifest checksum metadata and app pack-version constants when needed.
+
+            ## Checks
+            - `bun run test`
+            - `bun run build`

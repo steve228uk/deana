@@ -1,0 +1,693 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import readline from "node:readline";
+import { fileURLToPath } from "node:url";
+import { createGunzip } from "node:zlib";
+import type {
+  EvidencePackManifest,
+  EvidencePackRecord,
+  EvidenceSourceRole,
+  EvidenceTier,
+  InsightCategory,
+  ReputeStatus,
+} from "../src/types";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const cacheRoot = path.join(repoRoot, ".evidence-cache");
+const packRoot = path.join(repoRoot, "public", "evidence-packs");
+const schemaVersion = 1;
+const shardModulo = 256;
+const defaultVersion = (() => {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-core`;
+})();
+
+const attribution =
+  "Local DeaNA evidence pack built from public ClinVar, CPIC, GWAS Catalog, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
+
+const sourceMetadata: EvidencePackManifest["sources"] = [
+  {
+    id: "clinvar",
+    name: "ClinVar",
+    release: "ClinVar variant_summary bulk TSV",
+    url: "https://www.ncbi.nlm.nih.gov/clinvar/docs/downloads/",
+    role: "primary",
+  },
+  {
+    id: "gwas",
+    name: "GWAS Catalog",
+    release: "GWAS Catalog association export",
+    url: "https://www.ebi.ac.uk/gwas/downloads",
+    role: "primary",
+  },
+  {
+    id: "cpic",
+    name: "CPIC",
+    release: "Curated CPIC records from DeaNA seed pack",
+    url: "https://cpicpgx.org/api-and-database/",
+    role: "primary",
+  },
+  {
+    id: "pubmed",
+    name: "PubMed",
+    release: "PubMed citation metadata carried by source rows",
+    url: "https://www.ncbi.nlm.nih.gov/books/NBK25497/",
+    role: "citation",
+  },
+  {
+    id: "gnomad",
+    name: "gnomAD",
+    release: "Curated gnomAD context from DeaNA seed pack",
+    url: "https://gnomad.broadinstitute.org/",
+    role: "frequency-context",
+  },
+  {
+    id: "snpedia",
+    name: "SNPedia",
+    release: "SNPedia cached page export from bots.snpedia.com",
+    url: "https://bots.snpedia.com/index.php/Bulk",
+    role: "supplementary",
+  },
+];
+
+interface Options {
+  version: string;
+  check: boolean;
+  maxClinvarRecords: number;
+  maxGwasRecords: number;
+}
+
+function parseOptions(argv: string[]): Options {
+  const options: Options = {
+    version: defaultVersion,
+    check: false,
+    maxClinvarRecords: 50000,
+    maxGwasRecords: 50000,
+  };
+
+  for (const arg of argv) {
+    if (arg === "--check") {
+      options.check = true;
+      continue;
+    }
+    if (arg.startsWith("--version=")) {
+      options.version = arg.slice("--version=".length);
+      continue;
+    }
+    if (arg.startsWith("--max-clinvar-records=")) {
+      options.maxClinvarRecords = Number.parseInt(arg.slice("--max-clinvar-records=".length), 10);
+      continue;
+    }
+    if (arg.startsWith("--max-gwas-records=")) {
+      options.maxGwasRecords = Number.parseInt(arg.slice("--max-gwas-records=".length), 10);
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  if (!/^\d{4}-\d{2}-core$/.test(options.version)) {
+    throw new Error(`Evidence-pack version must match YYYY-MM-core: ${options.version}`);
+  }
+
+  return options;
+}
+
+function splitTsv(line: string): string[] {
+  return line.split("\t").map((value) => value.trim());
+}
+
+async function* tsvRows(filePath: string): AsyncGenerator<Record<string, string>> {
+  const stream = filePath.endsWith(".gz")
+    ? createReadStream(filePath).pipe(createGunzip())
+    : createReadStream(filePath);
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let headers: string[] | null = null;
+
+  for await (const line of lines) {
+    if (!line.trim()) continue;
+    if (!headers) {
+      headers = splitTsv(line);
+      continue;
+    }
+    const values = splitTsv(line);
+    const row: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      row[header] = values[index] ?? "";
+    });
+    yield row;
+  }
+}
+
+function column(row: Record<string, string>, names: string[]): string {
+  for (const name of names) {
+    const value = row[name];
+    if (value) return value;
+  }
+  return "";
+}
+
+function normalizeRsid(value: string): string | null {
+  const match = value.match(/rs\d+/i);
+  if (!match) return null;
+  return match[0].toLowerCase();
+}
+
+function extractRsids(value: string): string[] {
+  return Array.from(new Set(Array.from(value.matchAll(/rs\d+/gi), (match) => match[0].toLowerCase())));
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function fileSha256(filePath: string): Promise<string> {
+  const file = Bun.file(filePath);
+  const digest = createHash("sha256");
+  const reader = file.stream().getReader();
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    digest.update(value);
+  }
+  return digest.digest("hex");
+}
+
+function recordText(records: EvidencePackRecord[]): string {
+  return `${JSON.stringify(records.sort((left, right) => left.id.localeCompare(right.id)))}\n`;
+}
+
+function rsidBucket(rsid: string): number {
+  const numeric = Number.parseInt(rsid.replace(/^rs/i, ""), 10);
+  if (Number.isFinite(numeric)) return numeric % shardModulo;
+  let hash = 0;
+  for (const char of rsid.toLowerCase()) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash % shardModulo;
+}
+
+function sourceRole(sourceId: string): EvidenceSourceRole {
+  if (sourceId === "gnomad") return "frequency-context";
+  if (sourceId === "pubmed") return "citation";
+  if (sourceId === "snpedia") return "supplementary";
+  return "primary";
+}
+
+function categoryForClinvar(significance: string): InsightCategory {
+  return /drug response|pharmacogen/i.test(significance) ? "drug" : "medical";
+}
+
+function evidenceForClinvar(reviewStatus: string, significance: string): EvidenceTier {
+  if (/practice guideline|reviewed by expert panel|criteria provided, multiple submitters, no conflicts/i.test(reviewStatus)) {
+    return "high";
+  }
+  if (/pathogenic|risk factor|drug response|affects/i.test(significance)) return "moderate";
+  return "emerging";
+}
+
+function reputeForSignificance(significance: string): ReputeStatus {
+  if (/pathogenic|risk factor|drug response|affects/i.test(significance)) return "bad";
+  if (/protective/i.test(significance)) return "good";
+  if (/conflicting/i.test(significance)) return "mixed";
+  return "not-set";
+}
+
+function includeClinvar(significance: string, reviewStatus: string): boolean {
+  const lower = `${significance} ${reviewStatus}`.toLowerCase();
+  if (!significance || /not provided|not specified|no assertion|uncertain significance|benign|likely benign/i.test(lower)) {
+    return false;
+  }
+  return /pathogenic|risk factor|drug response|affects|association|protective|conflicting/i.test(lower);
+}
+
+function cleanCondition(value: string): string | null {
+  const cleaned = value.trim();
+  if (!cleaned || /^not (provided|specified)$/i.test(cleaned) || /^see cases$/i.test(cleaned)) return null;
+  return cleaned.replace(/\s+/g, " ");
+}
+
+function conditionList(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(/[|;]/)
+        .map(cleanCondition)
+        .filter((condition): condition is string => Boolean(condition)),
+    ),
+  ).slice(0, 8);
+}
+
+function primaryCondition(conditions: string[], fallback: string): string {
+  return conditions.find((condition) => !/related disorder|inborn genetic diseases|neoplasm/i.test(condition)) ?? conditions[0] ?? fallback;
+}
+
+function plainClinvarTitle(gene: string, significance: string, conditions: string[], category: InsightCategory): string {
+  const condition = primaryCondition(conditions, "a ClinVar condition");
+  if (category === "drug") {
+    return `${gene} drug-response variant`;
+  }
+  if (/conflicting/i.test(significance)) {
+    return `${gene} variant with conflicting ClinVar classifications for ${condition}`;
+  }
+  if (/protective/i.test(significance)) {
+    return `${gene} variant reported as protective for ${condition}`;
+  }
+  if (/risk factor|association/i.test(significance)) {
+    return `${gene} variant associated with ${condition}`;
+  }
+  return `${gene} variant reported for ${condition}`;
+}
+
+function singleBaseAllele(value: string): string | undefined {
+  const allele = value.trim().toUpperCase();
+  return /^[ACGT]$/.test(allele) ? allele : undefined;
+}
+
+function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
+  const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
+  if (!rawRsid || rawRsid === "-1") return null;
+  const rsid = normalizeRsid(rawRsid.startsWith("rs") ? rawRsid : `rs${rawRsid}`);
+  if (!rsid) return null;
+
+  const significance = column(row, ["ClinicalSignificance"]);
+  const reviewStatus = column(row, ["ReviewStatus"]);
+  if (!includeClinvar(significance, reviewStatus)) return null;
+
+  const variationId = column(row, ["VariationID", "AlleleID"]) || rawRsid;
+  const gene = column(row, ["GeneSymbol"]) || "Unknown";
+  const technicalName = column(row, ["Name"]) || `${rsid} ClinVar variant`;
+  const traits = conditionList(column(row, ["PhenotypeList"]));
+  const category = categoryForClinvar(significance);
+  const condition = primaryCondition(traits, "the reported condition");
+  const riskAllele = singleBaseAllele(column(row, ["AlternateAlleleVCF", "AlternateAllele"]));
+  const title = plainClinvarTitle(gene, significance, traits, category);
+
+  return {
+    id: `clinvar-${variationId}-${rsid}`,
+    entryId: `local-${category}-clinvar-${variationId}`,
+    sourceId: "clinvar",
+    role: "primary",
+    category,
+    subcategory: category === "drug" ? "pharmacogenomics" : "clinical-variant",
+    markerIds: [rsid],
+    genes: [gene],
+    title,
+    technicalName,
+    summary: `ClinVar classifies this ${gene} variant as ${significance.toLowerCase()} for ${condition}.`,
+    detail: `ClinVar reports ${significance} for ${technicalName}. Review status: ${reviewStatus || "not supplied"}.`,
+    whyItMatters: `This is source-reviewed clinical context for ${condition}; DeaNA only surfaces it when the uploaded genotype matches the reported allele where ClinVar provides one.`,
+    topics: ["ClinVar", "Clinical variant"],
+    conditions: traits,
+    url: `https://www.ncbi.nlm.nih.gov/clinvar/variation/${variationId}/`,
+    release: "ClinVar variant_summary bulk TSV",
+    evidenceLevel: evidenceForClinvar(reviewStatus, significance),
+    clinicalSignificance: significance,
+    repute: reputeForSignificance(significance),
+    tone: category === "drug" ? "caution" : "neutral",
+    riskAllele,
+    pmids: [],
+    notes: [
+      `Review status: ${reviewStatus || "not supplied"}.`,
+      ...(riskAllele ? [`Reported alternate allele: ${riskAllele}.`] : []),
+      "Generated from bulk ClinVar data; clinical interpretation requires human review and confirmatory testing.",
+    ],
+  };
+}
+
+function includeGwas(row: Record<string, string>): boolean {
+  const pValueRaw = column(row, ["P-VALUE"]);
+  const pValue = Number(pValueRaw);
+  return Number.isFinite(pValue) && pValue > 0 && pValue <= 5e-8;
+}
+
+function gwasRecords(row: Record<string, string>, index: number): EvidencePackRecord[] {
+  if (!includeGwas(row)) return [];
+  const rsids = extractRsids([
+    column(row, ["SNPS", "SNP_ID_CURRENT", "SNP_ID"]),
+    column(row, ["STRONGEST SNP-RISK ALLELE"]),
+  ].join(" "));
+  if (rsids.length === 0) return [];
+
+  const trait = column(row, ["MAPPED_TRAIT", "DISEASE/TRAIT"]) || "GWAS association";
+  const mappedGene = column(row, ["MAPPED_GENE", "REPORTED GENE(S)"]) || "Unknown";
+  const pmid = column(row, ["PUBMEDID", "PUBMED ID"]);
+  const strongestAllele = column(row, ["STRONGEST SNP-RISK ALLELE"]);
+  const riskAllele = singleBaseAllele(strongestAllele.split("-").pop() ?? "");
+  return rsids.map((rsid) => ({
+    id: `gwas-${rsid}-${index}`,
+    entryId: `local-trait-gwas-${rsid}-${index}`,
+    sourceId: "gwas",
+    role: "primary",
+    category: "traits",
+    subcategory: "association",
+    markerIds: [rsid],
+    genes: mappedGene.split(/[;,]/).map((gene) => gene.trim()).filter(Boolean).slice(0, 5),
+    title: `${trait} association near ${mappedGene.split(/[;,]/)[0]?.trim() || rsid}`,
+    technicalName: `${rsid} ${trait}`,
+    summary: `GWAS Catalog links ${riskAllele ? `${rsid}-${riskAllele}` : rsid} with ${trait}.`,
+    detail: `GWAS Catalog association with p-value ${column(row, ["P-VALUE"])}.`,
+    whyItMatters: "This common-variant association is matched locally against the uploaded genotype and should be treated as a tendency signal, not a prediction.",
+    topics: ["GWAS", "Association"],
+    conditions: trait.split(",").map((value) => value.trim()).filter(Boolean),
+    url: column(row, ["LINK"]) || `https://www.ebi.ac.uk/gwas/search?query=${encodeURIComponent(rsid)}`,
+    release: "GWAS Catalog association export",
+    evidenceLevel: "moderate",
+    clinicalSignificance: "trait-association",
+    repute: "not-set",
+    riskAllele,
+    pmids: pmid ? [pmid] : [],
+    notes: [
+      `Risk allele: ${strongestAllele || "not supplied"}.`,
+      "Generated from bulk GWAS Catalog data; effect size and ancestry transferability require review.",
+    ],
+  }));
+}
+
+interface CachedSnpediaPage {
+  title: string;
+  content: string;
+  timestamp?: string;
+}
+
+function snpediaPageKey(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function templateValue(content: string, key: string): string | null {
+  const match = content.match(new RegExp(`\\|${key}=([^\\n]+)`, "i"));
+  return match?.[1]?.trim() ?? null;
+}
+
+function cleanWikiText(value: string): string {
+  return value
+    .replace(/\{\{[^{}]+\}\}/g, " ")
+    .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, "$2")
+    .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    .replace(/'''?/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function firstParagraphs(content: string, count: number): string {
+  const body = content.replace(/\{\{[\s\S]*?\}\}\s*/u, "").trim();
+  if (!body) return "";
+  return body
+    .split(/\n{2,}/)
+    .map((chunk) => cleanWikiText(chunk))
+    .filter(Boolean)
+    .slice(0, count)
+    .join(" ");
+}
+
+function snpediaGenotypeFromTitle(title: string): { rsid: string; genotype: string } | null {
+  const match = title.match(/^(rs\d+)\(([ACGT]);([ACGT])\)$/i);
+  if (!match) return null;
+  return {
+    rsid: match[1].toLowerCase(),
+    genotype: [match[2], match[3]].sort().join("").toUpperCase(),
+  };
+}
+
+function parseSnpediaGenes(content: string): string[] {
+  const genes = new Set<string>();
+  for (const match of content.matchAll(/\[\[([A-Z0-9-]{2,})\]\]\s+gene/gu)) {
+    genes.add(match[1]);
+  }
+  return [...genes];
+}
+
+function parseSnpediaPmids(content: string): string[] {
+  return Array.from(new Set(Array.from(content.matchAll(/\{\{PMID\|?(\d+)\}\}/gi), (match) => match[1])));
+}
+
+function parseSnpediaRepute(raw: string | null): ReputeStatus {
+  if (!raw) return "not-set";
+  if (/good/i.test(raw)) return "good";
+  if (/bad/i.test(raw)) return "bad";
+  if (/mixed/i.test(raw)) return "mixed";
+  return "not-set";
+}
+
+function parseSnpediaMagnitude(raw: string | null): number | null {
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function snpediaCategory(summary: string, detail: string): InsightCategory {
+  const text = `${summary} ${detail}`.toLowerCase();
+  if (/drug|warfarin|statin|clopidogrel|metabolizer|dose|medication|pharmacogen/.test(text)) return "drug";
+  if (/bald|hair|eye color|caffeine|taste|earwax|lactose|chronotype|sleep|height|weight|skin|muscle/.test(text)) {
+    return "traits";
+  }
+  return "medical";
+}
+
+function snpediaTitle(summary: string, rsid: string): string {
+  const cleaned = summary.replace(/\.$/, "");
+  if (cleaned.length > 8 && !/^rs\d+/i.test(cleaned)) {
+    return cleaned.length > 96 ? `${cleaned.slice(0, 93).trim()}...` : cleaned;
+  }
+  return `${rsid} genotype context from SNPedia`;
+}
+
+async function buildSnpediaRecords(): Promise<EvidencePackRecord[]> {
+  const sourceFile = path.join(cacheRoot, "snpedia", "pages.json");
+  if (!existsSync(sourceFile)) return [];
+
+  const pages = JSON.parse(await readFile(sourceFile, "utf8")) as CachedSnpediaPage[];
+  const rsPages = new Map<string, CachedSnpediaPage>();
+  for (const page of pages) {
+    const rsid = normalizeRsid(page.title);
+    if (rsid && /^rs\d+$/i.test(page.title)) {
+      rsPages.set(rsid, page);
+    }
+  }
+
+  return pages.flatMap((page): EvidencePackRecord[] => {
+    const genotype = snpediaGenotypeFromTitle(page.title);
+    if (!genotype) return [];
+
+    const summary = cleanWikiText(templateValue(page.content, "summary") ?? firstParagraphs(page.content, 1));
+    if (!summary || /no summary|stub/i.test(summary)) return [];
+
+    const rsPage = rsPages.get(genotype.rsid);
+    const rsContent = rsPage?.content ?? "";
+    const detail = cleanWikiText(firstParagraphs(page.content, 2) || summary);
+    const genes = parseSnpediaGenes(rsContent);
+    const conditions = conditionList(`${summary};${detail}`).slice(0, 6);
+    const category = snpediaCategory(summary, detail);
+    const pmids = Array.from(new Set([...parseSnpediaPmids(page.content), ...parseSnpediaPmids(rsContent)]));
+    const magnitude = parseSnpediaMagnitude(templateValue(page.content, "magnitude"));
+    const repute = parseSnpediaRepute(templateValue(page.content, "repute"));
+
+    return [{
+      id: `snpedia-${snpediaPageKey(page.title)}`,
+      entryId: `local-${category}-snpedia-${snpediaPageKey(page.title)}`,
+      sourceId: "snpedia",
+      role: "supplementary",
+      category,
+      subcategory: "snpedia",
+      markerIds: [genotype.rsid],
+      genes,
+      title: snpediaTitle(summary, genotype.rsid),
+      technicalName: page.title,
+      summary,
+      detail,
+      whyItMatters: "SNPedia has a genotype-specific page for this result, which can add consumer-facing context alongside primary evidence sources.",
+      topics: ["SNPedia", "Genotype page"],
+      conditions,
+      url: `https://bots.snpedia.com/index.php/${encodeURIComponent(page.title)
+        .replaceAll("%28", "(")
+        .replaceAll("%29", ")")
+        .replaceAll("%3B", ";")}`,
+      release: `SNPedia cached page export${page.timestamp ? `; page timestamp ${page.timestamp}` : ""}`,
+      evidenceLevel: "supplementary",
+      clinicalSignificance: null,
+      repute,
+      tone: repute === "bad" ? "caution" : repute === "good" ? "good" : "neutral",
+      genotype: genotype.genotype,
+      magnitude,
+      pmids,
+      notes: [
+        `SNPedia genotype page: ${page.title}.`,
+        ...(magnitude !== null ? [`SNPedia magnitude: ${magnitude}.`] : []),
+        `SNPedia repute: ${repute}.`,
+        "SNPedia is supplementary and should not be treated as a primary clinical source.",
+      ],
+    }];
+  });
+}
+
+async function existingCuratedRecords(version: string): Promise<EvidencePackRecord[]> {
+  const recordsFile = path.join(packRoot, version, "records.json");
+  if (!existsSync(recordsFile)) return [];
+  return JSON.parse(await readFile(recordsFile, "utf8")) as EvidencePackRecord[];
+}
+
+async function buildClinvarRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
+  const sourceFile = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
+  if (!existsSync(sourceFile)) return [];
+
+  const records: EvidencePackRecord[] = [];
+  for await (const row of tsvRows(sourceFile)) {
+    const record = clinvarRecord(row);
+    if (!record) continue;
+    records.push(record);
+    if (records.length >= maxRecords) break;
+  }
+  return records;
+}
+
+async function buildGwasRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
+  const sourceFile = path.join(cacheRoot, "gwas", "associations.tsv");
+  if (!existsSync(sourceFile)) return [];
+
+  const records: EvidencePackRecord[] = [];
+  let rowIndex = 0;
+  for await (const row of tsvRows(sourceFile)) {
+    rowIndex += 1;
+    records.push(...gwasRecords(row, rowIndex));
+    if (records.length >= maxRecords) break;
+  }
+  return records.slice(0, maxRecords);
+}
+
+function dedupeRecords(records: EvidencePackRecord[]): EvidencePackRecord[] {
+  return Array.from(new Map(records.map((record) => [record.id, record])).values());
+}
+
+function withKnownSourceRoles(records: EvidencePackRecord[]): EvidencePackRecord[] {
+  return records.map((record) => ({
+    ...record,
+    role: record.role ?? sourceRole(record.sourceId),
+  }));
+}
+
+async function writeIfChanged(filePath: string, text: string, check: boolean): Promise<boolean> {
+  const current = existsSync(filePath) ? await readFile(filePath, "utf8") : null;
+  if (current === text) return false;
+  if (check) return true;
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, text);
+  return true;
+}
+
+async function sourceChecksums(): Promise<Record<string, string | null>> {
+  const clinvar = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
+  const gwas = path.join(cacheRoot, "gwas", "associations.tsv");
+  const snpedia = path.join(cacheRoot, "snpedia", "pages.json");
+  return {
+    clinvar: existsSync(clinvar) ? await fileSha256(clinvar) : null,
+    gwas: existsSync(gwas) ? await fileSha256(gwas) : null,
+    snpedia: existsSync(snpedia) ? await fileSha256(snpedia) : null,
+  };
+}
+
+function replaceVersionConstant(source: string, exportName: string, version: string): string {
+  const pattern = new RegExp(`export const ${exportName} = "[^"]+";`);
+  if (!pattern.test(source)) {
+    throw new Error(`Could not find ${exportName} export.`);
+  }
+  return source.replace(pattern, `export const ${exportName} = "${version}";`);
+}
+
+async function main(): Promise<void> {
+  const options = parseOptions(process.argv.slice(2));
+  const targetDir = path.join(packRoot, options.version);
+  const curatedRecords = await existingCuratedRecords(options.version);
+  const clinvarRecords = await buildClinvarRecords(options.maxClinvarRecords);
+  const gwasRecords = await buildGwasRecords(options.maxGwasRecords);
+  const snpediaRecords = await buildSnpediaRecords();
+  const records = dedupeRecords(withKnownSourceRoles([...curatedRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords]));
+  const buckets = new Map<number, EvidencePackRecord[]>();
+
+  for (const record of records) {
+    const bucket = rsidBucket(record.markerIds[0] ?? record.id);
+    buckets.set(bucket, [...(buckets.get(bucket) ?? []), record]);
+  }
+
+  if (!options.check) {
+    await rm(path.join(targetDir, "shards"), { recursive: true, force: true });
+  }
+
+  const shards: NonNullable<EvidencePackManifest["shards"]> = [];
+  let changed = false;
+  for (const [bucket, bucketRecords] of Array.from(buckets.entries()).sort(([left], [right]) => left - right)) {
+    const id = `m${String(bucket).padStart(3, "0")}`;
+    const recordsPath = `shards/${id}.json`;
+    const text = recordText(bucketRecords);
+    changed = (await writeIfChanged(path.join(targetDir, recordsPath), text, options.check)) || changed;
+    shards.push({
+      id,
+      recordsPath,
+      recordsSha256: sha256(text),
+      recordCount: bucketRecords.length,
+      bucket,
+    });
+  }
+
+  const checksums = await sourceChecksums();
+  const existingManifestPath = path.join(targetDir, "manifest.json");
+  const existingManifest = existsSync(existingManifestPath)
+    ? JSON.parse(await readFile(existingManifestPath, "utf8")) as Partial<EvidencePackManifest>
+    : null;
+  const generatedAt = existingManifest?.version === options.version ? existingManifest.generatedAt ?? new Date().toISOString() : new Date().toISOString();
+  const manifest = {
+    version: options.version,
+    schemaVersion,
+    generatedAt,
+    shardStrategy: "rsid-modulo",
+    shardModulo,
+    shards,
+    recordCount: records.length,
+    attribution,
+    sources: sourceMetadata.map((source) => ({
+      ...source,
+      release: source.id === "clinvar" && checksums.clinvar
+        ? `${source.release}; sha256 ${checksums.clinvar.slice(0, 12)}`
+        : source.id === "gwas" && checksums.gwas
+          ? `${source.release}; sha256 ${checksums.gwas.slice(0, 12)}`
+          : source.id === "snpedia" && checksums.snpedia
+            ? `${source.release}; sha256 ${checksums.snpedia.slice(0, 12)}`
+            : source.release,
+    })),
+  } satisfies EvidencePackManifest;
+  changed = (await writeIfChanged(existingManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, options.check)) || changed;
+
+  const evidencePackFile = path.join(repoRoot, "src", "lib", "evidencePack.ts");
+  const evidencePackDataFile = path.join(repoRoot, "src", "lib", "evidencePackData.ts");
+  changed = (await writeIfChanged(
+    evidencePackFile,
+    replaceVersionConstant(await readFile(evidencePackFile, "utf8"), "EVIDENCE_PACK_VERSION", options.version),
+    options.check,
+  )) || changed;
+  changed = (await writeIfChanged(
+    evidencePackDataFile,
+    replaceVersionConstant(await readFile(evidencePackDataFile, "utf8"), "LOCAL_EVIDENCE_PACK_VERSION", options.version),
+    options.check,
+  )) || changed;
+
+  console.log(`Curated records: ${curatedRecords.length.toLocaleString()}`);
+  console.log(`ClinVar records: ${clinvarRecords.length.toLocaleString()}`);
+  console.log(`GWAS records: ${gwasRecords.length.toLocaleString()}`);
+  console.log(`SNPedia records: ${snpediaRecords.length.toLocaleString()}`);
+  console.log(`Packed records: ${records.length.toLocaleString()} across ${shards.length.toLocaleString()} shards.`);
+  if (options.check && changed) {
+    process.exitCode = 1;
+    console.log("Evidence pack is not current.");
+  } else if (!changed) {
+    console.log("Evidence pack is current.");
+  }
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

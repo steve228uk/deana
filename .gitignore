@@ -5,3 +5,7 @@ bun.lock
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+docs/evidence-candidates/dna-seed-*.json
+docs/evidence-candidates/dna-seed-*/
+docs/evidence-candidates/dna-bulk-*.json
+.evidence-cache/

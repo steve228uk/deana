@@ -11,6 +11,8 @@ function escapeHtml(value: string): string {
 
 export function exportReportHtml(profile: ProfileMeta, entries: ReportEntry[]): void {
   const groupedEntries: Array<[string, ReportEntry[]]> = [];
+  const localEvidenceEntryMatches =
+    profile.report.overview.localEvidenceEntryMatches ?? profile.report.overview.evidenceMatchedFindings ?? 0;
 
   for (const [label, grouped] of [
     ["Medical", entries.filter((entry) => entry.category === "medical")],
@@ -67,13 +69,14 @@ export function exportReportHtml(profile: ProfileMeta, entries: ReportEntry[]): 
     .map((warning) => `<li>${escapeHtml(warning)}</li>`)
     .join("");
 
-  const snpediaMeta =
-    profile.supplements?.snpedia
+  const evidenceMeta =
+    profile.supplements?.evidence
       ? `<div class="overview-card">
-          <p class="eyebrow">SNPedia</p>
-          <h2>${profile.report.overview.snpediaMatchedFindings.toLocaleString()}</h2>
-          <p class="small">${escapeHtml(profile.report.overview.snpediaStatus)} • ${profile.report.overview.snpediaProcessedRsids.toLocaleString()} processed • ${profile.report.overview.snpediaFailedRsids.toLocaleString()} failed</p>
-          <p class="small">${escapeHtml(profile.supplements.snpedia.attribution)}</p>
+          <p class="eyebrow">Evidence pack</p>
+          <h2>${localEvidenceEntryMatches.toLocaleString()}</h2>
+          <p class="small">${escapeHtml(profile.report.overview.evidenceStatus)} • ${profile.report.overview.evidenceProcessedRsids.toLocaleString()} processed • ${profile.report.overview.evidenceFailedItems.toLocaleString()} failed</p>
+          <p class="small">Local evidence entries are grouped into report categories and also available from Other.</p>
+          <p class="small">${escapeHtml(profile.supplements.evidence.attribution)}</p>
         </div>`
       : "";
 
@@ -183,7 +186,7 @@ export function exportReportHtml(profile: ProfileMeta, entries: ReportEntry[]): 
               <p class="eyebrow">Warnings</p>
               <ul>${warnings}</ul>
             </div>
-            ${snpediaMeta}
+            ${evidenceMeta}
           </div>
         </section>
         ${sectionsHtml}

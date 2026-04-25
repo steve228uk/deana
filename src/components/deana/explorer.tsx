@@ -17,6 +17,7 @@ const tabs: Array<{ id: ExplorerTab; label: string }> = [
   { id: "medical", label: "Medical" },
   { id: "traits", label: "Traits" },
   { id: "drug", label: "Drug response" },
+  { id: "other", label: "Other" },
   { id: "raw", label: "Raw markers" },
 ];
 
@@ -25,6 +26,7 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = [
   { id: "medical", label: "Medical", icon: "heart" },
   { id: "traits", label: "Traits", icon: "leaf" },
   { id: "drug", label: "Drug response", icon: "pill" },
+  { id: "other", label: "Other", icon: "database" },
   { id: "raw", label: "Raw markers", icon: "list" },
 ];
 
@@ -144,7 +146,14 @@ export function OverviewContent({
   onExploreCategory: (tab: ExplorerTab) => void;
 }) {
   const categories = profile.report.tabs.filter((tab) => tab.tab !== "overview" && tab.tab !== "raw");
-  const totalFindings = categories.reduce((sum, category) => sum + category.count, 0);
+  const interpretedTabs = categories.filter((tab) => tab.tab !== "other");
+  const totalFindings = profile.report.tabs.find((tab) => tab.tab === "overview")?.count ?? 0;
+  const localEvidenceEntryMatches =
+    profile.report.overview.localEvidenceEntryMatches ?? profile.report.overview.evidenceMatchedFindings ?? 0;
+  const localEvidenceRecordMatches =
+    profile.report.overview.localEvidenceRecordMatches ?? localEvidenceEntryMatches;
+  const localEvidenceMatchedRsids =
+    profile.report.overview.localEvidenceMatchedRsids ?? localEvidenceEntryMatches;
 
   return (
     <main className="dn-overview-screen">
@@ -159,21 +168,38 @@ export function OverviewContent({
         <OverviewMetric icon="folder" label="Build" value={profile.dna.build} />
         <OverviewMetric icon="activity" label="Markers parsed" value={profile.dna.markerCount.toLocaleString()} />
         <OverviewMetric icon="target" label="Tracked coverage" value={`${profile.report.overview.coverageScore}%`} />
-        <OverviewMetric icon="file" label="Total findings" value={totalFindings.toLocaleString()} />
+        <OverviewMetric icon="file" label="Report entries" value={totalFindings.toLocaleString()} />
+        <OverviewMetric icon="database" label="Local evidence entries" value={localEvidenceEntryMatches.toLocaleString()} />
       </section>
 
       <section className="dn-simple-card dn-category-jump-card">
         <h2>Start with the strongest signal</h2>
         <div className="dn-category-grid">
-          {categories.map((category) => (
+          {interpretedTabs.map((category) => (
             <article key={category.tab} className={`dn-category-card dn-tone-${toneForTab(category.tab)}`}>
               <span className="dn-round-icon"><Icon name={iconForTab(category.tab)} /></span>
               <h3>{labelForTab(category.tab)}</h3>
-              <strong>{category.count.toLocaleString()} <span>curated findings</span></strong>
+              <strong>{category.count.toLocaleString()} <span>report entries</span></strong>
               <p>{category.description}</p>
               <button className="dn-button dn-button--secondary" onClick={() => onExploreCategory(category.tab)}>Explore {labelForTab(category.tab).toLowerCase()} <Icon name="external" /></button>
             </article>
           ))}
+        </div>
+      </section>
+
+      <section className="dn-simple-card dn-category-jump-card">
+        <h2>Other evidence</h2>
+        <div className="dn-category-grid">
+          <article className="dn-category-card dn-tone-green">
+            <span className="dn-round-icon"><Icon name="database" /></span>
+            <h3>Source-derived matches</h3>
+            <strong>{localEvidenceEntryMatches.toLocaleString()} <span>unique entries</span></strong>
+            <p>
+              {localEvidenceRecordMatches.toLocaleString()} local evidence records matched{" "}
+              {localEvidenceMatchedRsids.toLocaleString()} uploaded rsIDs.
+            </p>
+            <button className="dn-button dn-button--secondary" onClick={() => onExploreCategory("other")}>Explore other evidence <Icon name="external" /></button>
+          </article>
         </div>
       </section>
 
@@ -204,12 +230,15 @@ export function OverviewContent({
 
       <section className="dn-overview-two-col dn-overview-support">
         <article className="dn-simple-card dn-source-card">
-          <h2>SNPedia processing</h2>
+          <h2>Evidence pack</h2>
           <dl>
-            <div><dt>Status</dt><dd>{profile.report.overview.snpediaStatus}</dd></div>
-            <div><dt>Processed rsIDs</dt><dd>{profile.report.overview.snpediaProcessedRsids.toLocaleString()}</dd></div>
-            <div><dt>Matched findings</dt><dd>{profile.report.overview.snpediaMatchedFindings.toLocaleString()}</dd></div>
-            <div><dt>Failed lookups</dt><dd>{profile.report.overview.snpediaFailedRsids.toLocaleString()}</dd></div>
+            <div><dt>Status</dt><dd>{profile.report.overview.evidenceStatus}</dd></div>
+            <div><dt>Pack</dt><dd>{profile.report.overview.evidencePackVersion}</dd></div>
+            <div><dt>Processed rsIDs</dt><dd>{profile.report.overview.evidenceProcessedRsids.toLocaleString()}</dd></div>
+            <div><dt>Matched local entries</dt><dd>{localEvidenceEntryMatches.toLocaleString()}</dd></div>
+            <div><dt>Matched local records</dt><dd>{localEvidenceRecordMatches.toLocaleString()}</dd></div>
+            <div><dt>Matched rsIDs</dt><dd>{localEvidenceMatchedRsids.toLocaleString()}</dd></div>
+            <div><dt>Failed items</dt><dd>{profile.report.overview.evidenceFailedItems.toLocaleString()}</dd></div>
           </dl>
         </article>
         <article className="dn-simple-card dn-glance-card">
@@ -401,6 +430,7 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
       <span className="dn-finding-card__icon"><Icon name={iconForTab(entry.category)} /></span>
       <div className="dn-finding-card__main">
         <div className="dn-finding-card__meta">
+          {entry.entryKind === "local-evidence" ? <span>Local evidence</span> : null}
           <span>{entry.sources[0]?.name ?? "Source"}</span>
           <span>{entry.evidenceTier} · {entry.coverage}</span>
           <span className="dn-priority-pill">{priorityLabel(entry)}</span>
@@ -501,6 +531,14 @@ function FindingDetailContent({
           ))}
         </div>
       </section>
+      {finding.sourceNotes.length > 0 ? (
+        <section>
+          <h3>Source details</h3>
+          <ul>
+            {finding.sourceNotes.map((note) => <li key={note}>{note}</li>)}
+          </ul>
+        </section>
+      ) : null}
       <div className="dn-callout"><Icon name="alert" /> Informational only. Do not use for diagnosis or medication decisions.</div>
       <div className="dn-callout dn-callout--success"><Icon name="lock" /> Private by design. Your DNA stays on this device.</div>
     </>
@@ -558,11 +596,13 @@ function initials(name: string): string {
 
 function labelForTab(tab: ExplorerTab): string {
   if (tab === "drug") return "Drug response";
+  if (tab === "other") return "Other";
   if (tab === "raw") return "Raw markers";
   return tab[0].toUpperCase() + tab.slice(1);
 }
 
 function titleForTab(tab: Exclude<ExplorerTab, "overview" | "raw">): string {
+  if (tab === "other") return "Other evidence explorer";
   return tab === "drug" ? "Drug response explorer" : `${labelForTab(tab)} explorer`;
 }
 
@@ -570,6 +610,7 @@ function iconForTab(tab: ExplorerTab): IconName {
   if (tab === "medical") return "heart";
   if (tab === "traits") return "leaf";
   if (tab === "drug") return "pill";
+  if (tab === "other") return "database";
   if (tab === "raw") return "list";
   return "home";
 }

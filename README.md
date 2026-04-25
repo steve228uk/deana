@@ -28,6 +28,14 @@ bun install
 bun run dev
 ```
 
+## Evidence Packs
+
+```bash
+bun run evidence:update
+```
+
+The evidence pack is built from local caches under `.evidence-cache` and shipped as sharded static JSON in `public/evidence-packs`. ClinVar/GWAS records are converted into plain-language report entries with the original technical names preserved as source details. SNPedia is ingested through `bots.snpedia.com` into a local cache and matched locally in the browser as part of the bundled evidence pass.
+
 ## Notes
 
 - DNA stays in the browser in the current architecture.

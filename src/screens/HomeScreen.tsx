@@ -26,7 +26,11 @@ function toReportCard(profile: SavedProfileSummary): SavedReportCard {
     build: profile.report.overview.build,
     markerCount: profile.dna.markerCount,
     coverageScore: profile.report.overview.coverageScore,
-    totalFindings: profile.report.overview.curatedMarkerMatches + profile.report.overview.snpediaMatchedFindings,
+    interpretedFindings:
+      profile.report.overview.curatedMarkerMatches +
+      (profile.report.overview.localEvidenceEntryMatches ?? profile.report.overview.evidenceMatchedFindings ?? 0),
+    localEvidenceFindings:
+      profile.report.overview.localEvidenceEntryMatches ?? profile.report.overview.evidenceMatchedFindings ?? 0,
     createdAt: profile.createdAt,
   };
 }

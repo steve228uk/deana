@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { deleteProfile, loadProfileMeta, loadProfileSummaries, saveProfile } from "./lib/storage";
 import { createProfile as buildProfile } from "./lib/profiles";
-import { ParsedDnaFile, SavedProfileSummary, SnpediaProgressSnapshot, SnpediaSupplement } from "./types";
+import {
+  EvidenceProgressSnapshot,
+  EvidenceSupplement,
+  ParsedDnaFile,
+  SavedProfileSummary,
+} from "./types";
 import { HomeScreen } from "./screens/HomeScreen";
 import { ExplorerScreen } from "./screens/ExplorerScreen";
 import { generateReport } from "./lib/reportEngine";
@@ -12,14 +17,30 @@ type ParserWorkerResponse =
   | { ok: true; data: ParsedDnaFile }
   | { ok: false; error: string };
 
-type EnrichmentWorkerResponse =
-  | { type: "progress"; snapshot: SnpediaProgressSnapshot }
-  | { type: "done"; supplement: SnpediaSupplement }
+type EvidenceWorkerResponse =
+  | { type: "progress"; snapshot: EvidenceProgressSnapshot }
+  | { type: "done"; supplement: EvidenceSupplement }
   | { type: "error"; error: string };
+
+function createRunningEvidenceSupplement(parsed: ParsedDnaFile): EvidenceSupplement {
+  return {
+    status: "running",
+    fetchedAt: null,
+    attribution: "Local evidence pack is being loaded in this browser.",
+    packVersion: "pending",
+    manifest: null,
+    totalRsids: parsed.markerCount,
+    processedRsids: 0,
+    matchedRecords: [],
+    unmatchedRsids: 0,
+    failedItems: [],
+    retries: 0,
+  };
+}
 
 export default function App() {
   const parserWorkerRef = useRef<Worker | null>(null);
-  const enrichmentWorkerRef = useRef<Worker | null>(null);
+  const evidenceWorkerRef = useRef<Worker | null>(null);
   const [profiles, setProfiles] = useState<SavedProfileSummary[]>([]);
   const [isLibraryReady, setIsLibraryReady] = useState(false);
   const [pendingBuild, setPendingBuild] = useState<PendingProfileBuild | null>(null);
@@ -42,13 +63,13 @@ export default function App() {
     parserWorkerRef.current = new Worker(new URL("./workers/dnaParser.worker.ts", import.meta.url), {
       type: "module",
     });
-    enrichmentWorkerRef.current = new Worker(new URL("./workers/snpediaEnrichment.worker.ts", import.meta.url), {
+    evidenceWorkerRef.current = new Worker(new URL("./workers/evidenceEnrichment.worker.ts", import.meta.url), {
       type: "module",
     });
 
     return () => {
       parserWorkerRef.current?.terminate();
-      enrichmentWorkerRef.current?.terminate();
+      evidenceWorkerRef.current?.terminate();
     };
   }, []);
 
@@ -72,16 +93,16 @@ export default function App() {
     return result.data;
   }
 
-  async function enrichWithSnpedia(
+  async function enrichWithEvidence(
     parsed: ParsedDnaFile,
-    onProgress?: (snapshot: SnpediaProgressSnapshot) => void,
-  ): Promise<SnpediaSupplement> {
-    if (!enrichmentWorkerRef.current) {
-      throw new Error("SNPedia worker is not ready yet.");
+    onProgress?: (snapshot: EvidenceProgressSnapshot) => void,
+  ): Promise<EvidenceSupplement> {
+    if (!evidenceWorkerRef.current) {
+      throw new Error("Evidence worker is not ready yet.");
     }
 
-    const result = await new Promise<SnpediaSupplement>((resolve, reject) => {
-      enrichmentWorkerRef.current!.onmessage = (event: MessageEvent<EnrichmentWorkerResponse>) => {
+    const result = await new Promise<EvidenceSupplement>((resolve, reject) => {
+      evidenceWorkerRef.current!.onmessage = (event: MessageEvent<EvidenceWorkerResponse>) => {
         const message = event.data;
         if (message.type === "progress") {
           onProgress?.(message.snapshot);
@@ -96,7 +117,7 @@ export default function App() {
         reject(new Error(message.error));
       };
 
-      enrichmentWorkerRef.current!.postMessage({ type: "start", dna: parsed });
+      evidenceWorkerRef.current!.postMessage({ type: "start", dna: parsed });
     });
 
     return result;
@@ -105,30 +126,20 @@ export default function App() {
   async function createProfile(
     name: string,
     parsed: ParsedDnaFile,
-    onProgress?: (snapshot: SnpediaProgressSnapshot) => void,
+    onProgress?: (snapshot: EvidenceProgressSnapshot) => void,
   ): Promise<SavedProfileSummary> {
-    const draftSupplement: SnpediaSupplement = {
-      status: "running",
-      fetchedAt: null,
-      attribution: "",
-      totalRsids: parsed.markerCount,
-      processedRsids: 0,
-      matchedFindings: [],
-      unmatchedRsids: 0,
-      failedItems: [],
-      retries: 0,
-    };
+    const draftSupplement = createRunningEvidenceSupplement(parsed);
 
-    const draftProfile = buildProfile(name, parsed, draftSupplement);
+    const draftProfile = buildProfile(name, parsed, { evidence: draftSupplement });
     await saveProfile(draftProfile);
     const draftSummaries = await loadProfileSummaries();
     setProfiles(draftSummaries);
 
-    const supplement = await enrichWithSnpedia(parsed, onProgress);
+    const evidenceSupplement = await enrichWithEvidence(parsed, onProgress);
     const nextProfile = {
       ...draftProfile,
-      supplements: { snpedia: supplement },
-      report: generateReport(parsed, supplement),
+      supplements: { evidence: evidenceSupplement },
+      report: generateReport(parsed, { evidence: evidenceSupplement }),
     };
     await saveProfile(nextProfile);
     const nextSummaries = await loadProfileSummaries();
@@ -136,37 +147,39 @@ export default function App() {
     return nextSummaries.find((candidate) => candidate.id === nextProfile.id) ?? draftSummaries[0];
   }
 
-  async function refreshProfileSnpedia(profileId: string): Promise<void> {
+  async function refreshProfileEvidence(profileId: string): Promise<void> {
     const existing = await loadProfileMeta(profileId);
     if (!existing) {
       throw new Error("Profile not found.");
     }
 
-    const runningSupplement: SnpediaSupplement = {
+    const runningSupplement: EvidenceSupplement = {
       status: "running",
-      fetchedAt: existing.supplements?.snpedia.fetchedAt ?? null,
-      attribution: existing.supplements?.snpedia.attribution ?? "",
+      fetchedAt: existing.supplements?.evidence?.fetchedAt ?? null,
+      attribution: existing.supplements?.evidence?.attribution ?? "Local evidence pack is being loaded in this browser.",
+      packVersion: existing.supplements?.evidence?.packVersion ?? "pending",
+      manifest: existing.supplements?.evidence?.manifest ?? null,
       totalRsids: existing.dna.markerCount,
       processedRsids: 0,
-      matchedFindings: [],
+      matchedRecords: [],
       unmatchedRsids: 0,
-      failedItems: [],
-      retries: existing.supplements?.snpedia.retries ?? 0,
+      failedItems: existing.supplements?.evidence?.failedItems ?? [],
+      retries: existing.supplements?.evidence?.retries ?? 0,
     };
 
     const runningProfile = {
       ...existing,
-      supplements: { snpedia: runningSupplement },
-      report: generateReport(existing.dna, runningSupplement),
+      supplements: { ...existing.supplements, evidence: runningSupplement },
+      report: generateReport(existing.dna, { ...existing.supplements, evidence: runningSupplement }),
     };
     await saveProfile(runningProfile);
     setProfiles(await loadProfileSummaries());
 
-    const supplement = await enrichWithSnpedia(existing.dna);
+    const supplement = await enrichWithEvidence(existing.dna);
     const refreshed = {
       ...runningProfile,
-      supplements: { snpedia: supplement },
-      report: generateReport(existing.dna, supplement),
+      supplements: { ...runningProfile.supplements, evidence: supplement },
+      report: generateReport(existing.dna, { ...runningProfile.supplements, evidence: supplement }),
     };
     await saveProfile(refreshed);
     setProfiles(await loadProfileSummaries());
@@ -206,7 +219,7 @@ export default function App() {
         element={
           <ExplorerScreen
             isLibraryReady={isLibraryReady}
-            refreshProfileSnpedia={refreshProfileSnpedia}
+            refreshProfileEvidence={refreshProfileEvidence}
           />
         }
       />

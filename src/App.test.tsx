@@ -23,7 +23,7 @@ import {
   ProfileMeta,
   SavedProfile,
   SavedProfileSummary,
-  SnpediaSupplement,
+  EvidenceSupplement,
   StoredReportEntry,
 } from "./types";
 
@@ -38,33 +38,41 @@ vi.mock("./lib/storage", () => ({
 }));
 
 const parsed = makeParsedDnaFile();
-const mockSupplement: SnpediaSupplement = {
+const mockSupplement: EvidenceSupplement = {
   status: "complete",
   fetchedAt: new Date().toISOString(),
-  attribution: "SNPedia attribution",
+  attribution: "Local evidence attribution",
+  packVersion: "2026-04-core",
+  manifest: null,
   totalRsids: parsed.markerCount,
   processedRsids: parsed.markerCount,
-  matchedFindings: [
+  matchedRecords: [
     {
-      id: "snpedia-rs6025-ct",
-      rsid: "rs6025",
-      pageKey: "Rs6025(C;T)",
-      pageTitle: "rs6025(C;T)",
-      pageUrl: "https://www.snpedia.com/index.php/Rs6025(C;T)",
-      genotype: "CT",
-      summary: "Factor V Leiden risk context",
-      detail: "Synthetic SNPedia detail for tests.",
-      genes: ["F5"],
-      topics: ["Clotting"],
-      conditions: ["Venous thromboembolism"],
-      clinicalSignificance: "pathogenic",
-      category: "medical",
-      repute: "bad",
-      publicationCount: 12,
-      chromosome: "1",
-      position: 169519049,
-      magnitude: 2.6,
-      fetchedAt: new Date().toISOString(),
+      record: {
+        id: "clinvar-rs6025",
+        entryId: "medical-factor-v",
+        sourceId: "clinvar",
+        role: "primary",
+        markerIds: ["rs6025"],
+        genes: ["F5"],
+        title: "F5 Factor V Leiden",
+        url: "https://www.ncbi.nlm.nih.gov/clinvar/?term=rs6025",
+        release: "ClinVar public release",
+        evidenceLevel: "high",
+        clinicalSignificance: "pathogenic",
+        riskAllele: "C",
+        pmids: ["8164741"],
+        notes: ["ClinVar context for Factor V Leiden."],
+      },
+      matchedMarkers: [
+        {
+          rsid: "rs6025",
+          genotype: "CT",
+          chromosome: "1",
+          position: 169519049,
+          gene: "F5",
+        },
+      ],
     },
   ],
   unmatchedRsids: 0,
@@ -73,17 +81,27 @@ const mockSupplement: SnpediaSupplement = {
 };
 
 let nextWorkerResponse: { ok: true; data: typeof parsed } | { ok: false; error: string };
-let nextEnrichmentResponse:
-  | { type: "done"; supplement: SnpediaSupplement }
+let nextEvidenceResponse:
+  | { type: "done"; supplement: EvidenceSupplement }
   | { type: "error"; error: string };
 let storedProfiles: SavedProfile[] = [];
+let workerPostCounts: Record<"parser" | "evidence", number>;
 
 class MockWorker {
   onmessage: ((event: MessageEvent) => void) | null = null;
+  private readonly workerKind: "parser" | "evidence";
+
+  constructor(url: URL | string) {
+    const value = String(url);
+    this.workerKind = value.includes("evidenceEnrichment")
+      ? "evidence"
+      : "parser";
+  }
 
   postMessage(payload: { file?: File; type?: string }) {
+    workerPostCounts[this.workerKind] += 1;
     queueMicrotask(() => {
-      if (payload.file) {
+      if (payload.file || this.workerKind === "parser") {
         this.onmessage?.({ data: nextWorkerResponse } as MessageEvent);
         return;
       }
@@ -99,12 +117,14 @@ class MockWorker {
             unmatchedRsids: 0,
             failedRsids: 0,
             retries: 0,
-            currentRsid: parsed.markers[parsed.markers.length - 1][0],
+            currentRsid: "Matched bundled evidence records",
+            packStage: "matching",
+            packVersion: "2026-04-core",
           },
         },
       } as MessageEvent);
       queueMicrotask(() => {
-        this.onmessage?.({ data: nextEnrichmentResponse } as MessageEvent);
+        this.onmessage?.({ data: nextEvidenceResponse } as MessageEvent);
       });
     });
   }
@@ -272,11 +292,12 @@ function renderApp(initialEntry = "/") {
 beforeEach(() => {
   vi.clearAllMocks();
   nextWorkerResponse = { ok: true, data: parsed };
-  nextEnrichmentResponse = {
+  nextEvidenceResponse = {
     type: "done",
     supplement: mockSupplement,
   };
   storedProfiles = [];
+  workerPostCounts = { parser: 0, evidence: 0 };
   installStorageMocks();
   vi.stubGlobal("Worker", MockWorker);
   vi.stubGlobal("print", vi.fn());
@@ -300,11 +321,35 @@ describe("DeaNA app", () => {
     await screen.findByDisplayValue("stephen-kit");
     await user.clear(screen.getByLabelText("Profile name"));
     await user.type(screen.getByLabelText("Profile name"), "Stephen");
+    expect(screen.queryByText("Evidence sources")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/SNPedia/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Save and build report/i }));
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(2));
+    expect(workerPostCounts.evidence).toBe(1);
     expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
     expect(await screen.findByText("Current report")).toBeInTheDocument();
+  });
+
+  it("builds bundled evidence without a separate SNPedia worker pass", async () => {
+    const user = userEvent.setup();
+    const { container } = renderApp("/");
+
+    await screen.findByText(/Private DNA reports/i);
+    await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
+    await user.upload(input, file);
+
+    await screen.findByDisplayValue("stephen-kit");
+    await user.clear(screen.getByLabelText("Profile name"));
+    await user.type(screen.getByLabelText("Profile name"), "Stephen");
+    await user.click(screen.getByRole("button", { name: /Save and build report/i }));
+
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(2));
+    expect(workerPostCounts.evidence).toBe(1);
+    expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
   });
 
   it("opens an existing local report from the home screen", async () => {

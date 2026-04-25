@@ -2,6 +2,8 @@ import {
   CompactMarker,
   CoverageStatus,
   EvidenceSource,
+  EvidencePackMatch,
+  EvidenceSupplement,
   EvidenceTier,
   InsightCategory,
   InsightTone,
@@ -10,7 +12,7 @@ import {
   ReportEntry,
 } from "../types";
 
-export const EVIDENCE_PACK_VERSION = "2026-04-seed";
+export const EVIDENCE_PACK_VERSION = "2026-04-core";
 
 export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
   clinvar: {
@@ -141,7 +143,21 @@ function summaryList(markers: MatchedMarker[]): string {
     .join(" • ");
 }
 
-function sourceEntries(sourceIds: string[]): ReportEntry["sources"] {
+function sourceEntries(sourceIds: string[], matches: EvidencePackMatch[] = []): ReportEntry["sources"] {
+  const recordSources = matches.map(({ record }) => {
+    const source = SOURCE_LIBRARY[record.sourceId];
+    return {
+      id: source?.id ?? record.sourceId,
+      name: source?.name ?? record.sourceId,
+      url: record.url,
+    };
+  });
+  if (recordSources.length > 0) {
+    return Array.from(
+      new Map(recordSources.map((source) => [`${source.id}:${source.url}`, source])).values(),
+    );
+  }
+
   return sourceIds.map((sourceId) => {
     const source = SOURCE_LIBRARY[sourceId];
     return {
@@ -152,11 +168,18 @@ function sourceEntries(sourceIds: string[]): ReportEntry["sources"] {
   });
 }
 
-function sourceNotes(sourceIds: string[]): string[] {
-  return sourceIds.flatMap((sourceId) => {
+function sourceNotes(sourceIds: string[], matches: EvidencePackMatch[] = []): string[] {
+  const libraryNotes = sourceIds.flatMap((sourceId) => {
     const source = SOURCE_LIBRARY[sourceId];
     return [source.evidenceNote, source.populationNote, source.chipCaveat];
   });
+  const recordNotes = matches.flatMap(({ record }) => [
+    `${SOURCE_LIBRARY[record.sourceId]?.name ?? record.sourceId}: ${record.title}.`,
+    ...record.notes,
+    ...record.pmids.map((pmid) => `PubMed PMID ${pmid}`),
+  ]);
+
+  return Array.from(new Set([...libraryNotes, ...recordNotes]));
 }
 
 function combinedDisclaimer(sourceIds: string[]): string {
@@ -546,7 +569,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
     clinicalSignificance: "trait-association",
     repute: "not-set",
     publicationCount: 25,
-    sourceIds: ["gwas", "pubmed", "snpedia"],
+    sourceIds: ["gwas", "pubmed"],
     evaluate: (map) => {
       const markers = [readMarker(map, "rs1815739", "ACTN3")];
       const genotype = markers[0].genotype;
@@ -708,10 +731,22 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
 export function createEntryFromDefinition(
   definition: EvidenceDefinition,
   map: MarkerMap,
+  evidence?: EvidenceSupplement,
 ): ReportEntry {
   const evaluation = definition.evaluate(map);
+  const evidenceMatches =
+    evidence?.status === "complete"
+      ? evidence.matchedRecords.filter((match) => match.record.entryId === definition.id)
+      : [];
+  const publicationCount = Math.max(
+    definition.publicationCount,
+    new Set(evidenceMatches.flatMap((match) => match.record.pmids)).size,
+  );
+  const frequencyNote =
+    evidenceMatches.map((match) => match.record.frequencyNote).find(Boolean) ?? definition.frequencyNote;
   return {
     id: definition.id,
+    entryKind: "curated",
     category: definition.category,
     subcategory: definition.subcategory,
     title: definition.title,
@@ -724,21 +759,21 @@ export function createEntryFromDefinition(
     topics: definition.topics,
     conditions: definition.conditions,
     warnings: evaluation.warnings,
-    sources: sourceEntries(definition.sourceIds),
-    sourceNotes: sourceNotes(definition.sourceIds),
+    sources: sourceEntries(definition.sourceIds, evidenceMatches),
+    sourceNotes: sourceNotes(definition.sourceIds, evidenceMatches),
     evidenceTier: definition.evidenceTier,
     clinicalSignificance: definition.clinicalSignificance,
     repute: definition.repute,
-    publicationCount: definition.publicationCount,
+    publicationCount,
     publicationBucket:
-      definition.publicationCount === 0
+      publicationCount === 0
         ? "0"
-        : definition.publicationCount <= 5
+        : publicationCount <= 5
           ? "1-5"
-          : definition.publicationCount <= 20
+          : publicationCount <= 20
             ? "6-20"
             : "21+",
-    frequencyNote: definition.frequencyNote,
+    frequencyNote,
     coverage: evaluation.coverage,
     tone: evaluation.tone,
     sort: {
@@ -761,9 +796,11 @@ export function createEntryFromDefinition(
               ? 2
               : 1,
       alphabetical: definition.title.toLowerCase(),
-      publications: definition.publicationCount,
+      publications: publicationCount,
     },
-    confidenceNote: evaluation.confidenceNote,
+    confidenceNote: evidenceMatches.length
+      ? `${evaluation.confidenceNote} Source context came from local evidence pack ${evidence?.packVersion}.`
+      : evaluation.confidenceNote,
     disclaimer: combinedDisclaimer(definition.sourceIds),
   };
 }

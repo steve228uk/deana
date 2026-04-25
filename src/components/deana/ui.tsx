@@ -33,6 +33,7 @@ export type IconName =
   | "code"
   | "target"
   | "activity"
+  | "database"
   | "list"
   | "chevronDown"
   | "chevronLeft"
@@ -87,6 +88,7 @@ export function Icon({ name, size = 20, ...props }: IconProps) {
       {name === "code" && <><path {...common} d="m8 9-4 3 4 3" /><path {...common} d="m16 9 4 3-4 3" /><path {...common} d="m14 5-4 14" /></>}
       {name === "target" && <><circle {...common} cx="12" cy="12" r="9" /><circle {...common} cx="12" cy="12" r="5" /><circle {...common} cx="12" cy="12" r="1" /></>}
       {name === "activity" && <path {...common} d="M3 12h4l2-7 5 14 3-7h4" />}
+      {name === "database" && <><ellipse {...common} cx="12" cy="5" rx="8" ry="3" /><path {...common} d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path {...common} d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" /></>}
       {name === "list" && <><path {...common} d="M8 6h13" /><path {...common} d="M8 12h13" /><path {...common} d="M8 18h13" /><path {...common} d="M3 6h.01" /><path {...common} d="M3 12h.01" /><path {...common} d="M3 18h.01" /></>}
       {name === "chevronDown" && <path {...common} d="m6 9 6 6 6-6" />}
       {name === "chevronLeft" && <path {...common} d="m15 18-6-6 6-6" />}

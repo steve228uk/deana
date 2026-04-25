@@ -6,13 +6,16 @@ export type ProviderName =
   | "Unknown";
 
 export type InsightCategory = "medical" | "traits" | "drug";
-export type ExplorerTab = "overview" | "medical" | "traits" | "drug" | "raw";
+export type ExplorerTab = "overview" | "medical" | "traits" | "drug" | "other" | "raw";
 export type InsightTone = "neutral" | "good" | "caution";
 export type CoverageStatus = "full" | "partial" | "missing";
 export type EvidenceTier = "high" | "moderate" | "emerging" | "preview" | "supplementary";
 export type ReputeStatus = "good" | "bad" | "mixed" | "not-set";
 export type PublicationBucket = "0" | "1-5" | "6-20" | "21+";
+export type ReportEntryKind = "curated" | "local-evidence" | "snpedia";
 export type SnpediaEnrichmentStatus = "idle" | "running" | "partial" | "complete" | "failed";
+export type EvidenceEnrichmentStatus = SnpediaEnrichmentStatus;
+export type EvidenceSourceRole = "primary" | "frequency-context" | "citation" | "supplementary";
 
 export type CompactMarker = [rsid: string, chromosome: string, position: number, genotype: string];
 
@@ -36,12 +39,70 @@ export interface EvidenceSource {
   disclaimer: string;
 }
 
+export interface EvidencePackManifest {
+  version: string;
+  schemaVersion: number;
+  generatedAt: string;
+  recordsPath?: string;
+  recordsSha256?: string;
+  shardStrategy?: "rsid-modulo";
+  shardModulo?: number;
+  shards?: Array<{
+    id: string;
+    recordsPath: string;
+    recordsSha256: string;
+    recordCount: number;
+    bucket: number;
+  }>;
+  recordCount?: number;
+  attribution: string;
+  sources: Array<{
+    id: string;
+    name: string;
+    release: string;
+    url: string;
+    role: EvidenceSourceRole;
+  }>;
+}
+
+export interface EvidencePackRecord {
+  id: string;
+  entryId: string;
+  sourceId: string;
+  role: EvidenceSourceRole;
+  category?: InsightCategory;
+  subcategory?: string;
+  markerIds: string[];
+  genes: string[];
+  title: string;
+  technicalName?: string;
+  summary?: string;
+  detail?: string;
+  whyItMatters?: string;
+  topics?: string[];
+  conditions?: string[];
+  url: string;
+  release: string;
+  evidenceLevel: EvidenceTier;
+  clinicalSignificance: string | null;
+  repute?: ReputeStatus;
+  tone?: InsightTone;
+  riskAllele?: string;
+  genotype?: string;
+  magnitude?: number | null;
+  pmids: string[];
+  frequencyNote?: string;
+  notes: string[];
+}
+
 export interface MatchedMarker {
   rsid: string;
   genotype: string | null;
   chromosome: string | null;
   position: number | null;
   gene?: string;
+  matchedAllele?: string;
+  matchedAlleleCount?: number | null;
 }
 
 export interface ReportEntrySource {
@@ -52,6 +113,7 @@ export interface ReportEntrySource {
 
 export interface ReportEntry {
   id: string;
+  entryKind: ReportEntryKind;
   category: InsightCategory;
   subcategory: string;
   title: string;
@@ -103,6 +165,15 @@ export interface ReportOverview {
   curatedMarkerMatches: number;
   sourceMix: Array<{ source: string; count: number }>;
   warnings: string[];
+  evidenceStatus: EvidenceEnrichmentStatus;
+  evidencePackVersion: string;
+  evidenceProcessedRsids: number;
+  evidenceMatchedFindings: number;
+  localEvidenceRecordMatches: number;
+  localEvidenceEntryMatches: number;
+  localEvidenceMatchedRsids: number;
+  evidenceUnmatchedRsids: number;
+  evidenceFailedItems: number;
   snpediaStatus: SnpediaEnrichmentStatus;
   snpediaProcessedRsids: number;
   snpediaTotalRsids: number;
@@ -169,20 +240,6 @@ export interface SnpediaFailedItem {
   message: string;
 }
 
-export interface SnpediaProgressSnapshot {
-  status: SnpediaEnrichmentStatus;
-  totalRsids: number;
-  processedRsids: number;
-  matchedFindings: number;
-  unmatchedRsids: number;
-  failedRsids: number;
-  retries: number;
-  currentRsid: string | null;
-  snpediaSnapshotPage?: number;
-  snpediaSnapshotTotalPages?: number | null;
-  snpediaSnapshotRsids?: number;
-}
-
 export interface SnpediaSupplement {
   status: SnpediaEnrichmentStatus;
   fetchedAt: string | null;
@@ -196,7 +253,46 @@ export interface SnpediaSupplement {
 }
 
 export interface ProfileSupplements {
-  snpedia: SnpediaSupplement;
+  evidence?: EvidenceSupplement;
+  snpedia?: SnpediaSupplement;
+}
+
+export interface EvidenceFailedItem {
+  stage: "manifest" | "records" | "checksum" | "matching";
+  attempts: number;
+  message: string;
+}
+
+export interface EvidencePackMatch {
+  record: EvidencePackRecord;
+  matchedMarkers: MatchedMarker[];
+}
+
+export interface EvidenceProgressSnapshot {
+  status: EvidenceEnrichmentStatus;
+  totalRsids: number;
+  processedRsids: number;
+  matchedFindings: number;
+  unmatchedRsids: number;
+  failedRsids: number;
+  retries: number;
+  currentRsid: string | null;
+  packStage?: "manifest" | "records" | "checksum" | "matching";
+  packVersion?: string;
+}
+
+export interface EvidenceSupplement {
+  status: EvidenceEnrichmentStatus;
+  fetchedAt: string | null;
+  attribution: string;
+  packVersion: string;
+  manifest: EvidencePackManifest | null;
+  totalRsids: number;
+  processedRsids: number;
+  matchedRecords: EvidencePackMatch[];
+  unmatchedRsids: number;
+  failedItems: EvidenceFailedItem[];
+  retries: number;
 }
 
 export interface SavedProfile {

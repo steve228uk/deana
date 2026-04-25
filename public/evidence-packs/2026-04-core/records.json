@@ -1,0 +1,781 @@
+[
+  {
+    "id": "clinvar-apoe-alzheimer-context",
+    "entryId": "medical-apoe",
+    "sourceId": "clinvar",
+    "role": "primary",
+    "markerIds": [
+      "rs429358",
+      "rs7412"
+    ],
+    "genes": [
+      "APOE"
+    ],
+    "title": "APOE alleles and late-onset Alzheimer disease context",
+    "url": "https://www.ncbi.nlm.nih.gov/clinvar/?term=APOE%5Bgene%5D",
+    "release": "ClinVar public release, weekly-maintained",
+    "evidenceLevel": "high",
+    "clinicalSignificance": "risk-factor",
+    "pmids": [
+      "20301373",
+      "25626498"
+    ],
+    "frequencyNote": "APOE allele frequencies vary substantially by ancestry; frequency context should not be read as personal risk.",
+    "notes": [
+      "ClinVar is used here as clinical context for a common risk-associated genotype pattern, not as a diagnostic assertion.",
+      "Interpretation requires both rs429358 and rs7412 and remains unphased in consumer-array data."
+    ]
+  },
+  {
+    "id": "clinvar-factor-v-leiden",
+    "entryId": "medical-factor-v",
+    "sourceId": "clinvar",
+    "role": "primary",
+    "markerIds": [
+      "rs6025"
+    ],
+    "genes": [
+      "F5"
+    ],
+    "title": "F5 Factor V Leiden",
+    "url": "https://www.ncbi.nlm.nih.gov/clinvar/?term=rs6025",
+    "release": "ClinVar public release, weekly-maintained",
+    "evidenceLevel": "high",
+    "clinicalSignificance": "pathogenic",
+    "riskAllele": "C",
+    "pmids": [
+      "8164741",
+      "15718284"
+    ],
+    "frequencyNote": "The Leiden allele is uncommon overall and varies by population; frequency does not measure personal clotting risk.",
+    "notes": [
+      "ClinVar treats this as a well-established thrombophilia variant.",
+      "Consumer-array positives should be confirmed clinically before action."
+    ]
+  },
+  {
+    "id": "clinvar-hfe-common-variants",
+    "entryId": "medical-hfe",
+    "sourceId": "clinvar",
+    "role": "primary",
+    "markerIds": [
+      "rs1800562",
+      "rs1799945"
+    ],
+    "genes": [
+      "HFE"
+    ],
+    "title": "HFE C282Y and H63D common haemochromatosis variants",
+    "url": "https://www.ncbi.nlm.nih.gov/clinvar/?term=HFE%5Bgene%5D",
+    "release": "ClinVar public release, weekly-maintained",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": "risk-factor",
+    "pmids": [
+      "8696333",
+      "20301613"
+    ],
+    "frequencyNote": "HFE variant frequencies and penetrance vary; biochemical testing matters more than genotype alone.",
+    "notes": [
+      "This pack only covers common consumer-array HFE markers.",
+      "Normal findings here do not exclude iron overload."
+    ]
+  },
+  {
+    "id": "clinvar-prothrombin-g20210a",
+    "entryId": "medical-prothrombin",
+    "sourceId": "clinvar",
+    "role": "primary",
+    "markerIds": [
+      "rs1799963"
+    ],
+    "genes": [
+      "F2"
+    ],
+    "title": "F2 prothrombin G20210A",
+    "url": "https://www.ncbi.nlm.nih.gov/clinvar/?term=rs1799963",
+    "release": "ClinVar public release, weekly-maintained",
+    "evidenceLevel": "high",
+    "clinicalSignificance": "risk-factor",
+    "riskAllele": "A",
+    "pmids": [
+      "8916933",
+      "15718284"
+    ],
+    "frequencyNote": "The A allele is relatively uncommon and its impact depends on personal and family clotting history.",
+    "notes": [
+      "Use as thrombophilia context only; it does not replace clinical assessment.",
+      "Absence in uploaded chip data does not rule out inherited clotting disorders."
+    ]
+  },
+  {
+    "id": "cpic-cyp2c19-clopidogrel",
+    "entryId": "drug-cyp2c19",
+    "sourceId": "cpic",
+    "role": "primary",
+    "markerIds": [
+      "rs4244285"
+    ],
+    "genes": [
+      "CYP2C19"
+    ],
+    "title": "CYP2C19 and clopidogrel CPIC context",
+    "url": "https://cpicpgx.org/guidelines/guideline-for-clopidogrel-and-cyp2c19/",
+    "release": "CPIC guideline and database tables",
+    "evidenceLevel": "preview",
+    "clinicalSignificance": "drug-response",
+    "riskAllele": "A",
+    "pmids": [
+      "23698643",
+      "35034351"
+    ],
+    "notes": [
+      "A single *2 tagging marker is not a full CPIC diplotype call.",
+      "Medication changes require clinical review and confirmatory testing."
+    ]
+  },
+  {
+    "id": "cpic-nudt15-thiopurine",
+    "entryId": "local-drug-nudt15-thiopurine",
+    "sourceId": "cpic",
+    "role": "primary",
+    "category": "drug",
+    "subcategory": "immunology",
+    "markerIds": [
+      "rs116855232"
+    ],
+    "genes": [
+      "NUDT15"
+    ],
+    "title": "NUDT15 thiopurine-response CPIC context",
+    "summary": "NUDT15 rs116855232 is a pharmacogenomic marker relevant to thiopurine toxicity risk in CPIC context.",
+    "detail": "This is not a full pharmacogene report. Thiopurine prescribing requires clinical PGx interpretation and medical supervision.",
+    "whyItMatters": "Adding CPIC-backed PGx markers expands the local database while keeping medication warnings prominent.",
+    "topics": [
+      "Drug response"
+    ],
+    "conditions": [
+      "Thiopurine response"
+    ],
+    "url": "https://cpicpgx.org/guidelines/guideline-for-thiopurines-and-tpmt/",
+    "release": "CPIC guideline and database tables",
+    "evidenceLevel": "preview",
+    "clinicalSignificance": "drug-response",
+    "repute": "mixed",
+    "tone": "caution",
+    "pmids": [
+      "21270794",
+      "28002639"
+    ],
+    "notes": [
+      "Preview only; do not change medication based on this report.",
+      "Consumer arrays may not provide all alleles needed for a full CPIC phenotype."
+    ]
+  },
+  {
+    "id": "cpic-slco1b1-simvastatin",
+    "entryId": "drug-slco1b1",
+    "sourceId": "cpic",
+    "role": "primary",
+    "markerIds": [
+      "rs4149056"
+    ],
+    "genes": [
+      "SLCO1B1"
+    ],
+    "title": "SLCO1B1 and simvastatin myopathy CPIC context",
+    "url": "https://cpicpgx.org/guidelines/cpic-guideline-for-statins/",
+    "release": "CPIC guideline and database tables",
+    "evidenceLevel": "preview",
+    "clinicalSignificance": "drug-response",
+    "riskAllele": "C",
+    "pmids": [
+      "22617227",
+      "35152405"
+    ],
+    "notes": [
+      "This marker is useful PGx context but not a complete statin safety report.",
+      "Drug selection and dosing belong in clinical care."
+    ]
+  },
+  {
+    "id": "cpic-warfarin-cyp2c9-vkorc1",
+    "entryId": "drug-warfarin",
+    "sourceId": "cpic",
+    "role": "primary",
+    "markerIds": [
+      "rs1057910",
+      "rs9923231"
+    ],
+    "genes": [
+      "CYP2C9",
+      "VKORC1"
+    ],
+    "title": "CYP2C9/VKORC1 warfarin CPIC context",
+    "url": "https://cpicpgx.org/guidelines/guideline-for-warfarin-and-cyp2c9-vkorc1-cyp4f2/",
+    "release": "CPIC guideline and database tables",
+    "evidenceLevel": "preview",
+    "clinicalSignificance": "drug-response",
+    "pmids": [
+      "21900891",
+      "28198005"
+    ],
+    "notes": [
+      "Consumer-array data is incomplete for warfarin dosing algorithms.",
+      "Clinical factors and formal dosing guidance are required."
+    ]
+  },
+  {
+    "id": "gnomad-common-frequency-context",
+    "entryId": "medical-hfe",
+    "sourceId": "gnomad",
+    "role": "frequency-context",
+    "markerIds": [
+      "rs1800562",
+      "rs1799945"
+    ],
+    "genes": [
+      "HFE"
+    ],
+    "title": "gnomAD population-frequency context for common HFE variants",
+    "url": "https://gnomad.broadinstitute.org/",
+    "release": "gnomAD v4.1.1 context",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": null,
+    "pmids": [],
+    "frequencyNote": "gnomAD is used only to explain population frequency and rarity, not to decide clinical significance.",
+    "notes": [
+      "Frequency annotations are supportive context.",
+      "Frequencies vary by ancestry and cohort composition."
+    ]
+  },
+  {
+    "id": "gwas-abcc11-earwax",
+    "entryId": "local-trait-abcc11-earwax",
+    "sourceId": "gwas",
+    "role": "primary",
+    "category": "traits",
+    "subcategory": "appearance",
+    "markerIds": [
+      "rs17822931"
+    ],
+    "genes": [
+      "ABCC11"
+    ],
+    "title": "ABCC11 earwax and body-odour marker",
+    "summary": "ABCC11 rs17822931 is a well-known common trait marker linked to wet versus dry earwax and related apocrine-gland traits.",
+    "detail": "This is a low-stakes trait association. DeaNA reports it as phenotype context only, not as health guidance.",
+    "whyItMatters": "This marker is commonly present on consumer arrays and is useful for expanding local trait coverage beyond the small hand-authored seed set.",
+    "topics": [
+      "Appearance",
+      "Body odour"
+    ],
+    "conditions": [],
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs17822931",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "high",
+    "clinicalSignificance": "trait-association",
+    "pmids": [
+      "16444273",
+      "19383954"
+    ],
+    "notes": [
+      "Trait expression can vary and should be treated as a tendency, not a certainty.",
+      "This record is safe to match locally because it does not require a live marker-specific search."
+    ]
+  },
+  {
+    "id": "gwas-adh1b-alcohol-metabolism",
+    "entryId": "local-trait-adh1b-alcohol-metabolism",
+    "sourceId": "gwas",
+    "role": "primary",
+    "category": "traits",
+    "subcategory": "metabolism",
+    "markerIds": [
+      "rs1229984"
+    ],
+    "genes": [
+      "ADH1B"
+    ],
+    "title": "ADH1B alcohol-metabolism context",
+    "summary": "ADH1B rs1229984 is a common alcohol-metabolism marker often studied alongside drinking behaviour and alcohol-response traits.",
+    "detail": "This is association context only. Personal behaviour, environment, and other genes are central.",
+    "whyItMatters": "It adds local metabolic context from public GWAS/literature sources without sending the marker to a live search API.",
+    "topics": [
+      "Alcohol",
+      "Metabolism"
+    ],
+    "conditions": [],
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs1229984",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": "trait-association",
+    "pmids": [
+      "20418890",
+      "23979533"
+    ],
+    "notes": [
+      "Association context only.",
+      "Do not use for medical or behavioural recommendations."
+    ]
+  },
+  {
+    "id": "gwas-aldh2-alcohol-flush",
+    "entryId": "local-trait-aldh2-alcohol-flush",
+    "sourceId": "gwas",
+    "role": "primary",
+    "category": "traits",
+    "subcategory": "metabolism",
+    "markerIds": [
+      "rs671"
+    ],
+    "genes": [
+      "ALDH2"
+    ],
+    "title": "ALDH2 alcohol-flush context",
+    "summary": "ALDH2 rs671 is associated with reduced aldehyde dehydrogenase activity and alcohol-flush response in many carriers.",
+    "detail": "This can be relevant to alcohol tolerance, but it should not be used as permission to drink or as medical advice.",
+    "whyItMatters": "ALDH2 is a high-signal metabolic marker that appears in many consumer datasets.",
+    "topics": [
+      "Alcohol",
+      "Metabolism"
+    ],
+    "conditions": [],
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs671",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "high",
+    "clinicalSignificance": "trait-association",
+    "repute": "mixed",
+    "tone": "caution",
+    "pmids": [
+      "10744752",
+      "19578360"
+    ],
+    "notes": [
+      "Alcohol response is influenced by behavior and other biology.",
+      "Health-risk interpretation requires more than this local marker card."
+    ]
+  },
+  {
+    "id": "gwas-bdnf-val66met",
+    "entryId": "local-trait-bdnf-val66met",
+    "sourceId": "pubmed",
+    "role": "citation",
+    "category": "traits",
+    "subcategory": "neuro",
+    "markerIds": [
+      "rs6265"
+    ],
+    "genes": [
+      "BDNF"
+    ],
+    "title": "BDNF Val66Met literature context",
+    "summary": "BDNF rs6265 is a frequently studied neurobiology marker with mixed literature across cognition, mood, and exercise-response topics.",
+    "detail": "This card is intentionally broad and conservative. It does not predict mental health, cognition, or training response.",
+    "whyItMatters": "It gives DeaNA local coverage for a marker users often see elsewhere while avoiding deterministic claims.",
+    "topics": [
+      "Neuro",
+      "Research"
+    ],
+    "conditions": [],
+    "url": "https://pubmed.ncbi.nlm.nih.gov/?term=rs6265",
+    "release": "PubMed citation metadata, queried during pack build",
+    "evidenceLevel": "emerging",
+    "clinicalSignificance": "literature-context",
+    "repute": "mixed",
+    "pmids": [
+      "12553913",
+      "20074220"
+    ],
+    "notes": [
+      "Associations vary by study design and population.",
+      "Use only as research context."
+    ]
+  },
+  {
+    "id": "gwas-caffeine-cyp1a2",
+    "entryId": "trait-caffeine",
+    "sourceId": "gwas",
+    "role": "primary",
+    "markerIds": [
+      "rs762551"
+    ],
+    "genes": [
+      "CYP1A2"
+    ],
+    "title": "CYP1A2 caffeine metabolism association",
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs762551",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": "trait-association",
+    "riskAllele": "C",
+    "pmids": [
+      "16522833",
+      "20421517"
+    ],
+    "notes": [
+      "Association context is useful for lifestyle guidance but should defer to lived response.",
+      "This should not be presented as medical advice."
+    ]
+  },
+  {
+    "id": "gwas-comt-val158met",
+    "entryId": "local-trait-comt-val158met",
+    "sourceId": "pubmed",
+    "role": "citation",
+    "category": "traits",
+    "subcategory": "neuro",
+    "markerIds": [
+      "rs4680"
+    ],
+    "genes": [
+      "COMT"
+    ],
+    "title": "COMT Val158Met literature context",
+    "summary": "COMT rs4680 is a heavily studied dopamine-metabolism marker with mixed and often overinterpreted associations.",
+    "detail": "DeaNA includes this as literature context only. Behavioural and mental-health claims around this marker are often overstated.",
+    "whyItMatters": "This marker is commonly requested by users, so including a cautious local card is better than leaving it entirely to SNPedia.",
+    "topics": [
+      "Neuro",
+      "Metabolism"
+    ],
+    "conditions": [],
+    "url": "https://pubmed.ncbi.nlm.nih.gov/?term=rs4680",
+    "release": "PubMed citation metadata, queried during pack build",
+    "evidenceLevel": "emerging",
+    "clinicalSignificance": "literature-context",
+    "repute": "mixed",
+    "pmids": [
+      "11279213",
+      "15866551"
+    ],
+    "notes": [
+      "This marker has mixed literature and should not be interpreted deterministically.",
+      "No mental-health or medication conclusion should be drawn from this single marker."
+    ]
+  },
+  {
+    "id": "gwas-drd2-ankk1-context",
+    "entryId": "local-trait-drd2-ankk1-context",
+    "sourceId": "pubmed",
+    "role": "citation",
+    "category": "traits",
+    "subcategory": "neuro",
+    "markerIds": [
+      "rs1800497"
+    ],
+    "genes": [
+      "ANKK1",
+      "DRD2"
+    ],
+    "title": "ANKK1/DRD2 dopamine literature context",
+    "summary": "ANKK1/DRD2 rs1800497 is widely discussed in dopamine and reward-related literature, with mixed interpretation quality.",
+    "detail": "This local card exists to provide cautious context and avoid overclaiming from a single common marker.",
+    "whyItMatters": "It is a common consumer-DNA discussion marker that benefits from DeaNA's conservative framing.",
+    "topics": [
+      "Neuro",
+      "Behaviour"
+    ],
+    "conditions": [],
+    "url": "https://pubmed.ncbi.nlm.nih.gov/?term=rs1800497",
+    "release": "PubMed citation metadata, queried during pack build",
+    "evidenceLevel": "emerging",
+    "clinicalSignificance": "literature-context",
+    "repute": "mixed",
+    "pmids": [
+      "19763138",
+      "18213623"
+    ],
+    "notes": [
+      "Do not infer personality, addiction risk, or treatment response from this marker alone.",
+      "This is a literature-context card, not a clinical interpretation."
+    ]
+  },
+  {
+    "id": "gwas-eye-colour-herc2",
+    "entryId": "trait-eye-colour",
+    "sourceId": "gwas",
+    "role": "primary",
+    "markerIds": [
+      "rs12913832"
+    ],
+    "genes": [
+      "HERC2",
+      "OCA2"
+    ],
+    "title": "HERC2/OCA2 eye colour association",
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs12913832",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "high",
+    "clinicalSignificance": "trait-association",
+    "riskAllele": "G",
+    "pmids": [
+      "18172690",
+      "20385819"
+    ],
+    "notes": [
+      "GWAS Catalog context supports this as a high-signal common trait marker.",
+      "Eye colour remains polygenic and cannot be fully predicted from one marker."
+    ]
+  },
+  {
+    "id": "gwas-fto-body-weight",
+    "entryId": "local-trait-fto-body-weight",
+    "sourceId": "gwas",
+    "role": "primary",
+    "category": "traits",
+    "subcategory": "metabolism",
+    "markerIds": [
+      "rs9939609"
+    ],
+    "genes": [
+      "FTO"
+    ],
+    "title": "FTO body-weight association context",
+    "summary": "FTO rs9939609 is a widely replicated common-variant association for body weight and BMI-related traits.",
+    "detail": "The effect of one common variant is small. Diet, activity, sleep, medication, environment, and many other loci matter more than this marker alone.",
+    "whyItMatters": "This expands local GWAS coverage while keeping common-variant effect sizes in context.",
+    "topics": [
+      "Metabolism",
+      "Weight"
+    ],
+    "conditions": [],
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs9939609",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": "trait-association",
+    "pmids": [
+      "17434869",
+      "17434869"
+    ],
+    "notes": [
+      "Common-variant association only; not a diagnosis or prediction.",
+      "Single-marker weight associations should be presented with extra caution."
+    ]
+  },
+  {
+    "id": "gwas-hla-celiac-tag",
+    "entryId": "local-medical-hla-celiac-tag",
+    "sourceId": "gwas",
+    "role": "primary",
+    "category": "medical",
+    "subcategory": "immune",
+    "markerIds": [
+      "rs2187668"
+    ],
+    "genes": [
+      "HLA-DQA1"
+    ],
+    "title": "HLA celiac-disease tag marker context",
+    "summary": "rs2187668 is an HLA-region tag marker associated with celiac disease susceptibility in GWAS literature.",
+    "detail": "This is susceptibility context only. It cannot diagnose celiac disease and does not replace antibody testing, biopsy, or clinical evaluation.",
+    "whyItMatters": "HLA-region markers can add useful local context, but they need very strong caveats in a consumer-array report.",
+    "topics": [
+      "Immune",
+      "Digestive"
+    ],
+    "conditions": [
+      "Celiac disease"
+    ],
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs2187668",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": "risk-context",
+    "repute": "mixed",
+    "tone": "caution",
+    "pmids": [
+      "17558408",
+      "20190752"
+    ],
+    "notes": [
+      "Association context only, not diagnosis.",
+      "HLA tagging can vary by ancestry and array design."
+    ]
+  },
+  {
+    "id": "gwas-lactase-persistence",
+    "entryId": "trait-lactase",
+    "sourceId": "gwas",
+    "role": "primary",
+    "markerIds": [
+      "rs4988235"
+    ],
+    "genes": [
+      "MCM6",
+      "LCT"
+    ],
+    "title": "LCT/MCM6 lactase persistence association",
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs4988235",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "high",
+    "clinicalSignificance": "trait-association",
+    "riskAllele": "T",
+    "pmids": [
+      "11788828",
+      "12915462"
+    ],
+    "frequencyNote": "Lactase persistence alleles differ sharply across populations due to recent selection.",
+    "notes": [
+      "This is one of the cleaner consumer-array trait examples.",
+      "Real-world lactose tolerance still depends on diet, gut context, and symptoms."
+    ]
+  },
+  {
+    "id": "gwas-mc1r-pigmentation",
+    "entryId": "local-trait-mc1r-pigmentation",
+    "sourceId": "gwas",
+    "role": "primary",
+    "category": "traits",
+    "subcategory": "appearance",
+    "markerIds": [
+      "rs1805007"
+    ],
+    "genes": [
+      "MC1R"
+    ],
+    "title": "MC1R pigmentation context",
+    "summary": "MC1R rs1805007 is one of several MC1R variants associated with pigmentation traits such as red hair tendency and sun sensitivity context.",
+    "detail": "Pigmentation is polygenic. This local marker card should not be used as a skin-cancer risk assessment.",
+    "whyItMatters": "MC1R variants are common high-interest appearance markers and useful additions to the local trait database.",
+    "topics": [
+      "Appearance",
+      "Skin"
+    ],
+    "conditions": [],
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs1805007",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": "trait-association",
+    "repute": "mixed",
+    "pmids": [
+      "9665397",
+      "18488028"
+    ],
+    "notes": [
+      "Trait context only.",
+      "Skin cancer risk depends on many genetic and environmental factors."
+    ]
+  },
+  {
+    "id": "gwas-oxtr-social-context",
+    "entryId": "local-trait-oxtr-social-context",
+    "sourceId": "pubmed",
+    "role": "citation",
+    "category": "traits",
+    "subcategory": "behaviour",
+    "markerIds": [
+      "rs53576"
+    ],
+    "genes": [
+      "OXTR"
+    ],
+    "title": "OXTR social-behaviour literature context",
+    "summary": "OXTR rs53576 appears in social-behaviour literature, but reported effects are mixed and context-dependent.",
+    "detail": "This is included only as a cautious literature card. It should not be used to label personality or social ability.",
+    "whyItMatters": "SNPedia often surfaces behavioural markers; DeaNA's local database should cover them with stronger caveats.",
+    "topics": [
+      "Behaviour",
+      "Neuro"
+    ],
+    "conditions": [],
+    "url": "https://pubmed.ncbi.nlm.nih.gov/?term=rs53576",
+    "release": "PubMed citation metadata, queried during pack build",
+    "evidenceLevel": "emerging",
+    "clinicalSignificance": "literature-context",
+    "repute": "mixed",
+    "pmids": [
+      "18043736",
+      "20947459"
+    ],
+    "notes": [
+      "Behavioural genetics findings can be fragile and population-specific.",
+      "This card is intentionally conservative."
+    ]
+  },
+  {
+    "id": "gwas-tas2r38-bitter-taste",
+    "entryId": "local-trait-tas2r38-bitter-taste",
+    "sourceId": "gwas",
+    "role": "primary",
+    "category": "traits",
+    "subcategory": "taste",
+    "markerIds": [
+      "rs713598"
+    ],
+    "genes": [
+      "TAS2R38"
+    ],
+    "title": "TAS2R38 bitter-taste sensitivity",
+    "summary": "TAS2R38 rs713598 is part of the common bitter-taste haplotype often discussed for PTC/PROP tasting.",
+    "detail": "This marker contributes to bitter-taste sensitivity but is best interpreted with nearby TAS2R38 markers and real-world taste experience.",
+    "whyItMatters": "Taste markers are high-interest, low-risk findings that can be included locally with conservative wording.",
+    "topics": [
+      "Taste",
+      "Nutrition"
+    ],
+    "conditions": [],
+    "url": "https://www.ebi.ac.uk/gwas/search?query=rs713598",
+    "release": "GWAS Catalog association export",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": "trait-association",
+    "pmids": [
+      "15744035",
+      "19648225"
+    ],
+    "notes": [
+      "This is trait context only.",
+      "A full TAS2R38 haplotype is more informative than one marker."
+    ]
+  },
+  {
+    "id": "pubmed-actn3-r577x",
+    "entryId": "trait-actn3",
+    "sourceId": "pubmed",
+    "role": "citation",
+    "markerIds": [
+      "rs1815739"
+    ],
+    "genes": [
+      "ACTN3"
+    ],
+    "title": "ACTN3 R577X performance literature context",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/?term=rs1815739",
+    "release": "PubMed citation metadata, queried during pack build",
+    "evidenceLevel": "emerging",
+    "clinicalSignificance": "trait-association",
+    "riskAllele": "T",
+    "pmids": [
+      "12879365",
+      "18043716"
+    ],
+    "notes": [
+      "Included as an interesting trait with explicit low-certainty wording.",
+      "Training, physiology, and environment dominate over this single marker."
+    ]
+  },
+  {
+    "id": "pubmed-mthfr-c677t",
+    "entryId": "medical-mthfr",
+    "sourceId": "pubmed",
+    "role": "citation",
+    "markerIds": [
+      "rs1801133"
+    ],
+    "genes": [
+      "MTHFR"
+    ],
+    "title": "MTHFR C677T folate and homocysteine literature context",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/?term=rs1801133",
+    "release": "PubMed citation metadata, queried during pack build",
+    "evidenceLevel": "moderate",
+    "clinicalSignificance": "enzyme-activity-context",
+    "riskAllele": "T",
+    "pmids": [
+      "25788000",
+      "7647779"
+    ],
+    "notes": [
+      "Stored as citation context only; no live PubMed search is run against the user's markers.",
+      "This marker is common and often overinterpreted, so reporting must stay conservative."
+    ]
+  }
+]

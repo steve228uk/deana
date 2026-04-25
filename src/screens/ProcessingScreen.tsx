@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { MarketingProcessing, PrivacyModal } from "../components/deana/marketing";
-import { ParsedDnaFile, SavedProfileSummary, SnpediaProgressSnapshot } from "../types";
+import { EvidenceProgressSnapshot, ParsedDnaFile, SavedProfileSummary } from "../types";
 
 export interface PendingProfileBuild {
   name: string;
@@ -13,12 +13,12 @@ interface ProcessingScreenProps {
   createProfile: (
     name: string,
     parsed: ParsedDnaFile,
-    onProgress?: (snapshot: SnpediaProgressSnapshot) => void,
+    onProgress?: (snapshot: EvidenceProgressSnapshot) => void,
   ) => Promise<SavedProfileSummary>;
   clearPendingBuild: () => void;
 }
 
-function initialSnapshot(parsed: ParsedDnaFile): SnpediaProgressSnapshot {
+function initialSnapshot(parsed: ParsedDnaFile): EvidenceProgressSnapshot {
   return {
     status: "running",
     totalRsids: parsed.markerCount,
@@ -27,7 +27,7 @@ function initialSnapshot(parsed: ParsedDnaFile): SnpediaProgressSnapshot {
     unmatchedRsids: 0,
     failedRsids: 0,
     retries: 0,
-    currentRsid: null,
+    currentRsid: "Preparing bundled evidence sources",
   };
 }
 
@@ -38,7 +38,7 @@ export function ProcessingScreen({
 }: ProcessingScreenProps) {
   const navigate = useNavigate();
   const startedRef = useRef(false);
-  const [snapshot, setSnapshot] = useState<SnpediaProgressSnapshot | null>(
+  const [snapshot, setSnapshot] = useState<EvidenceProgressSnapshot | null>(
     pendingBuild ? initialSnapshot(pendingBuild.parsed) : null,
   );
   const [error, setError] = useState<string | null>(null);

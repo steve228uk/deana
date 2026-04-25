@@ -11,6 +11,7 @@ import {
   DEFAULT_FILTERS,
   ExplorerFilters,
   buildRawMarkerResults,
+  compareEntries,
   matchesEntryFilters,
 } from "../lib/explorer";
 import { exportReportHtml } from "../lib/exporters";
@@ -24,7 +25,7 @@ import { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../typ
 
 interface ExplorerScreenProps {
   isLibraryReady: boolean;
-  refreshProfileSnpedia: (profileId: string) => Promise<void>;
+  refreshProfileEvidence: (profileId: string) => Promise<void>;
 }
 
 const PAGE_SIZE = 50;
@@ -52,7 +53,7 @@ function categoryForTab(tab: ExplorerTab): ReportEntry["category"] | undefined {
 }
 
 function normalizeTab(value: string | null): ExplorerTab {
-  if (value === "medical" || value === "traits" || value === "drug" || value === "raw") {
+  if (value === "medical" || value === "traits" || value === "drug" || value === "other" || value === "raw") {
     return value;
   }
   return "overview";
@@ -87,14 +88,18 @@ function toReportCard(profile: ProfileMeta): ExplorerReportCard {
   };
 }
 
-export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: ExplorerScreenProps) {
+export function ExplorerScreen({
+  isLibraryReady,
+  refreshProfileEvidence,
+}: ExplorerScreenProps) {
   const { profileId } = useParams<{ profileId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [isRetryingSnpedia, setIsRetryingSnpedia] = useState(false);
+  const [isRetryingEvidence, setIsRetryingEvidence] = useState(false);
   const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(() => Boolean(searchParams.get("selected")));
   const [isProfileLoading, setIsProfileLoading] = useState(true);
   const [isPageLoading, setIsPageLoading] = useState(false);
+  const [isEvidenceLoading, setIsEvidenceLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRawLoading, setIsRawLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -103,6 +108,7 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
   const [pageCursor, setPageCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [selectedEntryFallback, setSelectedEntryFallback] = useState<StoredReportEntry | null>(null);
+  const [evidenceEntries, setEvidenceEntries] = useState<StoredReportEntry[]>([]);
   const [rawEntries, setRawEntries] = useState<StoredReportEntry[]>([]);
 
   const searchKey = searchParams.toString();
@@ -183,6 +189,46 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
   useEffect(() => {
     let cancelled = false;
 
+    if (!profile || tab !== "other") {
+      startTransition(() => {
+        setEvidenceEntries([]);
+      });
+      return;
+    }
+
+    setIsEvidenceLoading(true);
+
+    void (async () => {
+      const entries: StoredReportEntry[] = [];
+      for await (const entry of streamReportEntries(profile.id)) {
+        if (entry.entryKind === "local-evidence" && matchesEntryFilters(entry, filters)) {
+          entries.push(entry);
+        }
+      }
+
+      entries.sort((left, right) => compareEntries(left, right, filters.sort));
+
+      if (cancelled) return;
+      startTransition(() => {
+        setEvidenceEntries(entries);
+        setVisibleEntries(entries.slice(0, PAGE_SIZE));
+        setPageCursor(entries.length > PAGE_SIZE ? String(PAGE_SIZE) : null);
+        setHasMore(entries.length > PAGE_SIZE);
+        setSelectedEntryFallback(null);
+      });
+    })().finally(() => {
+      if (cancelled) return;
+      setIsEvidenceLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filters, profile, tab]);
+
+  useEffect(() => {
+    let cancelled = false;
+
     if (!profile || tab !== "raw") {
       startTransition(() => {
         setRawEntries([]);
@@ -215,7 +261,7 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
   useEffect(() => {
     let cancelled = false;
 
-    if (!profile || !category || !selectedEntryId) {
+    if (!profile || (!category && tab !== "other") || !selectedEntryId) {
       startTransition(() => {
         setSelectedEntryFallback(null);
       });
@@ -233,7 +279,12 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
       if (cancelled) return;
       startTransition(() => {
         setSelectedEntryFallback(
-          entry && matchesEntryFilters(entry, filters, category) ? entry : null,
+          entry &&
+            (tab === "other"
+              ? entry.entryKind === "local-evidence" && matchesEntryFilters(entry, filters)
+              : matchesEntryFilters(entry, filters, category))
+            ? entry
+            : null,
         );
       });
     });
@@ -241,14 +292,14 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
     return () => {
       cancelled = true;
     };
-  }, [category, filters, profile, selectedEntryId, visibleEntries]);
+  }, [category, filters, profile, selectedEntryId, tab, visibleEntries]);
 
   const selectedEntry = useMemo(() => {
     return visibleEntries.find((entry) => entry.id === selectedEntryId) ?? selectedEntryFallback;
   }, [selectedEntryFallback, selectedEntryId, visibleEntries]);
 
   useEffect(() => {
-    if (!category || tab === "overview" || tab === "raw") return;
+    if ((!category && tab !== "other") || tab === "overview" || tab === "raw") return;
     if (selectedEntryId || visibleEntries.length === 0) return;
     updateSearchParams(searchParams, { selected: visibleEntries[0].id }, setSearchParams);
   }, [category, searchParams, selectedEntryId, setSearchParams, tab, visibleEntries]);
@@ -318,6 +369,24 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
   }
 
   async function handleLoadMore() {
+    if (tab === "other") {
+      const currentOffset = Number(pageCursor ?? 0);
+      if (!pageCursor || isLoadingMore) return;
+
+      setIsLoadingMore(true);
+      try {
+        const nextOffset = currentOffset + PAGE_SIZE;
+        startTransition(() => {
+          setVisibleEntries(evidenceEntries.slice(0, nextOffset));
+          setPageCursor(evidenceEntries.length > nextOffset ? String(nextOffset) : null);
+          setHasMore(evidenceEntries.length > nextOffset);
+        });
+      } finally {
+        setIsLoadingMore(false);
+      }
+      return;
+    }
+
     if (!profile || !category || !pageCursor || isLoadingMore) return;
 
     setIsLoadingMore(true);
@@ -357,20 +426,27 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
     }
   }
 
-  async function handleRefreshSnpedia() {
-    if (!profile || isRetryingSnpedia) return;
+  async function handleRefreshEvidence() {
+    if (!profile || isRetryingEvidence) return;
 
-    setIsRetryingSnpedia(true);
+    setIsRetryingEvidence(true);
     try {
-      await refreshProfileSnpedia(profile.id);
+      await refreshProfileEvidence(profile.id);
       const nextProfile = await loadProfileMeta(profile.id);
       startTransition(() => {
         setProfile(nextProfile);
       });
     } finally {
-      setIsRetryingSnpedia(false);
+      setIsRetryingEvidence(false);
     }
   }
+
+  const localEvidenceEntryMatches =
+    profile.report.overview.localEvidenceEntryMatches ?? profile.report.overview.evidenceMatchedFindings ?? 0;
+  const localEvidenceNeedsAttention =
+    profile.report.overview.evidenceStatus !== "complete" ||
+    profile.report.overview.evidenceProcessedRsids < profile.dna.markerCount ||
+    (profile.dna.markerCount > 100_000 && localEvidenceEntryMatches < 100);
 
   return (
     <ExplorerShell
@@ -385,13 +461,17 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
       {tab === "overview" ? (
         <>
           <OverviewContent profile={profile} onExploreCategory={setTab} />
-          {(profile.report.overview.snpediaStatus === "partial" || profile.report.overview.snpediaStatus === "failed") ? (
-            <div className="dn-overview-retry">
-              <button className="dn-button dn-button--secondary" onClick={() => void handleRefreshSnpedia()} disabled={isRetryingSnpedia}>
-                <span>{isRetryingSnpedia ? "Retrying SNPedia..." : "Retry SNPedia enrichment"}</span>
+          <section className="dn-overview-retry">
+            <div className={localEvidenceNeedsAttention ? "dn-callout dn-callout--error" : "dn-callout"}>
+              <span>
+                Local evidence is {profile.report.overview.evidenceStatus}.{" "}
+                {localEvidenceEntryMatches.toLocaleString()} entries are matched from the bundled evidence pack, including local SNPedia-derived genotype context.
+              </span>
+              <button className="dn-button dn-button--secondary" onClick={() => void handleRefreshEvidence()} disabled={isRetryingEvidence}>
+                <span>{isRetryingEvidence ? "Refreshing evidence..." : "Refresh local evidence"}</span>
               </button>
             </div>
-          ) : null}
+          </section>
         </>
       ) : tab === "raw" ? (
         <RawMarkersContent markers={rawMarkers} isLoading={isRawLoading} onJump={jumpToEntry} />
@@ -402,7 +482,7 @@ export function ExplorerScreen({ isLibraryReady, refreshProfileSnpedia }: Explor
           filters={filters}
           entries={visibleEntries}
           selectedEntry={selectedEntry}
-          isLoading={isPageLoading}
+          isLoading={tab === "other" ? isEvidenceLoading : isPageLoading}
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
           isMobileSheetOpen={isMobileSheetOpen}
