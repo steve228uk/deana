@@ -102,11 +102,13 @@ export function ExplorerShell({
           <button className="dn-icon-button dn-hide-mobile" aria-label="Help" onClick={() => setModal("help")}><Icon name="help" /></button>
         </header>
 
-        <nav className="dn-tabbar" aria-label="Explorer sections">
-          {visibleTabs.map((tab) => (
-            <button key={tab.id} className={activeTab === tab.id ? "is-active" : ""} onClick={() => onTabChange?.(tab.id)}>{tab.label}</button>
-          ))}
-        </nav>
+        <div className="dn-tabbar-wrap">
+          <nav className="dn-tabbar" aria-label="Explorer sections">
+            {visibleTabs.map((tab) => (
+              <button key={tab.id} className={activeTab === tab.id ? "is-active" : ""} onClick={() => onTabChange?.(tab.id)}>{tab.label}</button>
+            ))}
+          </nav>
+        </div>
 
         {children}
         </div>

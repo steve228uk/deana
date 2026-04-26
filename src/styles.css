@@ -406,7 +406,10 @@ a { color: inherit; }
 .dn-export-menu__panel { position: absolute; right: 0; top: calc(100% + 10px); z-index: 20; display: grid; gap: 6px; min-width: 210px; padding: 8px; border: 1px solid var(--dn-line); border-radius: 14px; background: var(--dn-paper); box-shadow: var(--dn-shadow-soft); }
 .dn-export-menu__panel button { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 0 12px; border-radius: 10px; background: transparent; color: var(--dn-ink); text-align: left; }
 .dn-export-menu__panel button:hover { background: var(--dn-mint); color: var(--dn-forest); }
-.dn-tabbar { flex: 0 0 auto; display: flex; align-items: center; gap: 26px; padding: 0 28px; height: 58px; border-bottom: 1px solid var(--dn-line); overflow-x: auto; position: sticky; top: 0; z-index: 12; background: var(--dn-paper); }
+.dn-tabbar-wrap { flex: 0 0 auto; position: sticky; top: 0; z-index: 12; background: var(--dn-paper); border-bottom: 1px solid var(--dn-line); }
+.dn-tabbar-wrap::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 48px; background: linear-gradient(to right, transparent, var(--dn-paper)); pointer-events: none; z-index: 1; }
+.dn-tabbar { display: flex; align-items: center; gap: 26px; padding: 0 28px; height: 58px; overflow-x: auto; touch-action: pan-x; overscroll-behavior-x: contain; scrollbar-width: none; }
+.dn-tabbar::-webkit-scrollbar { display: none; }
 .dn-tabbar button { border-bottom: 2px solid transparent; background: transparent; height: 58px; color: var(--dn-muted); white-space: nowrap; }
 .dn-tabbar button.is-active { color: var(--dn-forest); border-color: var(--dn-forest); font-weight: 700; }
 .dn-explorer-actions { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 12px; padding: 18px 28px 0; }
@@ -1215,6 +1218,7 @@ a { color: inherit; }
   .dn-report-selector__markers::before { content: none; margin-right: 0; }
   .dn-local-status { display: none; }
   .dn-tabbar { padding: 0 18px; gap: 22px; }
+  .dn-tabbar-wrap::after { width: 36px; }
   .dn-explorer-actions { padding: 16px 18px 0; display: grid; grid-template-columns: 1fr 1fr; }
   .dn-report-hero { padding: 20px 18px 8px; }
   .dn-report-hero h1 { font-size: 2.6rem; }
