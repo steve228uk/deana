@@ -149,7 +149,7 @@ a { color: inherit; }
 }
 .dn-marketing-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 34px; }
 .dn-header-actions { display: flex; align-items: center; gap: 10px; }
-.dn-botanical-card { position: relative; isolation: isolate; }
+.dn-botanical-card { position: relative; isolation: isolate; overflow: hidden; }
 .dn-hero,
 .dn-processing-hero { text-align: center; padding: 34px 120px 22px; }
 .dn-hero h1,
@@ -502,6 +502,10 @@ a { color: inherit; }
 .dn-inspector p,
 .dn-inspector li { color: var(--dn-muted); line-height: 1.6; }
 .dn-inspector h3 { margin: 22px 0 8px; color: var(--dn-ink); }
+.dn-inspector ul,
+.dn-inspector ol { margin: 8px 0 0; padding-left: 1.2rem; }
+.dn-inspector a { color: var(--dn-forest-2); text-decoration: underline; text-underline-offset: 3px; }
+.dn-inspector code { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; background: rgba(29, 27, 24, 0.08); border-radius: 6px; padding: 0.08em 0.36em; }
 .dn-source-link-list { display: grid; gap: 8px; }
 .dn-source-link-list a { display: grid; grid-template-columns: 1fr auto 20px; gap: 8px; align-items: center; text-align: left; border: 1px solid var(--dn-line); border-radius: 12px; background: #fff; padding: 12px; color: var(--dn-ink); text-decoration: none; }
 .dn-source-link-list small { color: var(--dn-muted); }

@@ -493,6 +493,29 @@ describe("DeaNA app", () => {
     expect(within(inspector).getByText("The detail remains visible even when the summary is redundant.")).toBeInTheDocument();
   });
 
+  it("renders markdown formatting in the inspector content", async () => {
+    const profile = makePaginatedProfile("profile-10", 1);
+    storedProfiles = [{
+      ...profile,
+      report: {
+        ...profile.report,
+        entries: profile.report.entries.map((entry) => ({
+          ...entry,
+          summary: "**Important** marker summary.",
+          detail: "Use `rsid` details.\n- First bullet\n- [Source detail](https://example.com)",
+        })),
+      },
+    }];
+
+    renderApp("/explorer/profile-10?tab=medical&selected=medical-1");
+
+    await screen.findByText("Current report");
+    expect((await screen.findAllByText("Important", { selector: "strong" })).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("rsid", { selector: "code" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("First bullet").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: "Source detail" })[0]).toHaveAttribute("href", "https://example.com");
+  });
+
   it("resets the inspector scroll position when the selected finding changes", async () => {
     const user = userEvent.setup();
     storedProfiles = [makePaginatedProfile("profile-7", 3)];
