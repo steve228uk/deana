@@ -94,10 +94,6 @@ export function HomeScreen({
     navigate("/processing");
   }
 
-  function scrollHowItWorks() {
-    document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
   const reportCards = profiles.map(toReportCard);
 
   return (
@@ -114,7 +110,6 @@ export function HomeScreen({
           onOpenReport={(id) => navigate(`/explorer/${id}?tab=overview`)}
           onRemoveReport={(id) => void removeProfile(id)}
           onPrivacy={() => setShowPrivacy(true)}
-          onHowItWorks={scrollHowItWorks}
         />
       )}
 

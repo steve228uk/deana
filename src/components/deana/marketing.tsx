@@ -76,14 +76,12 @@ export function MarketingReturning({
   onOpenReport,
   onRemoveReport,
   onPrivacy,
-  onHowItWorks,
 }: {
   reports: SavedReportCard[];
   onCreateNew?: () => void;
   onOpenReport?: (id: string) => void;
   onRemoveReport?: (id: string) => void;
   onPrivacy?: () => void;
-  onHowItWorks?: () => void;
 }) {
   return (
     <main className="dn-marketing-shell dn-marketing-shell--returning">
@@ -104,7 +102,6 @@ export function MarketingReturning({
         </p>
         <div className="dn-hero-actions">
           <button className="dn-button dn-button--primary dn-button--large" onClick={onCreateNew}><Icon name="plus" /> Create new report</button>
-          <button className="dn-button dn-button--secondary dn-button--large" onClick={onHowItWorks}><Icon name="help" /> How Deana works</button>
         </div>
       </section>
 
