@@ -2,17 +2,23 @@ name: Update evidence pack
 
 on:
   schedule:
-    - cron: "15 6 * * 1"
+    - cron: "15 6 1 * *"
   workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: update-evidence-pack
+  cancel-in-progress: false
+
 jobs:
   update-evidence-pack:
     name: Update evidence pack
     runs-on: ubuntu-latest
+    env:
+      GWAS_ASSOCIATIONS_URL: ${{ vars.GWAS_ASSOCIATIONS_URL }}
 
     steps:
       - name: Check out repository
@@ -26,11 +32,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Sync evidence sources
-        run: bun run evidence:sources:sync
+      - name: Update evidence pack
+        run: bun run evidence:update
 
-      - name: Build evidence pack
-        run: bun run evidence:pack:build
+      - name: Check evidence pack
+        run: bun run evidence:check
 
       - name: Run tests
         run: bun run test
@@ -42,14 +48,20 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           branch: automation/update-evidence-pack
-          title: Update evidence pack
-          commit-message: Update evidence pack
+          delete-branch: true
+          title: Update monthly evidence pack
+          commit-message: Update monthly evidence pack
           body: |
             ## Summary
-            - Syncs bulk evidence sources.
-            - Rebuilds the compact standalone evidence pack.
-            - Updates manifest checksum metadata and app pack-version constants when needed.
+            - Syncs public evidence source caches.
+            - Syncs SNPedia-derived supplementary evidence.
+            - Rebuilds the sharded static evidence pack.
+            - Updates evidence-pack manifests, shard checksums, and app pack-version constants when needed.
+
+            GWAS sync uses the repository `GWAS_ASSOCIATIONS_URL` variable when it is configured. If the variable is empty, the GWAS source sync step is skipped by the evidence tooling.
 
             ## Checks
+            - `bun run evidence:update`
+            - `bun run evidence:check`
             - `bun run test`
             - `bun run build`
