@@ -7,6 +7,7 @@ dist
 .vercel
 bun.lock
 *.tsbuildinfo
+stats.html
 vite.config.js
 vite.config.d.ts
 docs/evidence-candidates/dna-seed-*.json
