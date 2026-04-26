@@ -572,7 +572,7 @@ export function FindingDetailContent({
         <h3>Sources</h3>
         <div className="dn-source-link-list">
           {finding.sources.map((source) => (
-            <a key={source.id} href={source.url} target="_blank" rel="noreferrer">
+            <a key={source.id} href={ensureAbsoluteUrl(source.url)} target="_blank" rel="noreferrer">
               <span>{source.name}</span>
               <small>{source.id}</small>
               <Icon name="external" />
@@ -696,6 +696,11 @@ function renderMarkdown(value: string): ReactNode {
   return blocks;
 }
 
+function ensureAbsoluteUrl(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `https://${url}`;
+}
+
 function renderMarkdownInline(value: string): ReactNode {
   const nodes: ReactNode[] = [];
   const pattern = /(\[[^\]]+\]\([^)]+\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g;
@@ -712,7 +717,7 @@ function renderMarkdownInline(value: string): ReactNode {
       const label = token.slice(1, token.indexOf("]("));
       const url = token.slice(token.indexOf("](") + 2, -1).trim();
       nodes.push(
-        <a key={`${tokenIndex}-${url}`} href={url} target="_blank" rel="noreferrer">
+        <a key={`${tokenIndex}-${url}`} href={ensureAbsoluteUrl(url)} target="_blank" rel="noreferrer">
           {label}
         </a>,
       );
