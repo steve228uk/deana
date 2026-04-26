@@ -13,16 +13,21 @@ The project is public and contributor-friendly, but it is not OSI open source un
 - Sharded static evidence packs served from `public/evidence-packs`.
 - Medical, pharmacogenomic, and trait-oriented report cards with source context and caveats.
 - Explorer view with filters, sorting, marker inspection, and source links.
+- Opt-in AI chat for interpreting visible report findings through Vercel AI Gateway.
 - Offline HTML export and browser-print PDF flow.
 
 ## Privacy Model
 
-Deana is designed so raw DNA data stays in the browser:
+Deana is designed so raw DNA data stays in the browser unless the user explicitly opts in to AI chat:
 
 - Raw genotype files are parsed by `src/workers/dnaParser.worker.ts`.
 - Profile DNA, report metadata, and report entries are stored in browser IndexedDB through `src/lib/storage.ts`.
 - Evidence matching happens locally against static JSON shards loaded from `public/evidence-packs`.
 - The app does not upload raw DNA, profile names, genotype metadata, evidence matches, or report content to Deana servers.
+- AI chat is disabled until the user accepts an in-app warning. Consent acceptance, chat threads, chat messages, and local search traces are stored in browser IndexedDB for that report.
+- When accepted, chat text plus a capped, redacted set of selected markers, genotypes, matched findings, source names, and source links is sent to Vercel AI Gateway and the routed model provider.
+- The AI search planner may return synonym and related-term suggestions for local browser search; Deana uses those terms locally before sending only capped retrieved findings to the chat model.
+- AI chat does not send raw DNA files, full marker lists, profile names, or uploaded file names.
 
 Vercel Analytics is enabled for page-level product analytics only. Do not add custom analytics events or third-party runtime calls that include raw DNA, profile metadata, genotype metadata, report content, or evidence-match details.
 
@@ -61,6 +66,58 @@ bun run preview
 ```
 
 Use Bun for package scripts so local development matches the lockfile and CI workflow.
+
+## AI Chat Setup
+
+Deana uses the Vercel AI SDK v6 package set for opt-in Explorer chat:
+
+- `src/components/deana/aiChat.tsx` uses `@ai-sdk/react` `useChat`, `DefaultChatTransport`, `UIMessage.parts`, and local browser tool output handling.
+- `api/chat.ts` is an Edge Function that validates the redacted browser payload, calls `streamText`, converts `UIMessage` objects with `convertToModelMessages`, and returns a `toUIMessageStreamResponse` stream.
+- `api/chat-title.ts` is an Edge Function that uses `generateText` to create local thread titles from the first user prompt.
+- `src/lib/aiChat.ts` owns the chat consent version, context shape, default model, and redaction/compaction helpers.
+
+Production deployments should use Vercel OIDC for AI Gateway so no long-lived AI secret is stored in the client or project environment.
+
+Production setup:
+
+1. Deploy Deana on Vercel.
+2. Enable AI Gateway for the Vercel project or team.
+3. Use the default Vercel OIDC authentication provided to Vercel Functions. Deana reads the runtime OIDC token from Vercel's `x-vercel-oidc-token` Function request header, with `VERCEL_OIDC_TOKEN` kept as a local-development fallback. Do not expose AI credentials with a `VITE_` prefix.
+4. Optionally set the model:
+
+```bash
+DEANA_LLM_MODEL=google/gemini-3-flash
+```
+
+The default chat model is `google/gemini-3-flash`. For that model, Deana routes Gateway calls through Vertex, requests low thinking output for the visible reasoning panel, requests Zero Data Retention, and fails closed when a compliant route is unavailable. Gateway calls are stateless: Deana restores thread context from local IndexedDB and includes the needed prior messages in each request.
+
+When changing models or provider options, keep these constraints intact:
+
+- Use Vercel AI Gateway model IDs such as `google/gemini-3-flash` or `openai/...`; do not expose provider credentials to browser code.
+- Keep `providerOptions.gateway.zeroDataRetention` enabled for chat and title calls. A request should fail rather than silently route to a non-ZDR provider.
+- Keep chat responses generic on failure so server or provider details are not exposed to users.
+- Preserve the AI SDK v6 message model: render and persist text from `UIMessage.parts`, send messages with `sendMessage`, and stream server responses with `toUIMessageStreamResponse`.
+- Keep tool calls local. The model may plan `searchReportFindings`, but the browser executes retrieval against the saved report and sends back only capped, compact findings.
+
+Local AI development needs Vercel Functions, so use `vercel dev` instead of plain `bun run dev` when testing chat:
+
+```bash
+bun run vercel:login
+bun run vercel:link
+bun run vercel:env
+bun run dev:vercel
+```
+
+`bun run vercel:env` writes Vercel's local OIDC environment to `.env.local`, which is ignored by git. Vercel OIDC tokens pulled for local development expire, so refresh `.env.local` with `bun run vercel:env` when local Gateway authentication stops working. Keep `AI_GATEWAY_API_KEY` unset when testing OIDC, because the Gateway provider prefers an API key over OIDC if both are present. If you are self-hosting or developing without OIDC, set a local-only Gateway API key:
+
+```bash
+AI_GATEWAY_API_KEY=...
+DEANA_LLM_MODEL=google/gemini-3-flash
+```
+
+Never commit `.env.local`, AI keys, raw DNA exports, or generated local evidence caches.
+
+If a preview deployment hides the AI tab or returns a generic chat error, check `/api/ai-status` on that preview URL first. It should return `{"enabled":true}` when Vercel is passing OIDC to the Function. If it returns false, confirm the preview belongs to the same Vercel project with AI Gateway enabled and that project security has OIDC federation enabled.
 
 ## Evidence Packs
 

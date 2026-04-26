@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { stripProfileSupplementsForMetaStorage } from "./storage";
+import { compareStoredChatMessages, stripProfileSupplementsForMetaStorage } from "./storage";
 import { EVIDENCE_PACK_VERSION } from "./evidencePack";
 import { makeParsedDnaFile } from "../test/fixtures";
-import type { EvidenceSupplement } from "../types";
+import type { EvidenceSupplement, StoredChatMessage } from "../types";
 
 describe("profile storage normalization", () => {
   it("strips heavyweight evidence match records from profile metadata supplements", () => {
@@ -56,5 +56,29 @@ describe("profile storage normalization", () => {
     expect(stored?.evidence?.matchedRecords).toEqual([]);
     expect(stored?.evidence?.processedRsids).toBe(dna.markerCount);
     expect(supplement.matchedRecords).toHaveLength(1);
+  });
+});
+
+describe("chat message storage", () => {
+  it("orders equal-timestamp chat messages as user before assistant", () => {
+    const createdAt = "2026-04-26T12:00:00.000Z";
+    const assistant: StoredChatMessage = {
+      id: "message-assistant",
+      threadId: "thread-1",
+      profileId: "profile-1",
+      role: "assistant",
+      content: "Answer",
+      createdAt,
+    };
+    const user: StoredChatMessage = {
+      id: "message-user",
+      threadId: "thread-1",
+      profileId: "profile-1",
+      role: "user",
+      content: "Question",
+      createdAt,
+    };
+
+    expect([assistant, user].sort(compareStoredChatMessages).map((message) => message.role)).toEqual(["user", "assistant"]);
   });
 });

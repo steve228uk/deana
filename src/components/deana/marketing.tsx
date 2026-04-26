@@ -438,6 +438,7 @@ function ExplorerTeaser() {
     ["heart", "Health insights"],
     ["user", "Carrier status"],
     ["spark", "Traits"],
+    ["chat", "Opt-in AI chat"],
     ["book", "Source links"],
     ["search", "Filters & search"],
   ] as const;
@@ -448,7 +449,7 @@ function ExplorerTeaser() {
         <span className="dn-round-icon"><Icon name="search" /></span>
         <div>
           <h2>Explore in your private Explorer</h2>
-          <p>Search, filter, and inspect your local report without sending raw DNA to Deana.</p>
+          <p>Search, filter, inspect, and optionally chat with AI about your local report without sending raw DNA to Deana.</p>
         </div>
       </div>
       <div className="dn-teaser-grid">
@@ -518,6 +519,7 @@ function PrivacyBanner() {
         <div className="dn-assurance-points">
           <p><Icon name="check" /> Processed locally on your device</p>
           <p><Icon name="check" /> No raw DNA uploaded to Deana</p>
+          <p><Icon name="check" /> AI chat is opt-in and uses Vercel AI Gateway with zero data retention enabled</p>
         </div>
       </div>
     </section>

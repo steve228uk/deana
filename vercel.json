@@ -8,10 +8,6 @@
     {
       "source": "/explorer/:profileId",
       "destination": "/index.html"
-    },
-    {
-      "source": "/:path*",
-      "destination": "/index.html"
     }
   ]
 }
