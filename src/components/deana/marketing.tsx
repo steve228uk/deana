@@ -47,7 +47,7 @@ export function MarketingFirstVisit({
         <p className="dn-eyebrow">Private by design</p>
         <h1>Private DNA reports, built in <em>your</em> browser.</h1>
         <p className="dn-hero-copy">
-          Upload a raw DNA file from AncestryDNA, 23andMe, MyHeritage, or FamilyTreeDNA, then explore <strong>health insights</strong>, <strong>carrier status</strong>, <strong>traits</strong>, and <strong>evidence-backed findings</strong> without sending your raw DNA to Deana servers.
+          Upload a raw DNA file from common microarray providers, then explore <strong>health insights</strong>, <strong>carrier status</strong>, <strong>traits</strong>, and <strong>evidence-backed findings</strong> without sending your raw DNA to Deana servers.
         </p>
         <div className="dn-hero-actions">
           <button className="dn-button dn-button--primary dn-button--large" onClick={onUpload}><Icon name="upload" /> Upload your DNA export</button>
@@ -253,7 +253,7 @@ export function UploadReportModal({
               <span>or click to browse</span>
               <small>.zip, .txt, .csv, .vcf, .vcf.gz, or .gz VCF</small>
             </label>
-            <p className="dn-support-line">Supports AncestryDNA, 23andMe, MyHeritage, FamilyTreeDNA, and VCF exports</p>
+            <p className="dn-support-line">Supports common rsID-backed microarray and VCF exports</p>
             <p className="dn-local-note"><Icon name="lock" /> Your file is never uploaded. Everything happens locally.</p>
           </>
         ) : (
@@ -279,7 +279,7 @@ export function UploadReportModal({
               <button className="dn-button dn-button--secondary" onClick={onCancel}>Cancel</button>
               <button className="dn-button dn-button--primary" disabled={isSaving || !profileName.trim()} onClick={onConfirm}><Icon name="upload" /> {isSaving ? "Building report..." : "Save and build report"}</button>
             </div>
-            <p className="dn-support-line">Supports .zip, .txt, .csv, .vcf, .vcf.gz, .gz VCF · AncestryDNA, 23andMe, MyHeritage, FamilyTreeDNA, VCF</p>
+            <p className="dn-support-line">Supports .zip, .txt, .csv, .vcf, .vcf.gz, .gz VCF · rsID-backed microarray and VCF exports</p>
           </>
         )}
         {error ? <p className="dn-error-text" role="alert">{error}</p> : null}
