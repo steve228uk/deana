@@ -80,7 +80,7 @@ export function HomeScreen({
     try {
       const nextParsed = await parseFile(file);
       setParsed(nextParsed);
-      setProfileName(suggestedProfileName(nextParsed.fileName));
+      setProfileName(suggestedProfileName(file.name));
       setModalStep("name-profile");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Parsing failed.");
