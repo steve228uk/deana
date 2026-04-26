@@ -389,6 +389,8 @@ describe("Deana app", () => {
     const { container } = renderApp("/");
 
     await screen.findByText(/Private DNA reports/i);
+    expect(screen.getByText(/optionally chat with AI about your local report/i)).toBeInTheDocument();
+    expect(screen.getByText(/AI chat is opt-in and uses Vercel AI Gateway with zero data retention enabled/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
 
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;

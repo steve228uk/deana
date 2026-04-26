@@ -69,7 +69,14 @@ Use Bun for package scripts so local development matches the lockfile and CI wor
 
 ## AI Chat Setup
 
-Deana uses Vercel AI Gateway for streaming Explorer chat responses. Production deployments should use Vercel OIDC so no long-lived AI secret is stored in the client or project environment.
+Deana uses the Vercel AI SDK v6 package set for opt-in Explorer chat:
+
+- `src/components/deana/aiChat.tsx` uses `@ai-sdk/react` `useChat`, `DefaultChatTransport`, `UIMessage.parts`, and local browser tool output handling.
+- `api/chat.ts` is an Edge Function that validates the redacted browser payload, calls `streamText`, converts `UIMessage` objects with `convertToModelMessages`, and returns a `toUIMessageStreamResponse` stream.
+- `api/chat-title.ts` is an Edge Function that uses `generateText` to create local thread titles from the first user prompt.
+- `src/lib/aiChat.ts` owns the chat consent version, context shape, default model, and redaction/compaction helpers.
+
+Production deployments should use Vercel OIDC for AI Gateway so no long-lived AI secret is stored in the client or project environment.
 
 Production setup:
 
@@ -83,6 +90,14 @@ DEANA_LLM_MODEL=google/gemini-3-flash
 ```
 
 The default chat model is `google/gemini-3-flash`. For that model, Deana routes Gateway calls through Vertex, requests low thinking output for the visible reasoning panel, requests Zero Data Retention, and fails closed when a compliant route is unavailable. Gateway calls are stateless: Deana restores thread context from local IndexedDB and includes the needed prior messages in each request.
+
+When changing models or provider options, keep these constraints intact:
+
+- Use Vercel AI Gateway model IDs such as `google/gemini-3-flash` or `openai/...`; do not expose provider credentials to browser code.
+- Keep `providerOptions.gateway.zeroDataRetention` enabled for chat and title calls. A request should fail rather than silently route to a non-ZDR provider.
+- Keep chat responses generic on failure so server or provider details are not exposed to users.
+- Preserve the AI SDK v6 message model: render and persist text from `UIMessage.parts`, send messages with `sendMessage`, and stream server responses with `toUIMessageStreamResponse`.
+- Keep tool calls local. The model may plan `searchReportFindings`, but the browser executes retrieval against the saved report and sends back only capped, compact findings.
 
 Local AI development needs Vercel Functions, so use `vercel dev` instead of plain `bun run dev` when testing chat:
 

@@ -467,7 +467,17 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
   );
 }
 
-function FindingInspector({ finding }: { finding: StoredReportEntry | null }) {
+export function FindingInspector({
+  finding,
+  emptyTitle = "Select a finding",
+  emptyDescription = "Choose a result to review genotype context, evidence, warnings, and source links.",
+  emptyContent,
+}: {
+  finding: StoredReportEntry | null;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  emptyContent?: ReactNode;
+}) {
   const inspectorRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -479,8 +489,8 @@ function FindingInspector({ finding }: { finding: StoredReportEntry | null }) {
     return (
       <aside ref={inspectorRef} className="dn-inspector" aria-label="Finding inspector">
         <p className="dn-eyebrow">Inspector</p>
-        <h2>Select a finding</h2>
-        <p>Choose a result to review genotype context, evidence, warnings, and source links.</p>
+        <h2>{emptyTitle}</h2>
+        {emptyContent ?? <p>{emptyDescription}</p>}
       </aside>
     );
   }

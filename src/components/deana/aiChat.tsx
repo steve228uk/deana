@@ -28,7 +28,7 @@ import {
   saveChatThread,
 } from "../../lib/storage";
 import type { ChatRetrievalTrace, ExplorerTab, ProfileMeta, StoredChatMessage, StoredChatThread, StoredReportEntry } from "../../types";
-import { FindingDetailContent } from "./explorer";
+import { FindingInspector } from "./explorer";
 import { Icon } from "./ui";
 
 interface ExplorerAiChatProps {
@@ -1056,7 +1056,7 @@ function ChatSidePanel({
   const uniqueFindings = Array.from(new Map(findings.map((finding) => [finding.id, finding])).values());
 
   return (
-    <aside className="dn-ai-side-panel" aria-label={panel.mode === "findings" ? "Chat findings" : "Chat inspector"}>
+    <aside className={`dn-ai-side-panel ${panel.mode === "inspector" ? "is-inspector" : ""}`} aria-label={panel.mode === "findings" ? "Chat findings" : "Chat inspector"}>
       <div className="dn-ai-side-panel__header">
         {panel.mode === "inspector" ? (
           <button className="dn-button dn-button--secondary" type="button" onClick={onBack}>
@@ -1097,11 +1097,17 @@ function ChatSidePanel({
           )}
         </div>
       ) : (
-        <div className="dn-ai-inspector-panel">
-          {panel.isLoading ? <p className="dn-ai-panel-empty">Loading finding...</p> : null}
-          {panel.error ? <div className="dn-ai-error" role="alert"><Icon name="alert" /> {panel.error}</div> : null}
-          {panel.finding ? <FindingDetailContent finding={panel.finding} titleLevel="h2" /> : null}
-        </div>
+        <FindingInspector
+          finding={panel.finding}
+          emptyTitle={panel.isLoading ? "Loading finding" : "Finding unavailable"}
+          emptyContent={
+            panel.isLoading ? (
+              <p className="dn-ai-panel-empty">Loading finding...</p>
+            ) : panel.error ? (
+              <div className="dn-ai-error" role="alert"><Icon name="alert" /> {panel.error}</div>
+            ) : undefined
+          }
+        />
       )}
     </aside>
   );
