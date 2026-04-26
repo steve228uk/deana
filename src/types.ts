@@ -8,7 +8,7 @@ export type ProviderName =
   | "Unknown";
 
 export type InsightCategory = "medical" | "traits" | "drug";
-export type ExplorerTab = "overview" | "medical" | "traits" | "drug";
+export type ExplorerTab = "overview" | "medical" | "traits" | "drug" | "ai";
 export type InsightTone = "neutral" | "good" | "caution";
 export type FindingOutcome = "negative" | "positive" | "informational" | "missing";
 export type CoverageStatus = "full" | "partial" | "missing";
@@ -297,6 +297,91 @@ export interface ProfileMeta {
 export interface StoredReportEntry extends ReportEntry {
   profileId: string;
   searchText: string;
+}
+
+export interface AiConsentAcceptance {
+  accepted: true;
+  version: number;
+  acceptedAt: string;
+}
+
+export interface StoredAiConsent extends AiConsentAcceptance {
+  profileId: string;
+  chatNoticeDismissedAt?: string;
+}
+
+export interface ChatTraceFinding {
+  id: string;
+  title: string;
+  category: InsightCategory;
+  matchedFields: string[];
+  markerRsids: string[];
+  sourceNames: string[];
+}
+
+export interface ChatRetrievalTrace {
+  searchedAt: string;
+  scannedCategories: InsightCategory[];
+  searchedTerms: string[];
+  relatedTerms: string[];
+  resultCount: number;
+  returnedFindings: ChatTraceFinding[];
+  rationale: string;
+}
+
+export interface StoredChatContextFinding {
+  id: string;
+  link: string;
+  category: InsightCategory;
+  title: string;
+  summary: string;
+  detail: string;
+  whyItMatters: string;
+  genotypeSummary: string;
+  genes: string[];
+  topics: string[];
+  conditions: string[];
+  warnings: string[];
+  sourceNotes: string[];
+  markers: Array<{
+    rsid: string;
+    genotype: string | null;
+    gene?: string;
+    matchedAllele?: string;
+    matchedAlleleCount?: number | null;
+  }>;
+  evidenceTier: EvidenceTier;
+  clinicalSignificance: string | null;
+  normalizedClinicalSignificance: string | null;
+  repute: ReputeStatus;
+  coverage: CoverageStatus;
+  confidenceNote: string;
+  disclaimer: string;
+  frequencyNote: string;
+  sourceGenotype: string;
+  publicationCount: number;
+  sourceNames: string[];
+  sourceUrls: string[];
+}
+
+export interface StoredChatThread {
+  id: string;
+  profileId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredChatMessage {
+  id: string;
+  threadId: string;
+  profileId: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  trace?: ChatRetrievalTrace;
+  contextFindings?: StoredChatContextFinding[];
+  reasoningSummary?: string | null;
 }
 
 export interface ExplorerPage {

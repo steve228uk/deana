@@ -1,0 +1,106 @@
+import { describe, expect, it } from "vitest";
+import { DEFAULT_FILTERS } from "./explorer";
+import { buildChatContext, mergeChatFindings, MAX_CHAT_CONTEXT_FINDINGS } from "./aiChat";
+import { makeProfileMeta, makeStoredReportEntries } from "../test/fixtures";
+
+describe("buildChatContext", () => {
+  it("redacts profile identity and raw DNA data from chat context", () => {
+    const profile = makeProfileMeta({
+      id: "profile-secret-id",
+      name: "Private Profile Name",
+      fileName: "private-raw-dna.txt",
+    });
+    const entries = makeStoredReportEntries(profile.id);
+    const context = buildChatContext({
+      profile,
+      currentTab: "medical",
+      filters: DEFAULT_FILTERS,
+      visibleEntries: entries,
+      selectedEntry: entries[0],
+    });
+    const serialized = JSON.stringify(context);
+
+    expect(serialized).not.toContain("Private Profile Name");
+    expect(serialized).not.toContain("private-raw-dna.txt");
+    expect(serialized).not.toContain("profile-secret-id");
+    expect(serialized).not.toContain(String(profile.dna.markers[0][2]));
+    expect(context.report.provider).toBe(profile.dna.provider);
+    expect(context.findings[0].markers[0].rsid).toMatch(/^rs\d+$/);
+  });
+
+  it("caps and deduplicates findings with the selected finding first", () => {
+    const profile = makeProfileMeta();
+    const template = makeStoredReportEntries(profile.id)[0];
+    const entries = Array.from({ length: MAX_CHAT_CONTEXT_FINDINGS + 5 }, (_, index) => ({
+      ...template,
+      id: `finding-${index}`,
+      title: `Finding ${index}`,
+    }));
+    const context = buildChatContext({
+      profile,
+      currentTab: "medical",
+      filters: DEFAULT_FILTERS,
+      visibleEntries: entries,
+      selectedEntry: entries[4],
+    });
+
+    expect(context.findings).toHaveLength(MAX_CHAT_CONTEXT_FINDINGS);
+    expect(context.findings[0].id).toBe("finding-4");
+    expect(new Set(context.findings.map((finding) => finding.id)).size).toBe(context.findings.length);
+  });
+
+  it("keeps current findings before prior retrieved findings for follow-ups", () => {
+    const profile = makeProfileMeta();
+    const entries = makeStoredReportEntries(profile.id);
+    const priorContext = buildChatContext({
+      profile,
+      currentTab: "ai",
+      filters: DEFAULT_FILTERS,
+      visibleEntries: [],
+      selectedEntry: null,
+      retrievedFindings: entries.slice(1, 3).map((entry) => ({
+        ...buildChatContext({
+          profile,
+          currentTab: "medical",
+          filters: DEFAULT_FILTERS,
+          visibleEntries: [entry],
+          selectedEntry: entry,
+        }).findings[0],
+      })),
+    });
+    const context = buildChatContext({
+      profile,
+      currentTab: "medical",
+      filters: DEFAULT_FILTERS,
+      visibleEntries: entries,
+      selectedEntry: entries[0],
+      retrievedFindings: priorContext.findings,
+    });
+
+    expect(context.findings[0].id).toBe(entries[0].id);
+    expect(context.findings.map((finding) => finding.id)).toContain(entries[1].id);
+    expect(new Set(context.findings.map((finding) => finding.id)).size).toBe(context.findings.length);
+  });
+});
+
+describe("mergeChatFindings", () => {
+  it("deduplicates and caps persisted chat findings", () => {
+    const profile = makeProfileMeta();
+    const template = buildChatContext({
+      profile,
+      currentTab: "medical",
+      filters: DEFAULT_FILTERS,
+      visibleEntries: makeStoredReportEntries(profile.id),
+      selectedEntry: null,
+    }).findings[0];
+    const findings = Array.from({ length: MAX_CHAT_CONTEXT_FINDINGS + 3 }, (_, index) => ({
+      ...template,
+      id: index === 2 ? "finding-1" : `finding-${index}`,
+    }));
+
+    const merged = mergeChatFindings(findings);
+
+    expect(merged).toHaveLength(MAX_CHAT_CONTEXT_FINDINGS);
+    expect(merged.filter((finding) => finding.id === "finding-1")).toHaveLength(1);
+  });
+});

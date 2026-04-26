@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { ExplorerFilters } from "../../lib/explorer";
-import type { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../../types";
+import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, StoredReportEntry } from "../../types";
 import { DEANA_GITHUB_URL, PrivacyModal } from "./marketing";
 import { DeanaWordmark, Icon, IconName } from "./ui";
 
@@ -18,6 +18,7 @@ const tabs: Array<{ id: ExplorerTab; label: string }> = [
   { id: "medical", label: "Medical" },
   { id: "traits", label: "Traits" },
   { id: "drug", label: "Drug response" },
+  { id: "ai", label: "AI" },
 ];
 
 const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = [
@@ -25,23 +26,28 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = [
   { id: "medical", label: "Medical", icon: "heart" },
   { id: "traits", label: "Traits", icon: "leaf" },
   { id: "drug", label: "Drug response", icon: "pill" },
+  { id: "ai", label: "AI", icon: "spark" },
 ];
 
 export function ExplorerShell({
   report,
   activeTab,
+  isAiEnabled = false,
   children,
   onTabChange,
   onBackHome,
 }: {
   report: ExplorerReportCard;
   activeTab: ExplorerTab;
+  isAiEnabled?: boolean;
   children: ReactNode;
   onTabChange?: (tab: ExplorerTab) => void;
   onBackHome?: () => void;
 }) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [modal, setModal] = useState<"privacy" | "help" | null>(null);
+  const visibleNav = isAiEnabled ? nav : nav.filter((item) => item.id !== "ai");
+  const visibleTabs = isAiEnabled ? tabs : tabs.filter((item) => item.id !== "ai");
 
   return (
     <>
@@ -59,7 +65,7 @@ export function ExplorerShell({
           </button>
         </div>
         <nav>
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <button
               key={item.id}
               aria-label={`Open ${item.label}`}
@@ -97,7 +103,7 @@ export function ExplorerShell({
         </header>
 
         <nav className="dn-tabbar" aria-label="Explorer sections">
-          {tabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button key={tab.id} className={activeTab === tab.id ? "is-active" : ""} onClick={() => onTabChange?.(tab.id)}>{tab.label}</button>
           ))}
         </nav>
@@ -267,7 +273,7 @@ export function CategoryExplorerContent({
   onCloseMobileSheet,
   onLoadMore,
 }: {
-  activeTab: Exclude<ExplorerTab, "overview">;
+  activeTab: InsightCategory;
   profile: ProfileMeta;
   filters: ExplorerFilters;
   entries: StoredReportEntry[];
@@ -461,7 +467,17 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
   );
 }
 
-function FindingInspector({ finding }: { finding: StoredReportEntry | null }) {
+export function FindingInspector({
+  finding,
+  emptyTitle = "Select a finding",
+  emptyDescription = "Choose a result to review genotype context, evidence, warnings, and source links.",
+  emptyContent,
+}: {
+  finding: StoredReportEntry | null;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  emptyContent?: ReactNode;
+}) {
   const inspectorRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -473,8 +489,8 @@ function FindingInspector({ finding }: { finding: StoredReportEntry | null }) {
     return (
       <aside ref={inspectorRef} className="dn-inspector" aria-label="Finding inspector">
         <p className="dn-eyebrow">Inspector</p>
-        <h2>Select a finding</h2>
-        <p>Choose a result to review genotype context, evidence, warnings, and source links.</p>
+        <h2>{emptyTitle}</h2>
+        {emptyContent ?? <p>{emptyDescription}</p>}
       </aside>
     );
   }
@@ -507,7 +523,7 @@ function MobileFindingSheet({ finding, onClose }: { finding: StoredReportEntry; 
   );
 }
 
-function FindingDetailContent({
+export function FindingDetailContent({
   finding,
   titleId,
   titleLevel,
@@ -828,7 +844,7 @@ function labelForTab(tab: ExplorerTab): string {
   return tab[0].toUpperCase() + tab.slice(1);
 }
 
-function titleForTab(tab: Exclude<ExplorerTab, "overview">): string {
+function titleForTab(tab: InsightCategory): string {
   return tab === "drug" ? "Drug response explorer" : `${labelForTab(tab)} explorer`;
 }
 

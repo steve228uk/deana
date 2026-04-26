@@ -6,6 +6,7 @@ import {
   ExplorerShell,
   OverviewContent,
 } from "../components/deana/explorer";
+import { ExplorerAiChat } from "../components/deana/aiChat";
 import {
   DEFAULT_FILTERS,
   ExplorerFilters,
@@ -58,10 +59,24 @@ function categoryForTab(tab: ExplorerTab): ReportEntry["category"] | undefined {
 }
 
 function normalizeTab(value: string | null): ExplorerTab {
-  if (value === "medical" || value === "traits" || value === "drug") {
+  if (value === "medical" || value === "traits" || value === "drug" || value === "ai") {
     return value;
   }
   return "overview";
+}
+
+async function loadAiStatus(): Promise<boolean> {
+  try {
+    const response = await fetch("/api/ai-status", {
+      method: "GET",
+      cache: "no-store",
+    });
+    if (!response.ok) return false;
+    const body = await response.json() as { enabled?: unknown };
+    return body.enabled === true;
+  } catch {
+    return false;
+  }
 }
 
 function updateSearchParams(
@@ -113,12 +128,31 @@ export function ExplorerScreen({
   const [pageCursor, setPageCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [selectedEntryFallback, setSelectedEntryFallback] = useState<StoredReportEntry | null>(null);
+  const [isAiEnabled, setIsAiEnabled] = useState<boolean | null>(null);
 
   const searchKey = searchParams.toString();
   const tab = useMemo(() => normalizeTab(searchParams.get("tab")), [searchKey]);
   const filters = useMemo(() => formatFilters(searchParams), [searchKey]);
   const category = categoryForTab(tab);
   const selectedEntryId = searchParams.get("selected") ?? "";
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void loadAiStatus().then((enabled) => {
+      if (!cancelled) setIsAiEnabled(enabled);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isAiEnabled === false && tab === "ai") {
+      updateSearchParams(searchParams, { tab: "overview", selected: null }, setSearchParams);
+    }
+  }, [isAiEnabled, searchParams, setSearchParams, tab]);
 
   useEffect(() => {
     if (!selectedEntryId) {
@@ -248,10 +282,11 @@ export function ExplorerScreen({
   }
 
   function setTab(nextTab: ExplorerTab) {
+    if (nextTab === "ai" && isAiEnabled !== true) return;
     setIsMobileSheetOpen(false);
     updateSearchParams(
       searchParams,
-      { tab: nextTab, selected: nextTab === "overview" ? null : "" },
+      { tab: nextTab, selected: nextTab === "overview" || nextTab === "ai" ? null : "" },
       setSearchParams,
     );
   }
@@ -314,10 +349,21 @@ export function ExplorerScreen({
     <ExplorerShell
       report={toReportCard(profile)}
       activeTab={tab}
+      isAiEnabled={isAiEnabled === true}
       onTabChange={setTab}
       onBackHome={() => navigate("/")}
     >
       {tab === "overview" ? (
+        <OverviewContent profile={profile} onExploreCategory={setTab} />
+      ) : tab === "ai" && isAiEnabled === true ? (
+        <ExplorerAiChat
+          profile={profile}
+          currentTab={tab}
+          filters={filters}
+          visibleEntries={visibleEntries}
+          selectedEntry={selectedEntry}
+        />
+      ) : tab === "ai" ? (
         <OverviewContent profile={profile} onExploreCategory={setTab} />
       ) : (
         <CategoryExplorerContent
