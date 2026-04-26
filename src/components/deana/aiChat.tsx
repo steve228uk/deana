@@ -181,7 +181,8 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     async function loadState() {
       const consent = await loadAiConsent(props.profile.id);
       if (!isMounted) return;
-      setHasConsented(consent?.version === CHAT_CONSENT_VERSION);
+      const hasValidConsent = consent?.version === CHAT_CONSENT_VERSION;
+      setHasConsented(hasValidConsent);
       const noticeDismissedAt = await loadAiChatNoticeDismissal(props.profile.id);
       if (!isMounted) return;
       setIsThreadPrivacyNoteVisible(!noticeDismissedAt);
@@ -189,9 +190,10 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       const storedThreads = await loadChatThreads(props.profile.id);
       if (!isMounted) return;
       setThreads(storedThreads);
+      if (!hasValidConsent) return;
       if (storedThreads[0]) {
         await selectThread(storedThreads[0], false);
-      } else if (consent?.version === CHAT_CONSENT_VERSION) {
+      } else {
         startDraftThread({ clearInput: false, focus: false, closeList: false });
       }
     }
@@ -343,7 +345,13 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     });
     setHasConsented(true);
     if (!activeThreadRef.current) {
-      startDraftThread();
+      const storedThreads = threads.length > 0 ? threads : await loadChatThreads(props.profile.id);
+      if (storedThreads.length > 0) {
+        setThreads(storedThreads);
+        await selectThread(storedThreads[0], false);
+      } else {
+        startDraftThread();
+      }
     }
   }
 
@@ -644,31 +652,38 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   };
 
   return (
-    <section className={`dn-ai-screen ${isThreadPanelCollapsed ? "is-thread-collapsed" : ""}`} aria-labelledby="ai-chat-title">
+    <section
+      className={`dn-ai-screen ${isThreadPanelCollapsed ? "is-thread-collapsed" : ""} ${hasConsented ? "" : "is-consent-pending"}`}
+      aria-labelledby="ai-chat-title"
+    >
       <h1 id="ai-chat-title" className="dn-screen-reader-text">AI chat</h1>
-      <ThreadList
-        threads={threads}
-        activeThreadId={activeThread?.id ?? null}
-        isOpen={isThreadListOpen}
-        isCollapsed={isThreadPanelCollapsed}
-        onNewThread={() => startDraftThread()}
-        onSelect={(thread) => void selectThread(thread)}
-        onCollapse={() => setIsThreadPanelCollapsed(true)}
-        onExpand={() => setIsThreadPanelCollapsed(false)}
-        isPrivacyNoteVisible={isThreadPrivacyNoteVisible}
-        onDismissPrivacyNote={() => void dismissThreadPrivacyNote()}
-        onOpenPrivacyInfo={() => setModal("chatPrivacy")}
-        onDelete={(thread) => {
-          setDeleteThreadError(null);
-          setThreadPendingRemoval(thread);
-        }}
-      />
-      <section className={`dn-ai-chat-pane ${isThreadListOpen ? "" : "is-open"}`}>
-        <header className="dn-ai-panel__header">
-          <button className="dn-button dn-button--secondary dn-ai-back" type="button" onClick={() => setIsThreadListOpen(true)}>
-            <Icon name="chevronLeft" /> Threads
-          </button>
-        </header>
+      {hasConsented ? (
+        <ThreadList
+          threads={threads}
+          activeThreadId={activeThread?.id ?? null}
+          isOpen={isThreadListOpen}
+          isCollapsed={isThreadPanelCollapsed}
+          onNewThread={() => startDraftThread()}
+          onSelect={(thread) => void selectThread(thread)}
+          onCollapse={() => setIsThreadPanelCollapsed(true)}
+          onExpand={() => setIsThreadPanelCollapsed(false)}
+          isPrivacyNoteVisible={isThreadPrivacyNoteVisible}
+          onDismissPrivacyNote={() => void dismissThreadPrivacyNote()}
+          onOpenPrivacyInfo={() => setModal("chatPrivacy")}
+          onDelete={(thread) => {
+            setDeleteThreadError(null);
+            setThreadPendingRemoval(thread);
+          }}
+        />
+      ) : null}
+      <section className={`dn-ai-chat-pane ${!hasConsented || !isThreadListOpen ? "is-open" : ""}`}>
+        {hasConsented ? (
+          <header className="dn-ai-panel__header">
+            <button className="dn-button dn-button--secondary dn-ai-back" type="button" onClick={() => setIsThreadListOpen(true)}>
+              <Icon name="chevronLeft" /> Threads
+            </button>
+          </header>
+        ) : null}
 
         {!hasConsented ? (
           <AiConsent onAccept={() => void acceptConsent()} />
@@ -984,17 +999,33 @@ function RemoveChatModal({
 }
 
 function AiConsent({ onAccept }: { onAccept: () => void }) {
+  const points = [
+    ["shield", "Zero data retention is requested", "Requests are sent through Vercel AI Gateway with zero data retention enabled for the gateway call."],
+    ["alert", "Selected report context leaves this browser", "Chat text, selected markers, genotypes, matched findings, source names, and source links may be sent to answer your question."],
+    ["lock", "Raw DNA stays local", "Raw DNA files, full marker lists, profile names, and file names are not included. Consent and chat history stay in this browser."],
+  ] as const;
+
   return (
     <section className="dn-ai-consent">
-      <Icon name="alert" />
-      <h3>AI chat sends report context off this device</h3>
-      <p>
-        If you continue, Deana will send your chat text plus selected DNA markers, genotypes,
-        matched findings, source names, and source links to Vercel AI Gateway and the routed model provider.
+      <span className="dn-ai-empty__icon dn-ai-consent__icon" aria-hidden="true">
+        <Icon name="alert" />
+      </span>
+      <p className="dn-eyebrow">Optional AI chat</p>
+      <h2>AI chat sends report context off this device</h2>
+      <p className="dn-ai-consent__intro">
+        Deana can answer questions about this report, but chat is not fully local. Continue only if you are comfortable sending limited report context through Vercel AI Gateway and the routed model provider.
       </p>
-      <p>
-        Raw DNA files, full marker lists, profile names, and file names are not included. Consent and chat history are saved locally in this browser for this report.
-      </p>
+      <div className="dn-ai-consent__points">
+        {points.map(([icon, title, copy]) => (
+          <article className="dn-privacy-point" key={title}>
+            <span className="dn-round-icon"><Icon name={icon} /></span>
+            <div>
+              <h3>{title}</h3>
+              <p>{copy}</p>
+            </div>
+          </article>
+        ))}
+      </div>
       <button className="dn-button dn-button--primary" type="button" onClick={onAccept}>
         I understand
       </button>

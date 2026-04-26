@@ -559,6 +559,9 @@ a { color: inherit; }
 .dn-ai-screen.is-thread-collapsed {
   grid-template-columns: 72px minmax(0, 1fr);
 }
+.dn-ai-screen.is-consent-pending {
+  grid-template-columns: minmax(0, 1fr);
+}
 .dn-ai-screen:has(.dn-ai-side-panel) {
   grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(320px, 420px);
 }
@@ -694,15 +697,69 @@ a { color: inherit; }
   background: var(--dn-danger-bg);
 }
 .dn-ai-consent {
-  display: grid;
-  gap: 14px;
-  align-content: start;
-  max-width: 680px;
-  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 42px 28px;
+  color: var(--dn-muted);
+  text-align: center;
 }
-.dn-ai-consent > svg { color: var(--dn-clay-dark); }
-.dn-ai-consent h3 { margin: 0; color: var(--dn-ink); font-size: 1.08rem; }
-.dn-ai-consent p { margin: 0; color: var(--dn-muted); line-height: 1.55; }
+.dn-ai-consent__icon {
+  background: var(--dn-danger-bg);
+  color: var(--dn-clay-dark);
+}
+.dn-ai-consent > .dn-eyebrow { margin: 0 0 -4px; color: var(--dn-clay-dark); }
+.dn-ai-consent h2 {
+  max-width: 660px;
+  margin: 0;
+  color: var(--dn-forest);
+  font-family: var(--dn-font-display);
+  font-size: 2rem;
+  font-weight: 500;
+  line-height: 1.08;
+}
+.dn-ai-consent__intro {
+  max-width: 660px;
+  margin: 0;
+  color: var(--dn-muted);
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+.dn-ai-consent__points {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  margin: 6px 0;
+  text-align: left;
+}
+.dn-ai-consent__points .dn-privacy-point {
+  border-color: #ead7cb;
+  background: #fffaf6;
+}
+.dn-ai-consent__points .dn-round-icon {
+  background: var(--dn-danger-bg);
+  color: var(--dn-clay-dark);
+}
+.dn-ai-consent__points h3 {
+  margin: 0 0 6px;
+  color: var(--dn-forest);
+  font-family: var(--dn-font-display);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.dn-ai-consent__points p {
+  margin: 0;
+  color: var(--dn-muted);
+  line-height: 1.5;
+}
+.dn-ai-consent .dn-button {
+  width: min(100%, 420px);
+}
 .dn-ai-context-strip {
   display: flex;
   align-items: center;

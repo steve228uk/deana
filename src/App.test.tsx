@@ -561,11 +561,14 @@ describe("Deana app", () => {
     expect(fetchCallsFor("/api/chat")).toHaveLength(0);
 
     expect(screen.getByText(/AI chat sends report context off this device/i)).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "AI chat threads" })).not.toBeInTheDocument();
+    expect(screen.queryByText("No chats yet.")).not.toBeInTheDocument();
     expect(fetchCallsFor("/api/chat")).toHaveLength(0);
 
     await user.click(screen.getByRole("button", { name: "I understand" }));
 
     expect(screen.getByLabelText("Message Deana AI")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "AI chat threads" })).toBeInTheDocument();
     expect(fetchCallsFor("/api/chat")).toHaveLength(0);
   });
 
