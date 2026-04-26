@@ -132,6 +132,21 @@ const chatRequestSchema = z.object({
   messages: z.array(uiMessageSchema).min(1).max(MAX_MESSAGES),
 });
 
+export function trimMessagesToRecentWindow(body: unknown): unknown {
+  if (!body || typeof body !== "object" || !("messages" in body)) {
+    return body;
+  }
+  const candidate = body as Record<string, unknown>;
+  const messages = candidate.messages;
+  if (!Array.isArray(messages) || messages.length <= MAX_MESSAGES) {
+    return body;
+  }
+  return {
+    ...candidate,
+    messages: messages.slice(-MAX_MESSAGES),
+  };
+}
+
 function jsonResponse(status: number, message: string): Response {
   return Response.json({ error: message }, { status });
 }
@@ -215,7 +230,8 @@ export default async function handler(request: Request): Promise<Response> {
     return jsonResponse(400, "Invalid JSON body.");
   }
 
-  const parsed = chatRequestSchema.safeParse(body);
+  const trimmedBody = trimMessagesToRecentWindow(body);
+  const parsed = chatRequestSchema.safeParse(trimmedBody);
   if (!parsed.success) {
     return jsonResponse(400, "Invalid chat request.");
   }
