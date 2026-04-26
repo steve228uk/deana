@@ -66,19 +66,6 @@ a { color: inherit; }
 }
 .dn-wordmark--compact { font-size: 2rem; }
 .dn-wordmark__e { position: relative; display: inline-block; }
-.dn-wordmark__e::after {
-  content: "";
-  position: absolute;
-  left: 0.08em;
-  right: 0.06em;
-  bottom: 0.16em;
-  height: 0.11em;
-  border-radius: 999px;
-  background: var(--dn-clay);
-  transform: rotate(-10deg);
-  z-index: -1;
-  opacity: 0.92;
-}
 
 .dn-button,
 .dn-icon-button,
@@ -147,9 +134,9 @@ a { color: inherit; }
   margin-left: auto;
   margin-right: auto;
 }
-.dn-marketing-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 34px; }
+.dn-marketing-header { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 34px; }
 .dn-header-actions { display: flex; align-items: center; gap: 10px; }
-.dn-botanical-card { position: relative; isolation: isolate; overflow: hidden; }
+.dn-botanical-card { position: relative; z-index: 0; isolation: isolate; }
 .dn-hero,
 .dn-processing-hero { text-align: center; padding: 34px 120px 22px; }
 .dn-hero h1,
@@ -180,6 +167,20 @@ a { color: inherit; }
 .dn-leaf--right { right: -62px; top: 110px; transform: rotate(196deg); }
 .dn-hero::after,
 .dn-processing-hero::after { content: ""; position: absolute; width: 520px; height: 360px; border-radius: 50%; background: rgba(242, 232, 219, 0.42); left: 50%; top: 50%; transform: translate(-50%, -44%); z-index: -2; }
+
+.dn-steps-card,
+.dn-home-info-row,
+.dn-explorer-teaser,
+.dn-assurance-grid,
+.dn-privacy-banner,
+.dn-report-list-card,
+.dn-processing-card,
+.dn-metric-grid,
+.dn-processing-footnote,
+.dn-home-footer {
+  position: relative;
+  z-index: 1;
+}
 
 .dn-simple-card,
 .dn-privacy-banner,
