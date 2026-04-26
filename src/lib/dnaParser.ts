@@ -3,9 +3,14 @@ import type { CompactMarker, ParsedDnaFile, ProviderName } from "../types";
 
 type ImportedFrom = ParsedDnaFile["importedFrom"];
 type ParserMode = "unknown" | "vcf" | "delimited";
+type DelimitedSchema =
+  | { delimiter: string; kind: "allele"; idIndex: number; chromosomeIndex: number | null; positionIndex: number | null; allele1Index: number; allele2Index: number }
+  | { delimiter: string; kind: "genotype"; idIndex: number; chromosomeIndex: number | null; positionIndex: number | null; genotypeIndex: number };
 
 const TEXT_CHUNK_SIZE = 1024 * 1024;
 const METADATA_SAMPLE_LIMIT = 12000;
+const ZERO_GENOTYPE_RE = /^0+$/;
+const DASH_GENOTYPE_RE = /^-+$/;
 
 function normalizeRsid(raw: string): string | null {
   const match = raw.trim().match(/^rs\d+$/i);
@@ -19,10 +24,18 @@ function appendMetadataSample(sample: string, line: string): string {
 
 function detectProvider(fileName: string, meta: string, isVcf: boolean): ProviderName {
   const lower = `${fileName}\n${meta}`.toLowerCase();
-  if (lower.includes("ancestrydna raw data")) return "AncestryDNA";
+  if (lower.includes("ancestrydna raw data") || lower.includes("ancestry.com dna") || lower.includes("ancestrydna")) return "AncestryDNA";
   if (lower.includes("23andme")) return "23andMe";
   if (lower.includes("myheritage")) return "MyHeritage";
-  if (lower.includes("family tree dna") || lower.includes("familytreedna")) return "FamilyTreeDNA";
+  if (lower.includes("family tree dna") || lower.includes("familytreedna") || lower.includes("family finder")) return "FamilyTreeDNA";
+  if (lower.includes("living dna") || lower.includes("livingdna")) return "LivingDNA";
+  if (lower.includes("tellmegen")) return "tellmeGen";
+  if (lower.includes("meudna") || lower.includes("meu dna")) return "meuDNA";
+  if (/\bgenera\b/.test(lower)) return "Genera";
+  if (lower.includes("mthfr")) return "MTHFR Genetics";
+  if (lower.includes("selfdecode") || lower.includes("self decode")) return "SelfDecode";
+  if (lower.includes("reich") || lower.includes("1240k") || lower.includes("humanorig") || lower.includes("human origins")) return "Reich";
+  if (lower.includes("geno2") || lower.includes("geno 2.0") || lower.includes("nggeno") || lower.includes("national geographic")) return "National Geographic Geno";
   if (isVcf && (lower.includes("nebula") || lower.includes("g42") || lower.includes("megabolt"))) {
     return "Nebula Genomics";
   }
@@ -33,6 +46,7 @@ function detectBuild(meta: string): string {
   const lower = meta.toLowerCase();
   if (
     lower.includes("build 38") ||
+    lower.includes("build38") ||
     lower.includes("grch38") ||
     lower.includes("hg38") ||
     lower.includes("length=248956422")
@@ -41,24 +55,39 @@ function detectBuild(meta: string): string {
   }
   if (
     lower.includes("build 37") ||
+    lower.includes("build37") ||
     lower.includes("37.1") ||
     lower.includes("grch37") ||
+    lower.includes("hg37") ||
     lower.includes("hg19") ||
     lower.includes("length=249250621")
   ) {
     return "GRCh37";
   }
+  if (
+    lower.includes("build 36") ||
+    lower.includes("build36") ||
+    lower.includes("ncbi36") ||
+    lower.includes("grch36") ||
+    lower.includes("hg18")
+  ) {
+    return "GRCh36";
+  }
   return "Unknown";
 }
 
 function normalizeGenotype(raw: string): string {
-  const trimmed = raw.trim().replaceAll("\"", "");
-  if (!trimmed || trimmed === "0" || trimmed === "--") return "--";
-  return trimmed.toUpperCase();
+  if (!raw || ZERO_GENOTYPE_RE.test(raw) || DASH_GENOTYPE_RE.test(raw)) return "--";
+  return raw.toUpperCase();
 }
 
 function normalizeChromosome(raw: string): string {
-  return raw.trim().replace(/^chr/i, "");
+  const normalized = raw.trim().replace(/^chr/i, "");
+  if (normalized === "23") return "X";
+  if (normalized === "24") return "Y";
+  if (normalized === "25") return "XY";
+  if (normalized === "26" || /^m(?:t)?$/i.test(normalized)) return "MT";
+  return normalized;
 }
 
 function singleBaseAllele(raw: string | undefined): string | null {
@@ -90,6 +119,10 @@ function zipEntryScore(name: string): number {
   if (/\.(txt|csv)$/.test(lower)) return 2;
   if (/\.gz$/.test(lower)) return 3;
   return 10;
+}
+
+function zipEntryLooksParseable(name: string): boolean {
+  return zipEntryScore(name) <= 3;
 }
 
 export function pickZipEntry(entries: Record<string, Uint8Array>): { name: string; bytes: Uint8Array } {
@@ -138,6 +171,114 @@ function genotypeFromVcf(gt: string, ref: string, alt: string): string | null {
   return alleles.join("");
 }
 
+function cleanDelimitedValue(value: string | undefined): string {
+  return (value ?? "")
+    .trim()
+    .replace(/^\ufeff/, "")
+    .replace(/^#+\s*/, "")
+    .replace(/^"+|"+$/g, "")
+    .replaceAll("\"", "")
+    .trim();
+}
+
+function normalizeHeaderName(value: string): string {
+  return cleanDelimitedValue(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function splitDelimitedLine(line: string, delimiter: string): string[] {
+  const trimmedLine = line.trimStart();
+  if (
+    delimiter !== "," ||
+    (line.match(/"/g)?.length ?? 0) % 2 !== 0 ||
+    (!trimmedLine.startsWith("\"") && line.includes("\",\""))
+  ) {
+    return line.split(delimiter).map(cleanDelimitedValue);
+  }
+
+  const values: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+    if (char === "\"" && inQuotes && next === "\"") {
+      current += "\"";
+      index += 1;
+    } else if (char === "\"") {
+      inQuotes = !inQuotes;
+    } else if (char === delimiter && !inQuotes) {
+      values.push(cleanDelimitedValue(current));
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  values.push(cleanDelimitedValue(current));
+  return values;
+}
+
+function candidateDelimiters(line: string): string[] {
+  return line.includes("\t") ? ["\t", ","] : [","];
+}
+
+function parseDelimitedFields(line: string, delimiter: string): string[] {
+  const fields = splitDelimitedLine(line, delimiter);
+  if (delimiter === "\t" && fields.length === 1 && /\s{2,}/.test(line)) {
+    return line.trim().split(/\s+/).map(cleanDelimitedValue);
+  }
+  return fields;
+}
+
+function columnIndex(columns: string[], names: string[]): number | null {
+  const found = columns.findIndex((column) => names.includes(column));
+  return found >= 0 ? found : null;
+}
+
+function detectDelimitedSchema(rawLine: string): DelimitedSchema | null {
+  const headerLine = rawLine.replace(/^\s*#\s*/, "");
+
+  for (const delimiter of candidateDelimiters(headerLine)) {
+    const columns = parseDelimitedFields(headerLine, delimiter).map(normalizeHeaderName);
+    const idIndex = columnIndex(columns, ["rsid", "snp", "snpid", "snpname", "marker", "markerid"]);
+    const chromosomeIndex = columnIndex(columns, ["chromosome", "chrom", "chr"]);
+    const positionIndex = columnIndex(columns, ["position", "pos", "basepairposition", "basepair", "bp", "location"]);
+    const genotypeIndex = columnIndex(columns, ["genotype", "result", "call"]);
+    const allele1Index = columnIndex(columns, ["allele1", "allelea", "alleleone"]);
+    const allele2Index = columnIndex(columns, ["allele2", "alleleb", "alleletwo"]);
+
+    if (idIndex === null) continue;
+    if (allele1Index !== null && allele2Index !== null) {
+      return {
+        delimiter,
+        kind: "allele",
+        idIndex,
+        chromosomeIndex,
+        positionIndex,
+        allele1Index,
+        allele2Index,
+      };
+    }
+    if (genotypeIndex !== null) {
+      return {
+        delimiter,
+        kind: "genotype",
+        idIndex,
+        chromosomeIndex,
+        positionIndex,
+        genotypeIndex,
+      };
+    }
+  }
+
+  return null;
+}
+
+function normalizePosition(raw: string | undefined): number {
+  return Number(cleanDelimitedValue(raw).replaceAll(",", "")) || 0;
+}
+
 class DnaTextParser {
   private mode: ParserMode;
   private metadata = "";
@@ -152,8 +293,9 @@ class DnaTextParser {
   private rsidRows = 0;
   private skippedNonSnvRows = 0;
 
-  private delimiter = "\t";
-  private headerType: "allele" | "genotype" | null = null;
+  private delimitedSchema: DelimitedSchema | null = null;
+  private delimitedDataRows = 0;
+  private delimitedNonRsidRows = 0;
 
   constructor(
     private readonly fileName: string,
@@ -188,11 +330,15 @@ class DnaTextParser {
       if (isVcf && this.rsidRows > 0 && this.skippedNonSnvRows > 0) {
         throw new Error("That VCF contains rsIDs, but no called single-nucleotide genotypes Deana can match.");
       }
-      throw new Error("No DNA markers could be parsed from that file.");
+      if (this.delimitedSchema && this.delimitedDataRows > 0 && this.delimitedNonRsidRows > 0) {
+        throw new Error("That file has a recognized raw-DNA layout, but its rows do not contain rsID identifiers. Deana needs rsIDs to match local evidence.");
+      }
+      throw new Error("No rsID-backed DNA markers could be parsed from that file.");
     }
 
+    const provider = detectProvider(this.fileName, this.metadata, isVcf);
     return {
-      provider: detectProvider(this.fileName, this.metadata, isVcf),
+      provider,
       build: detectBuild(this.metadata),
       markerCount: this.markers.length,
       fileName: this.fileName,
@@ -266,59 +412,40 @@ class DnaTextParser {
     }
   }
 
-  private parseDelimitedHeader(rawLine: string): { delimiter: string; columns: string[] } {
-    const delimiter = rawLine.includes("\t") ? "\t" : ",";
-    return {
-      delimiter,
-      columns: rawLine.split(delimiter).map((part) => part.trim().replaceAll("\"", "").toLowerCase()),
-    };
-  }
-
-  private detectDelimitedHeaderType(columns: string[]): "allele" | "genotype" | null {
-    if (columns.includes("allele1") && columns.includes("allele2")) return "allele";
-    if (columns.includes("genotype") || columns.includes("result")) return "genotype";
-    return null;
-  }
-
   private acceptDelimitedLine(line: string): void {
-    if (line.startsWith("#")) {
-      if (this.headerType === null) {
-        const possibleHeader = this.parseDelimitedHeader(line.replace(/^#\s*/, ""));
-        const detected = this.detectDelimitedHeaderType(possibleHeader.columns);
-        if (detected !== null) {
-          this.delimiter = possibleHeader.delimiter;
-          this.headerType = detected;
-        }
+    if (this.delimitedSchema === null || line.startsWith("#")) {
+      const possibleSchema = detectDelimitedSchema(line);
+      if (possibleSchema) {
+        this.delimitedSchema = possibleSchema;
       }
       return;
     }
 
-    if (this.headerType === null) {
-      const header = this.parseDelimitedHeader(line);
-      const detected = this.detectDelimitedHeaderType(header.columns);
-      if (detected === null) return;
+    const parts = parseDelimitedFields(line, this.delimitedSchema.delimiter);
+    if (parts.length <= this.delimitedSchema.idIndex) return;
+    this.delimitedDataRows += 1;
 
-      this.delimiter = header.delimiter;
-      this.headerType = detected;
+    const rsid = normalizeRsid(parts[this.delimitedSchema.idIndex]);
+    if (!rsid) {
+      this.delimitedNonRsidRows += 1;
       return;
     }
 
-    const parts = line.split(this.delimiter).map((part) => part.trim().replaceAll("\"", ""));
-    if (parts.length < 4) return;
+    const chromosome = this.delimitedSchema.chromosomeIndex === null
+      ? ""
+      : normalizeChromosome(parts[this.delimitedSchema.chromosomeIndex]);
+    const position = this.delimitedSchema.positionIndex === null
+      ? 0
+      : normalizePosition(parts[this.delimitedSchema.positionIndex]);
 
-    if (this.headerType === "allele") {
-      const [rawRsid, chromosome, position, allele1, allele2] = parts;
-      const rsid = normalizeRsid(rawRsid);
-      if (!rsid) return;
-      this.markers.push([rsid, chromosome, Number(position) || 0, normalizeGenotype(`${allele1}${allele2}`)]);
+    if (this.delimitedSchema.kind === "allele") {
+      const allele1 = parts[this.delimitedSchema.allele1Index] ?? "";
+      const allele2 = parts[this.delimitedSchema.allele2Index] ?? "";
+      this.markers.push([rsid, chromosome, position, normalizeGenotype(`${allele1}${allele2}`)]);
       return;
     }
 
-    const rsid = normalizeRsid(parts[0]);
-    const chromosome = parts[1] ?? "";
-    const position = Number(parts[2] ?? 0);
-    const genotype = parts[3] ?? "--";
-    if (!rsid) return;
+    const genotype = parts[this.delimitedSchema.genotypeIndex] ?? "--";
     this.markers.push([rsid, chromosome, position, normalizeGenotype(genotype)]);
   }
 }
@@ -387,13 +514,66 @@ function parseDnaEntry(fileName: string, bytes: Uint8Array, importedFrom: Import
     : parseTextBytes(fileName, bytes, importedFrom);
 }
 
+function mergeParsedZipEntries(zipFileName: string, parsedEntries: ParsedDnaFile[]): ParsedDnaFile {
+  if (parsedEntries.length === 1) {
+    const entry = parsedEntries[0];
+    const provider = entry.provider === "Unknown" ? detectProvider(zipFileName, "", false) : entry.provider;
+    return provider === entry.provider ? entry : { ...entry, provider };
+  }
+
+  const provider = parsedEntries.find((entry) => entry.provider !== "Unknown")?.provider
+    ?? detectProvider(zipFileName, "", false);
+  const build = parsedEntries.find((entry) => entry.build !== "Unknown")?.build ?? "Unknown";
+  const markers = parsedEntries.flatMap((entry) => entry.markers);
+
+  return {
+    provider,
+    build,
+    markerCount: markers.length,
+    fileName: zipFileName,
+    importedFrom: "zip",
+    markers,
+  };
+}
+
+function parseZipBytes(fileName: string, bytes: Uint8Array): ParsedDnaFile {
+  const entries = unzipSync(bytes);
+  const preferred = Object.entries(entries)
+    .filter(([name]) => !name.endsWith("/") && zipEntryLooksParseable(name))
+    .sort(([leftName, leftBytes], [rightName, rightBytes]) => {
+      const scoreDelta = zipEntryScore(leftName) - zipEntryScore(rightName);
+      if (scoreDelta !== 0) return scoreDelta;
+      return rightBytes.byteLength - leftBytes.byteLength;
+    });
+
+  if (preferred.length === 0) {
+    throw new Error("The zip file did not contain a readable DNA export.");
+  }
+
+  const parsedEntries: ParsedDnaFile[] = [];
+  let firstError: Error | null = null;
+
+  for (const [entryName, entryBytes] of preferred) {
+    try {
+      parsedEntries.push(parseDnaEntry(entryName, entryBytes, "zip"));
+    } catch (error) {
+      firstError ??= error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  if (parsedEntries.length > 0) {
+    return mergeParsedZipEntries(fileName, parsedEntries);
+  }
+
+  throw firstError ?? new Error("The zip file did not contain a readable DNA export.");
+}
+
 export function parseDnaBytes(fileName: string, bytes: Uint8Array): ParsedDnaFile {
   const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
   const isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
 
   if (isZip) {
-    const entry = pickZipEntry(unzipSync(bytes));
-    return parseDnaEntry(entry.name, entry.bytes, "zip");
+    return parseZipBytes(fileName, bytes);
   }
 
   if (isGzip) {

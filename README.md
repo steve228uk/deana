@@ -7,7 +7,7 @@ The project is public and contributor-friendly, but it is not OSI open source un
 ## Features
 
 - Local parsing for `.zip`, `.txt`, `.csv`, `.vcf`, and `.vcf.gz` raw DNA exports.
-- Provider detection for common AncestryDNA, 23andMe, MyHeritage, FamilyTreeDNA, Nebula Genomics, and generic VCF formats.
+- Provider detection for common AncestryDNA, 23andMe, MyHeritage, FamilyTreeDNA, LivingDNA, tellmeGen, SelfDecode, National Geographic Geno/Reich-style tables, Nebula Genomics, and generic VCF formats.
 - IndexedDB-backed local report library.
 - Web worker parsing and local evidence enrichment to keep the UI responsive.
 - Sharded static evidence packs served from `public/evidence-packs`.
