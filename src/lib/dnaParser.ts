@@ -196,24 +196,48 @@ function parseDelimited(fileName: string, text: string, importedFrom: ImportedFr
   const markers: CompactMarker[] = [];
 
   let delimiter = "\t";
-  let headerCols: string[] = [];
-  let headerFound = false;
+  let headerType: "allele" | "genotype" | null = null;
+
+  function parseHeader(rawLine: string): { delimiter: string; columns: string[] } {
+    const nextDelimiter = rawLine.includes("\t") ? "\t" : ",";
+    return {
+      delimiter: nextDelimiter,
+      columns: rawLine.split(nextDelimiter).map((part) => part.trim().replaceAll("\"", "").toLowerCase()),
+    };
+  }
+
+  function detectHeaderType(columns: string[]): "allele" | "genotype" | null {
+    if (columns.includes("allele1") && columns.includes("allele2")) return "allele";
+    if (columns.includes("genotype") || columns.includes("result")) return "genotype";
+    return null;
+  }
 
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    if (line.startsWith("#")) continue;
 
-    if (!headerFound) {
-      delimiter = line.includes("\t") ? "\t" : ",";
-      headerCols = line.split(delimiter).map((part) => part.trim().toLowerCase());
-      headerFound = true;
+    if (line.startsWith("#")) {
+      if (headerType === null) {
+        const possibleHeader = parseHeader(line.replace(/^#\s*/, ""));
+        const detected = detectHeaderType(possibleHeader.columns);
+        if (detected !== null) {
+          delimiter = possibleHeader.delimiter;
+          headerType = detected;
+        }
+      }
+      continue;
+    }
+
+    if (headerType === null) {
+      const header = parseHeader(line);
+      delimiter = header.delimiter;
+      headerType = detectHeaderType(header.columns) ?? "genotype";
       continue;
     }
 
     const parts = line.split(delimiter).map((part) => part.trim().replaceAll("\"", ""));
     if (parts.length < 4) continue;
 
-    if (headerCols.includes("allele1") && headerCols.includes("allele2")) {
+    if (headerType === "allele") {
       const [rawRsid, chromosome, position, allele1, allele2] = parts;
       const rsid = normalizeRsid(rawRsid);
       if (!rsid) continue;
@@ -221,14 +245,12 @@ function parseDelimited(fileName: string, text: string, importedFrom: ImportedFr
       continue;
     }
 
-    if (headerCols.includes("genotype") || headerCols.includes("result")) {
-      const rsid = normalizeRsid(parts[0]);
-      const chromosome = parts[1] ?? "";
-      const position = Number(parts[2] ?? 0);
-      const genotype = parts[3] ?? "--";
-      if (!rsid) continue;
-      markers.push([rsid, chromosome, position, normalizeGenotype(genotype)]);
-    }
+    const rsid = normalizeRsid(parts[0]);
+    const chromosome = parts[1] ?? "";
+    const position = Number(parts[2] ?? 0);
+    const genotype = parts[3] ?? "--";
+    if (!rsid) continue;
+    markers.push([rsid, chromosome, position, normalizeGenotype(genotype)]);
   }
 
   if (markers.length === 0) {
