@@ -19,6 +19,10 @@ interface HomeScreenProps {
   startProcessing: (name: string, parsed: ParsedDnaFile) => void;
 }
 
+function suggestedProfileName(fileName: string): string {
+  return fileName.replace(/\.(?:vcf\.gz|zip|txt|csv|vcf|gz)$/i, "");
+}
+
 function toReportCard(profile: SavedProfileSummary): SavedReportCard {
   return {
     id: profile.id,
@@ -76,7 +80,7 @@ export function HomeScreen({
     try {
       const nextParsed = await parseFile(file);
       setParsed(nextParsed);
-      setProfileName(file.name.replace(/\.[^.]+$/, ""));
+      setProfileName(suggestedProfileName(file.name));
       setModalStep("name-profile");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Parsing failed.");

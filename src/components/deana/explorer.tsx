@@ -899,7 +899,12 @@ function reputePriorityLabel(repute: ReportEntry["repute"]): string {
 }
 
 function formatMagnitude(magnitude: number): string {
-  return Number.isInteger(magnitude) ? String(magnitude) : magnitude.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return Number.isInteger(magnitude)
+    ? String(magnitude)
+    : new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: 2,
+      useGrouping: false,
+    }).format(magnitude);
 }
 
 function evidenceSnapshotItems(entry: StoredReportEntry): Array<{ label: string; value: string }> {

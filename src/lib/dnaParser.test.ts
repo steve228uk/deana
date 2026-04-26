@@ -16,6 +16,22 @@ const nebulaLikeVcf = [
   "chr6\t606\trs666\tA\tC\t.\tPASS\t.\tGT:AD:DP:GQ:PL\t0/0:10,0:10:99:1,2,3",
 ].join("\n");
 
+const gatkHaplotypeCallerVcf = [
+  "##fileformat=VCFv4.2",
+  "##ALT=<ID=NON_REF,Description=\"Represents any possible alternative allele at this location\">",
+  "##GATKCommandLine.HaplotypeCaller=<ID=HaplotypeCaller,Version=3.8-1_MGI-6.2-0-g941feaa,CommandLineOptions=\"analysis_type=HaplotypeCaller input_file=[/mnt/ssd/MegaBOLT_scheduler/tmpDir/272/1/NG1JSQ3L76.mm2.sortdup.bqsr.bam]\">",
+  "##INFO=<ID=DB,Number=0,Type=Flag,Description=\"dbSNP Membership\">",
+  "##contig=<ID=chr1,length=248956422>",
+  "##contig=<ID=chr19,length=58617616>",
+  "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNG1JSQ3L76",
+  "chr1\t13273\trs531730856\tG\tC\t165.77\t.\tAC=1;AF=0.500;AN=2;DB;DP=19\tGT:AD:DP:GQ:PL\t0/1:9,9:18:99:194,0,201",
+  "chr1\t13417\trs777038595\tC\tCGAGA\t286.73\t.\tAC=1;AF=0.500;AN=2;DB;DP=13\tGT:AD:DP:GQ:PL\t0/1:4,8:12:99:324,0,230",
+  "chr1\t16298\trs2747966\tC\tT\t52.77\t.\tAC=1;AF=0.500;AN=2;DB;DP=46\tGT:AD:DP:GQ:PL\t0/1:40,5:45:81:81,0,1203",
+  "chr1\t54712\trs1213680103\tTTTTCTTTC\tT,TTTTC\t590.73\t.\tAC=1,1;AF=0.500,0.500;AN=2;DB;DP=19\tGT:AD:DP:GQ:PL\t1/2:0,6,9:15:99:628,378,395,249,0,222",
+  "chr19\t45411941\trs429358\tT\tC\t999\tPASS\tAC=1;AF=0.5\tGT:AD:DP:GQ:PL\t0/1:12,11:23:99:255,0,255",
+  "chr1\t202\trs777;rs888\tA\tG,<NON_REF>\t999\tPASS\tAC=1;AF=0.5\tGT:AD:DP:GQ:PL\t0/1:8,7,0:15:99:255,0,255",
+].join("\n");
+
 describe("dnaParser", () => {
   it("parses Nebula-like VCF rows into compact markers", () => {
     const parsed = parseDnaText("nebula.vcf", nebulaLikeVcf, "text");
@@ -42,6 +58,47 @@ describe("dnaParser", () => {
     expect(parsed.fileName).toBe("nebula.vcf");
     expect(parsed.markerCount).toBe(6);
     expect(parsed.markers[0]).toEqual(["rs111", "1", 101, "AG"]);
+  });
+
+  it("parses plain GATK HaplotypeCaller VCF files", () => {
+    const parsed = parseDnaText("NG1JSQ3L76.mm2.sortdup.bqsr.hc.vcf", gatkHaplotypeCallerVcf, "text");
+
+    expect(parsed.provider).toBe("Nebula Genomics");
+    expect(parsed.build).toBe("GRCh38");
+    expect(parsed.markers).toEqual([
+      ["rs531730856", "1", 13273, "GC"],
+      ["rs2747966", "1", 16298, "CT"],
+      ["rs429358", "19", 45411941, "TC"],
+      ["rs777", "1", 202, "AG"],
+      ["rs888", "1", 202, "AG"],
+    ]);
+  });
+
+  it("decodes gzip-compressed HaplotypeCaller VCF files by content", () => {
+    const bytes = gzipSync(new TextEncoder().encode(gatkHaplotypeCallerVcf));
+    const parsed = parseDnaBytes("NG1JSQ3L76.mm2.sortdup.bqsr.hc.vcf.gz", bytes);
+
+    expect(parsed.importedFrom).toBe("gzip");
+    expect(parsed.fileName).toBe("NG1JSQ3L76.mm2.sortdup.bqsr.hc.vcf");
+    expect(parsed.markers[0]).toEqual(["rs531730856", "1", 13273, "GC"]);
+    expect(parsed.markers).toContainEqual(["rs429358", "19", 45411941, "TC"]);
+  });
+
+  it("decodes generic .gz files that contain VCF text", () => {
+    const bytes = gzipSync(new TextEncoder().encode(gatkHaplotypeCallerVcf));
+    const parsed = parseDnaBytes("NG1JSQ3L76.mm2.sortdup.bqsr.hc.gz", bytes);
+
+    expect(parsed.importedFrom).toBe("gzip");
+    expect(parsed.fileName).toBe("NG1JSQ3L76.mm2.sortdup.bqsr.hc");
+    expect(parsed.markers[0]).toEqual(["rs531730856", "1", 13273, "GC"]);
+    expect(parsed.provider).toBe("Nebula Genomics");
+  });
+
+  it("detects VCF after a byte order mark and leading whitespace", () => {
+    const parsed = parseDnaText("export.gz", `\ufeff\n  ${gatkHaplotypeCallerVcf}`, "gzip");
+
+    expect(parsed.provider).toBe("Nebula Genomics");
+    expect(parsed.markers[0]).toEqual(["rs531730856", "1", 13273, "GC"]);
   });
 
   it("skips VCF rows that cannot become rsID single-nucleotide genotypes", () => {
