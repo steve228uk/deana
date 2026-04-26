@@ -9,3 +9,5 @@ docs/evidence-candidates/dna-seed-*.json
 docs/evidence-candidates/dna-seed-*/
 docs/evidence-candidates/dna-bulk-*.json
 .evidence-cache/
+.codex
+.vs/
