@@ -1,8 +1,13 @@
 import { Gunzip, unzipSync } from "fflate";
-import type { CompactMarker, ParsedDnaFile, ProviderName } from "../types";
+import { annotateVariantRsids, type DbsnpAnnotationLookup } from "./dbsnpAnnotation";
+import type { CompactMarker, DnaAnnotationStats, DnaParseProgress, GenomeBuild, ParsedDnaFile, ProviderName } from "../types";
 
 type ImportedFrom = ParsedDnaFile["importedFrom"];
 type ParserMode = "unknown" | "vcf" | "delimited";
+interface ParserOptions {
+  annotationLookup?: DbsnpAnnotationLookup;
+  onProgress?: (progress: DnaParseProgress) => void;
+}
 type DelimitedSchema =
   | { delimiter: string; kind: "allele"; idIndex: number; chromosomeIndex: number | null; positionIndex: number | null; allele1Index: number; allele2Index: number }
   | { delimiter: string; kind: "genotype"; idIndex: number; chromosomeIndex: number | null; positionIndex: number | null; genotypeIndex: number };
@@ -11,6 +16,74 @@ const TEXT_CHUNK_SIZE = 1024 * 1024;
 const METADATA_SAMPLE_LIMIT = 12000;
 const ZERO_GENOTYPE_RE = /^0+$/;
 const DASH_GENOTYPE_RE = /^-+$/;
+const MISSING_RSID_VCF_MESSAGE = "That VCF is valid, but its variant rows do not contain rsID identifiers. Deana needs rsIDs to match local evidence.";
+const UNSUPPORTED_ANNOTATION_BUILD_MESSAGE = "That VCF is valid, but its variant rows do not contain rsID identifiers and Deana could not detect a supported GRCh37 or GRCh38 build for local annotation.";
+const GRCH37_REFSEQ_CONTIGS = new Set([
+  "NC_000001.10",
+  "NC_000002.11",
+  "NC_000003.11",
+  "NC_000004.11",
+  "NC_000005.9",
+  "NC_000006.11",
+  "NC_000007.13",
+  "NC_000008.10",
+  "NC_000009.11",
+  "NC_000010.10",
+  "NC_000011.9",
+  "NC_000012.11",
+  "NC_000013.10",
+  "NC_000014.8",
+  "NC_000015.9",
+  "NC_000016.9",
+  "NC_000017.10",
+  "NC_000018.9",
+  "NC_000019.9",
+  "NC_000020.10",
+  "NC_000021.8",
+  "NC_000022.10",
+  "NC_000023.10",
+  "NC_000024.9",
+]);
+const GRCH38_REFSEQ_CONTIGS = new Set([
+  "NC_000001.11",
+  "NC_000002.12",
+  "NC_000003.12",
+  "NC_000004.12",
+  "NC_000005.10",
+  "NC_000006.12",
+  "NC_000007.14",
+  "NC_000008.11",
+  "NC_000009.12",
+  "NC_000010.11",
+  "NC_000011.10",
+  "NC_000012.12",
+  "NC_000013.11",
+  "NC_000014.9",
+  "NC_000015.10",
+  "NC_000016.10",
+  "NC_000017.11",
+  "NC_000018.10",
+  "NC_000019.10",
+  "NC_000020.11",
+  "NC_000021.9",
+  "NC_000022.11",
+  "NC_000023.11",
+  "NC_000024.10",
+]);
+
+export class DnaAnnotationRetryError extends Error {
+  readonly build: GenomeBuild;
+
+  constructor(build: GenomeBuild) {
+    super(MISSING_RSID_VCF_MESSAGE);
+    this.name = "DnaAnnotationRetryError";
+    this.build = build;
+  }
+}
+
+export function annotationRetryBuild(error: unknown): GenomeBuild | null {
+  return error instanceof DnaAnnotationRetryError ? error.build : null;
+}
 
 function normalizeRsid(raw: string): string | null {
   const match = raw.trim().match(/^rs\d+$/i);
@@ -44,12 +117,17 @@ function detectProvider(fileName: string, meta: string, isVcf: boolean): Provide
 
 function detectBuild(meta: string): string {
   const lower = meta.toLowerCase();
+  const refseqContigs = Array.from(meta.matchAll(/\bNC_\d{6}\.\d+\b/gi), ([match]) => match.toUpperCase());
   if (
     lower.includes("build 38") ||
     lower.includes("build38") ||
     lower.includes("grch38") ||
     lower.includes("hg38") ||
-    lower.includes("length=248956422")
+    lower.includes("length=248956422") ||
+    /\bassembly=["']?b38["']?\b/.test(lower) ||
+    /\bb38\b/.test(lower) ||
+    /\bhs38(?:d1)?\b/.test(lower) ||
+    refseqContigs.some((contig) => GRCH38_REFSEQ_CONTIGS.has(contig))
   ) {
     return "GRCh38";
   }
@@ -60,7 +138,11 @@ function detectBuild(meta: string): string {
     lower.includes("grch37") ||
     lower.includes("hg37") ||
     lower.includes("hg19") ||
-    lower.includes("length=249250621")
+    lower.includes("length=249250621") ||
+    /\bassembly=["']?b37["']?\b/.test(lower) ||
+    /\bb37\b/.test(lower) ||
+    /\bhs37d5\b/.test(lower) ||
+    refseqContigs.some((contig) => GRCH37_REFSEQ_CONTIGS.has(contig))
   ) {
     return "GRCh37";
   }
@@ -74,6 +156,10 @@ function detectBuild(meta: string): string {
     return "GRCh36";
   }
   return "Unknown";
+}
+
+function supportedBuild(build: string): GenomeBuild | null {
+  return build === "GRCh37" || build === "GRCh38" ? build : null;
 }
 
 function normalizeGenotype(raw: string): string {
@@ -291,6 +377,9 @@ class DnaTextParser {
   private variantRows = 0;
   private genotypeRows = 0;
   private rsidRows = 0;
+  private annotatedMarkers = 0;
+  private eligibleUnannotatedRows = 0;
+  private unresolvedUnannotatedRows = 0;
   private skippedNonSnvRows = 0;
 
   private delimitedSchema: DelimitedSchema | null = null;
@@ -300,6 +389,7 @@ class DnaTextParser {
   constructor(
     private readonly fileName: string,
     private readonly importedFrom: ImportedFrom,
+    private readonly options: ParserOptions = {},
   ) {
     this.mode = isVcfFileName(fileName) ? "vcf" : "unknown";
   }
@@ -325,7 +415,18 @@ class DnaTextParser {
     const isVcf = this.mode === "vcf" || this.variantRows > 0;
     if (this.markers.length === 0) {
       if (isVcf && this.variantRows > 0 && this.genotypeRows > 0 && this.rsidRows === 0) {
-        throw new Error("That VCF is valid, but its variant rows do not contain rsID identifiers. Deana needs rsIDs to match local evidence.");
+        const detectedBuild = detectBuild(this.metadata);
+        const annotationBuild = supportedBuild(detectedBuild);
+        if (!annotationBuild) {
+          throw new Error(UNSUPPORTED_ANNOTATION_BUILD_MESSAGE);
+        }
+        if (this.options.annotationLookup) {
+          if (this.eligibleUnannotatedRows > 0) {
+            throw new Error(`That VCF is valid and appears to be ${detectedBuild}, but Deana could not annotate any eligible variants from the local dbSNP evidence-pack index.`);
+          }
+          throw new Error(MISSING_RSID_VCF_MESSAGE);
+        }
+        throw new DnaAnnotationRetryError(annotationBuild);
       }
       if (isVcf && this.rsidRows > 0 && this.skippedNonSnvRows > 0) {
         throw new Error("That VCF contains rsIDs, but no called single-nucleotide genotypes Deana can match.");
@@ -337,13 +438,28 @@ class DnaTextParser {
     }
 
     const provider = detectProvider(this.fileName, this.metadata, isVcf);
+    const build = detectBuild(this.metadata);
+    const annotation = this.annotationStats(build);
     return {
       provider,
-      build: detectBuild(this.metadata),
+      build,
       markerCount: this.markers.length,
       fileName: this.fileName,
       importedFrom: this.importedFrom,
       markers: this.markers,
+      ...(annotation ? { annotation } : {}),
+    };
+  }
+
+  private annotationStats(build: string): DnaAnnotationStats | null {
+    const supported = supportedBuild(build);
+    if (!supported || this.eligibleUnannotatedRows === 0) return null;
+    return {
+      build: supported,
+      annotatedMarkers: this.annotatedMarkers,
+      eligibleRows: this.eligibleUnannotatedRows,
+      unannotatedRows: this.unresolvedUnannotatedRows,
+      skippedNonSnvRows: this.skippedNonSnvRows,
     };
   }
 
@@ -392,7 +508,7 @@ class DnaTextParser {
     if (gtIndex < 0) return;
     this.genotypeRows += 1;
 
-    const rsids = ids
+    let rsids = ids
       .split(/[;,]/)
       .map(normalizeRsid)
       .filter((rsid): rsid is string => Boolean(rsid));
@@ -405,6 +521,27 @@ class DnaTextParser {
     if (!genotype) {
       this.skippedNonSnvRows += 1;
       return;
+    }
+
+    if (rsids.length === 0) {
+      this.eligibleUnannotatedRows += 1;
+      const selectedAltAlleles = selectedVcfAltAlleles(sampleValues[gtIndex] ?? "", alt);
+      const annotatedRsids = selectedAltAlleles.flatMap((selectedAlt) =>
+        annotateVariantRsids(
+          this.options.annotationLookup,
+          detectBuild(this.metadata),
+          chromosome,
+          Number(position) || 0,
+          ref,
+          selectedAlt,
+        ),
+      );
+      rsids = Array.from(new Set(annotatedRsids));
+      if (rsids.length === 0) {
+        this.unresolvedUnannotatedRows += 1;
+        return;
+      }
+      this.annotatedMarkers += rsids.length;
     }
 
     for (const rsid of rsids) {
@@ -450,33 +587,62 @@ class DnaTextParser {
   }
 }
 
-function parseTextChunks(fileName: string, importedFrom: ImportedFrom, feed: (parser: DnaTextParser) => void): ParsedDnaFile {
-  const parser = new DnaTextParser(fileName, importedFrom);
+function selectedVcfAltAlleles(gt: string, alt: string): string[] {
+  if (!gt || gt.includes(".")) return [];
+  const alternateAlleles = alt.split(",");
+  const parsedIndexes = gt
+    .split(/[\/|]/)
+    .map((value) => Number.parseInt(value, 10));
+  const selectedIndexes = parsedIndexes.filter((value) => Number.isInteger(value) && value > 0);
+  if (selectedIndexes.length === 0 && parsedIndexes.every((value) => value === 0) && alternateAlleles.length === 1) {
+    return alternateAlleles;
+  }
+  return Array.from(new Set(selectedIndexes.map((index) => alternateAlleles[index - 1]).filter(Boolean)));
+}
+
+function parseTextChunks(
+  fileName: string,
+  importedFrom: ImportedFrom,
+  feed: (parser: DnaTextParser) => void,
+  options: ParserOptions = {},
+): ParsedDnaFile {
+  const parser = new DnaTextParser(fileName, importedFrom, options);
   feed(parser);
   return parser.finish();
 }
 
-export function parseDnaText(fileName: string, text: string, importedFrom: ImportedFrom): ParsedDnaFile {
-  return parseTextChunks(fileName, importedFrom, (parser) => parser.pushText(text));
+export function parseDnaText(
+  fileName: string,
+  text: string,
+  importedFrom: ImportedFrom,
+  options: ParserOptions = {},
+): ParsedDnaFile {
+  return parseTextChunks(fileName, importedFrom, (parser) => parser.pushText(text), options);
 }
 
-function parseTextBytes(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom): ParsedDnaFile {
+function parseTextBytes(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom, options: ParserOptions): ParsedDnaFile {
   return parseTextChunks(fileName, importedFrom, (parser) => {
     const decoder = new TextDecoder();
+    const totalBytes = Math.max(bytes.byteLength, 1);
     for (let offset = 0; offset < bytes.byteLength; offset += TEXT_CHUNK_SIZE) {
       const end = Math.min(offset + TEXT_CHUNK_SIZE, bytes.byteLength);
       parser.pushText(decoder.decode(bytes.subarray(offset, end), { stream: end < bytes.byteLength }));
+      options.onProgress?.({
+        phase: "parsing",
+        percent: Math.round((end / totalBytes) * 100),
+        message: "Parsing markers locally...",
+      });
     }
     const flushed = decoder.decode();
     if (flushed) parser.pushText(flushed);
-  });
+  }, options);
 }
 
 function normalizeGzipError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function parseGzipBytes(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom): ParsedDnaFile {
+function parseGzipBytes(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom, options: ParserOptions): ParsedDnaFile {
   const parsedFileName = stripGzipExtension(fileName);
   return parseTextChunks(parsedFileName, importedFrom, (parser) => {
     const decoder = new TextDecoder();
@@ -490,9 +656,15 @@ function parseGzipBytes(fileName: string, bytes: Uint8Array, importedFrom: Impor
     });
 
     try {
+      const totalBytes = Math.max(bytes.byteLength, 1);
       for (let offset = 0; offset < bytes.byteLength; offset += TEXT_CHUNK_SIZE) {
         const end = Math.min(offset + TEXT_CHUNK_SIZE, bytes.byteLength);
         gunzip.push(bytes.subarray(offset, end), end >= bytes.byteLength);
+        options.onProgress?.({
+          phase: "parsing",
+          percent: Math.round((end / totalBytes) * 100),
+          message: "Decompressing and parsing locally...",
+        });
       }
     } catch (error) {
       throw normalizeGzipError(error);
@@ -504,14 +676,14 @@ function parseGzipBytes(fileName: string, bytes: Uint8Array, importedFrom: Impor
 
     const flushed = decoder.decode();
     if (flushed) parser.pushText(flushed);
-  });
+  }, options);
 }
 
-function parseDnaEntry(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom): ParsedDnaFile {
+function parseDnaEntry(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom, options: ParserOptions): ParsedDnaFile {
   const isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
   return isGzip
-    ? parseGzipBytes(fileName, bytes, importedFrom)
-    : parseTextBytes(fileName, bytes, importedFrom);
+    ? parseGzipBytes(fileName, bytes, importedFrom, options)
+    : parseTextBytes(fileName, bytes, importedFrom, options);
 }
 
 function mergeParsedZipEntries(zipFileName: string, parsedEntries: ParsedDnaFile[]): ParsedDnaFile {
@@ -525,6 +697,16 @@ function mergeParsedZipEntries(zipFileName: string, parsedEntries: ParsedDnaFile
     ?? detectProvider(zipFileName, "", false);
   const build = parsedEntries.find((entry) => entry.build !== "Unknown")?.build ?? "Unknown";
   const markers = parsedEntries.flatMap((entry) => entry.markers);
+  const annotations = parsedEntries.map((entry) => entry.annotation).filter((annotation): annotation is DnaAnnotationStats => Boolean(annotation));
+  const annotation = annotations.length > 0
+    ? {
+        build: annotations[0].build,
+        annotatedMarkers: annotations.reduce((total, item) => total + item.annotatedMarkers, 0),
+        eligibleRows: annotations.reduce((total, item) => total + item.eligibleRows, 0),
+        unannotatedRows: annotations.reduce((total, item) => total + item.unannotatedRows, 0),
+        skippedNonSnvRows: annotations.reduce((total, item) => total + item.skippedNonSnvRows, 0),
+      }
+    : null;
 
   return {
     provider,
@@ -533,10 +715,11 @@ function mergeParsedZipEntries(zipFileName: string, parsedEntries: ParsedDnaFile
     fileName: zipFileName,
     importedFrom: "zip",
     markers,
+    ...(annotation ? { annotation } : {}),
   };
 }
 
-function parseZipBytes(fileName: string, bytes: Uint8Array): ParsedDnaFile {
+function parseZipBytes(fileName: string, bytes: Uint8Array, options: ParserOptions): ParsedDnaFile {
   const entries = unzipSync(bytes);
   const preferred = Object.entries(entries)
     .filter(([name]) => !name.endsWith("/") && zipEntryLooksParseable(name))
@@ -555,7 +738,7 @@ function parseZipBytes(fileName: string, bytes: Uint8Array): ParsedDnaFile {
 
   for (const [entryName, entryBytes] of preferred) {
     try {
-      parsedEntries.push(parseDnaEntry(entryName, entryBytes, "zip"));
+      parsedEntries.push(parseDnaEntry(entryName, entryBytes, "zip", options));
     } catch (error) {
       firstError ??= error instanceof Error ? error : new Error(String(error));
     }
@@ -568,17 +751,17 @@ function parseZipBytes(fileName: string, bytes: Uint8Array): ParsedDnaFile {
   throw firstError ?? new Error("The zip file did not contain a readable DNA export.");
 }
 
-export function parseDnaBytes(fileName: string, bytes: Uint8Array): ParsedDnaFile {
+export function parseDnaBytes(fileName: string, bytes: Uint8Array, options: ParserOptions = {}): ParsedDnaFile {
   const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
   const isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
 
   if (isZip) {
-    return parseZipBytes(fileName, bytes);
+    return parseZipBytes(fileName, bytes, options);
   }
 
   if (isGzip) {
-    return parseDnaEntry(fileName, bytes, "gzip");
+    return parseDnaEntry(fileName, bytes, "gzip", options);
   }
 
-  return parseDnaEntry(fileName, bytes, "text");
+  return parseDnaEntry(fileName, bytes, "text", options);
 }

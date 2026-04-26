@@ -337,7 +337,12 @@ a { color: inherit; }
 .dn-dropzone { display: grid; place-items: center; gap: 10px; min-height: 260px; border: 1.5px dashed var(--dn-line-strong); border-radius: 20px; background: rgba(255, 255, 255, 0.55); padding: 24px; color: var(--dn-muted); }
 .dn-dropzone input { display: none; }
 .dn-dropzone strong { color: var(--dn-forest); }
-.dn-dropzone.is-loading { opacity: 0.75; }
+.dn-parse-status { display: grid; place-items: center; gap: 16px; min-height: 260px; border: 1px solid var(--dn-line); border-radius: 20px; background: rgba(255, 255, 255, 0.68); padding: 32px; color: var(--dn-muted); }
+.dn-parse-status .dn-round-icon { width: 70px; height: 70px; background: var(--dn-mint); color: var(--dn-forest); }
+.dn-parse-status > strong { color: var(--dn-forest); font-size: 1.08rem; }
+.dn-parse-status .dn-linear-progress,
+.dn-parse-status .dn-progress-line { width: min(100%, 440px); }
+.dn-parse-status .dn-progress-line { margin-top: 0; }
 .dn-local-note { color: var(--dn-muted); display: inline-flex; align-items: center; gap: 8px; }
 .dn-parsed-file-card { display: flex; align-items: center; gap: 24px; padding: 24px; border: 1px solid var(--dn-line); border-radius: 20px; text-align: left; background: #fff; }
 .dn-parsed-file-card dl { margin: 0; display: grid; gap: 10px; flex: 1; }

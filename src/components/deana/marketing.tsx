@@ -1,5 +1,5 @@
 import type { DragEvent } from "react";
-import type { EvidenceProgressSnapshot, ParsedDnaFile } from "../../types";
+import type { DnaParseProgress, EvidenceProgressSnapshot, ParsedDnaFile } from "../../types";
 import { DeanaWordmark, Icon } from "./ui";
 
 export const DEANA_GITHUB_URL = "https://github.com/steve228uk/deana";
@@ -176,6 +176,7 @@ export function UploadReportModal({
   parsed,
   profileName = "",
   isParsing = false,
+  parseProgress,
   isSaving = false,
   error,
   onClose,
@@ -188,6 +189,7 @@ export function UploadReportModal({
   parsed?: ParsedDnaFile;
   profileName?: string;
   isParsing?: boolean;
+  parseProgress?: DnaParseProgress | null;
   isSaving?: boolean;
   error?: string | null;
   onClose?: () => void;
@@ -220,7 +222,7 @@ export function UploadReportModal({
   return (
     <div className="dn-modal-backdrop" role="presentation">
       <section className="dn-modal dn-upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title">
-        <button className="dn-icon-button dn-modal-close" onClick={onClose} aria-label="Close"><Icon name="x" /></button>
+        <button className="dn-icon-button dn-modal-close" onClick={onClose} disabled={isParsing} aria-label="Close"><Icon name="x" /></button>
         <DeanaWordmark />
         <div className="dn-modal-stepper" aria-label="Upload steps">
           <span className={step === "name-profile" ? "is-complete" : "is-active"}>{step === "name-profile" ? <Icon name="check" /> : "1"} Upload file</span>
@@ -232,27 +234,47 @@ export function UploadReportModal({
           <>
             <h1 id="upload-modal-title">Upload your DNA export</h1>
             <p className="dn-modal-intro">{isParsing ? "Parsing your file locally..." : "Choose a supported raw DNA export. The file is parsed locally in your browser."}</p>
-            <label
-              className={`dn-dropzone ${isParsing ? "is-loading" : ""}`}
-              onDragEnter={handleDragOver}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-            >
-              <input
-                type="file"
-                accept=".zip,.txt,.csv,.vcf,.vcf.gz,.gz"
-                disabled={isParsing}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) onFileChange?.(file);
-                  event.currentTarget.value = "";
-                }}
-              />
-              <span className="dn-round-icon"><Icon name="upload" /></span>
-              <strong>{isParsing ? "Parsing locally..." : "Drag and drop your file here"}</strong>
-              <span>or click to browse</span>
-              <small>.zip, .txt, .csv, .vcf, .vcf.gz, or .gz VCF</small>
-            </label>
+            {isParsing ? (
+              <div className="dn-parse-status" role="status" aria-live="polite">
+                <span className="dn-round-icon"><Icon name="dna" /></span>
+                <strong>{parseProgress?.message ?? "Parsing locally..."}</strong>
+                <div
+                  className="dn-linear-progress"
+                  aria-label={`${parseProgress?.percent ?? 0}% parsed`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={parseProgress?.percent ?? 0}
+                  role="progressbar"
+                >
+                  <span style={{ width: `${parseProgress?.percent ?? 0}%` }} />
+                </div>
+                <div className="dn-progress-line">
+                  <span>Working locally in this browser</span>
+                  <strong>{parseProgress?.percent ?? 0}%</strong>
+                </div>
+              </div>
+            ) : (
+              <label
+                className="dn-dropzone"
+                onDragEnter={handleDragOver}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+              >
+                <input
+                  type="file"
+                  accept=".zip,.txt,.csv,.vcf,.vcf.gz,.gz"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) onFileChange?.(file);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <span className="dn-round-icon"><Icon name="upload" /></span>
+                <strong>Drag and drop your file here</strong>
+                <span>or click to browse</span>
+                <small>.zip, .txt, .csv, .vcf, .vcf.gz, or .gz VCF</small>
+              </label>
+            )}
             <p className="dn-support-line">Supports common rsID-backed microarray and VCF exports</p>
             <p className="dn-local-note"><Icon name="lock" /> Your file is never uploaded. Everything happens locally.</p>
           </>

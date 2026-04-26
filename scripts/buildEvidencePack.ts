@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -11,6 +12,7 @@ import type {
   EvidencePackRecord,
   EvidenceSourceRole,
   EvidenceTier,
+  GenomeBuild,
   InsightCategory,
   ReputeStatus,
 } from "../src/types";
@@ -21,6 +23,21 @@ const cacheRoot = path.join(repoRoot, ".evidence-cache");
 const packRoot = path.join(repoRoot, "public", "evidence-packs");
 const schemaVersion = 1;
 const shardModulo = 256;
+const dbsnpSources: Record<GenomeBuild, { path: string; url: string }> = {
+  GRCh37: {
+    path: path.join(cacheRoot, "dbsnp", "GRCh37", "dbsnp.vcf.gz"),
+    url: "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh37_latest/refseq_identifiers/GRCh37_latest_dbSNP_all.vcf.gz",
+  },
+  GRCh38: {
+    path: path.join(cacheRoot, "dbsnp", "GRCh38", "dbsnp.vcf.gz"),
+    url: "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_dbSNP_all.vcf.gz",
+  },
+};
+
+function dbsnpSourceReady(build: GenomeBuild): boolean {
+  const source = dbsnpSources[build];
+  return existsSync(source.path) && existsSync(`${source.path}.complete`);
+}
 const defaultVersion = (() => {
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-core`;
@@ -180,6 +197,15 @@ function recordText(records: EvidencePackRecord[]): string {
   return `${JSON.stringify(records.sort((left, right) => left.id.localeCompare(right.id)))}\n`;
 }
 
+function annotationText(rows: DbsnpAnnotationRow[]): string {
+  return `${JSON.stringify(rows.sort((left, right) =>
+    left[0].localeCompare(right[0]) ||
+    left[1] - right[1] ||
+    left[2].localeCompare(right[2]) ||
+    left[3].localeCompare(right[3]),
+  ))}\n`;
+}
+
 function rsidBucket(rsid: string): number {
   const numeric = Number.parseInt(rsid.replace(/^rs/i, ""), 10);
   if (Number.isFinite(numeric)) return numeric % shardModulo;
@@ -195,6 +221,143 @@ function sourceRole(sourceId: string): EvidenceSourceRole {
   if (sourceId === "pubmed") return "citation";
   if (sourceId === "snpedia") return "supplementary";
   return "primary";
+}
+
+type DbsnpAnnotationRow = [chromosome: string, position: number, ref: string, alt: string, rsids: string[]];
+
+function normalizeChromosome(raw: string): string {
+  const refseqMatch = raw.trim().match(/^NC_0*(\d+)\.\d+$/i);
+  if (refseqMatch) {
+    const numeric = Number.parseInt(refseqMatch[1], 10);
+    if (numeric >= 1 && numeric <= 22) return String(numeric);
+    if (numeric === 23) return "X";
+    if (numeric === 24) return "Y";
+  }
+  if (/^NC_012920\.\d+$/i.test(raw.trim())) return "MT";
+  const normalized = raw.trim().replace(/^chr/i, "");
+  if (normalized === "23") return "X";
+  if (normalized === "24") return "Y";
+  if (normalized === "25") return "XY";
+  if (normalized === "26" || /^m(?:t)?$/i.test(normalized)) return "MT";
+  return normalized;
+}
+
+function singleBase(value: string): string | null {
+  const allele = value.trim().toUpperCase();
+  return /^[ACGT]$/.test(allele) ? allele : null;
+}
+
+function evidenceRsids(records: EvidencePackRecord[]): string[] {
+  return Array.from(new Set(records.flatMap((record) => record.markerIds).map(normalizeRsid).filter(Boolean) as string[]))
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids: Set<string>): Promise<DbsnpAnnotationRow[]> {
+  const source = dbsnpSources[build];
+  const child = spawn("bcftools", [
+    "query",
+    "-i",
+    `ID=@${rsidFile}`,
+    "-f",
+    "%CHROM\\t%POS\\t%ID\\t%REF\\t%ALT\\n",
+    source.path,
+  ], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const rows = new Map<string, DbsnpAnnotationRow>();
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+
+  const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+  for await (const line of lines) {
+    const [chromosomeRaw, positionRaw, idsRaw, refRaw, altRaw] = line.split("\t");
+    const chromosome = normalizeChromosome(chromosomeRaw ?? "");
+    const position = Number(positionRaw);
+    const ref = singleBase(refRaw ?? "");
+    if (!chromosome || !Number.isFinite(position) || !ref) continue;
+
+    const rsids = (idsRaw ?? "")
+      .split(/[;,]/)
+      .map(normalizeRsid)
+      .filter((rsid): rsid is string => Boolean(rsid && wantedRsids.has(rsid)));
+    if (rsids.length === 0) continue;
+
+    for (const altValue of (altRaw ?? "").split(",")) {
+      const alt = singleBase(altValue);
+      if (!alt) continue;
+      const key = [chromosome, position, ref, alt].join(":");
+      const existing = rows.get(key);
+      if (existing) {
+        existing[4] = Array.from(new Set([...existing[4], ...rsids])).sort();
+      } else {
+        rows.set(key, [chromosome, position, ref, alt, Array.from(new Set(rsids)).sort()]);
+      }
+    }
+  }
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", resolve);
+  });
+  if (exitCode !== 0) {
+    throw new Error(`bcftools dbSNP query failed for ${build}: ${stderr.trim() || `exit ${exitCode}`}`);
+  }
+
+  return Array.from(rows.values());
+}
+
+async function buildAnnotationIndexes(
+  records: EvidencePackRecord[],
+  targetDir: string,
+  check: boolean,
+  existingManifest: Partial<EvidencePackManifest> | null,
+): Promise<{ indexes: NonNullable<EvidencePackManifest["annotationIndexes"]>; changed: boolean }> {
+  const rsids = evidenceRsids(records);
+  const wantedRsids = new Set(rsids);
+  const rsidFile = path.join(cacheRoot, "dbsnp", "current-evidence-rsids.txt");
+  await mkdir(path.dirname(rsidFile), { recursive: true });
+  await writeFile(rsidFile, `${rsids.join("\n")}\n`);
+
+  const indexes: NonNullable<EvidencePackManifest["annotationIndexes"]> = [];
+  let changed = false;
+  let usedCachedManifest = false;
+
+  for (const build of ["GRCh37", "GRCh38"] as const) {
+    const source = dbsnpSources[build];
+    if (!dbsnpSourceReady(build)) {
+      const existing = existingManifest?.annotationIndexes?.find((index) => index.build === build);
+      if (existing) {
+        indexes.push(existing);
+        usedCachedManifest = true;
+      }
+      continue;
+    }
+
+    const rows = await queryDbsnpRows(build, rsidFile, wantedRsids);
+    const matchedRsids = new Set(rows.flatMap((row) => row[4]));
+    const recordsPath = `annotation/dbsnp-${build.toLowerCase()}.json`;
+    const text = annotationText(rows);
+    changed = (await writeIfChanged(path.join(targetDir, recordsPath), text, check)) || changed;
+    indexes.push({
+      build,
+      recordsPath,
+      recordsSha256: sha256(text),
+      recordCount: rows.length,
+      matchedRsidCount: matchedRsids.size,
+      missingRsidCount: Math.max(0, rsids.length - matchedRsids.size),
+      sourcePath: path.relative(repoRoot, source.path),
+    });
+  }
+
+  if (usedCachedManifest) {
+    console.log("dbSNP source cache missing for one or more builds; preserving existing annotation manifest entries.");
+  }
+
+  return { indexes, changed };
 }
 
 function categoryForClinvar(significance: string): InsightCategory {
@@ -614,6 +777,9 @@ async function main(): Promise<void> {
 
   if (!options.check) {
     await rm(path.join(targetDir, "shards"), { recursive: true, force: true });
+    if (Object.values(dbsnpSources).some((source) => existsSync(source.path))) {
+      await rm(path.join(targetDir, "annotation"), { recursive: true, force: true });
+    }
   }
 
   const shards: NonNullable<EvidencePackManifest["shards"]> = [];
@@ -637,6 +803,8 @@ async function main(): Promise<void> {
   const existingManifest = existsSync(existingManifestPath)
     ? JSON.parse(await readFile(existingManifestPath, "utf8")) as Partial<EvidencePackManifest>
     : null;
+  const annotationResult = await buildAnnotationIndexes(records, targetDir, options.check, existingManifest);
+  changed = annotationResult.changed || changed;
   const generatedAt = existingManifest?.version === options.version ? existingManifest.generatedAt ?? new Date().toISOString() : new Date().toISOString();
   const manifest = {
     version: options.version,
@@ -645,6 +813,7 @@ async function main(): Promise<void> {
     shardStrategy: "rsid-modulo",
     shardModulo,
     shards,
+    ...(annotationResult.indexes.length > 0 ? { annotationIndexes: annotationResult.indexes } : {}),
     recordCount: records.length,
     attribution,
     sources: sourceMetadata.map((source) => ({

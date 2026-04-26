@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { deleteProfile, loadProfileMeta, loadProfileSummaries, saveProfile } from "./lib/storage";
 import { createProfile as buildProfile } from "./lib/profiles";
 import {
+  DnaParseProgress,
   EvidenceProgressSnapshot,
   EvidenceSupplement,
   ParsedDnaFile,
@@ -15,6 +16,7 @@ import { generateReport } from "./lib/reportEngine";
 import { PendingProfileBuild, ProcessingScreen } from "./screens/ProcessingScreen";
 
 type ParserWorkerResponse =
+  | { type: "progress"; progress: DnaParseProgress }
   | { ok: true; data: ParsedDnaFile }
   | { ok: false; error: string };
 
@@ -77,14 +79,21 @@ export default function App() {
     };
   }, []);
 
-  async function parseFile(file: File): Promise<ParsedDnaFile> {
+  async function parseFile(file: File, onProgress?: (progress: DnaParseProgress) => void): Promise<ParsedDnaFile> {
     if (!parserWorkerRef.current) {
       throw new Error("Parser worker is not ready yet.");
     }
 
-    const result = await new Promise<ParserWorkerResponse>((resolve) => {
+    const result = await new Promise<Exclude<ParserWorkerResponse, { type: "progress" }>>((resolve) => {
       parserWorkerRef.current!.onmessage = (event: MessageEvent<ParserWorkerResponse>) => {
-        resolve(event.data);
+        if ("type" in event.data && event.data.type === "progress") {
+          onProgress?.(event.data.progress);
+          return;
+        }
+
+        if ("ok" in event.data) {
+          resolve(event.data);
+        }
       };
 
       parserWorkerRef.current!.postMessage({ file });

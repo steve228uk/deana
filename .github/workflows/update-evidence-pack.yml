@@ -30,11 +30,16 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install variant tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bcftools tabix
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
       - name: Update evidence pack
-        run: bun run evidence:update
+        run: bun run evidence:update:monthly
 
       - name: Check evidence pack
         run: bun run evidence:check
@@ -56,13 +61,14 @@ jobs:
             ## Summary
             - Syncs public evidence source caches.
             - Syncs SNPedia-derived supplementary evidence.
+            - Syncs GRCh37 and GRCh38 dbSNP references for local VCF annotation.
             - Rebuilds the sharded static evidence pack.
-            - Updates evidence-pack manifests, shard checksums, and app pack-version constants when needed.
+            - Updates evidence-pack manifests, shard and annotation checksums, and app pack-version constants when needed.
 
             GWAS sync uses the repository `GWAS_ASSOCIATIONS_URL` variable when it is configured. If the variable is empty, the GWAS source sync step is skipped by the evidence tooling.
 
             ## Checks
-            - `bun run evidence:update`
+            - `bun run evidence:update:monthly`
             - `bun run evidence:check`
             - `bun run test`
             - `bun run build`
