@@ -17,6 +17,7 @@ jobs:
   update-evidence-pack:
     name: Update evidence pack
     runs-on: ubuntu-latest
+    environment: Evidence Packs
     env:
       GWAS_ASSOCIATIONS_URL: ${{ vars.GWAS_ASSOCIATIONS_URL }}
 
