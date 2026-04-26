@@ -52,7 +52,7 @@ export function MarketingFirstVisit({
         <div className="dn-hero-actions">
           <button className="dn-button dn-button--primary dn-button--large" onClick={onUpload}><Icon name="upload" /> Upload your DNA export</button>
         </div>
-        <p className="dn-support-line">Supports .zip, .txt, .csv, .vcf, and .vcf.gz files</p>
+        <p className="dn-support-line">Supports .zip, .txt, .csv, .vcf, .vcf.gz, and .gz VCF files</p>
       </section>
 
       <section className="dn-simple-card dn-steps-card" id="how-it-works" aria-labelledby="how-it-works-title">
@@ -251,7 +251,7 @@ export function UploadReportModal({
               <span className="dn-round-icon"><Icon name="upload" /></span>
               <strong>{isParsing ? "Parsing locally..." : "Drag and drop your file here"}</strong>
               <span>or click to browse</span>
-              <small>.zip, .txt, .csv, .vcf, or .vcf.gz</small>
+              <small>.zip, .txt, .csv, .vcf, .vcf.gz, or .gz VCF</small>
             </label>
             <p className="dn-support-line">Supports AncestryDNA, 23andMe, MyHeritage, FamilyTreeDNA, and VCF exports</p>
             <p className="dn-local-note"><Icon name="lock" /> Your file is never uploaded. Everything happens locally.</p>
@@ -279,7 +279,7 @@ export function UploadReportModal({
               <button className="dn-button dn-button--secondary" onClick={onCancel}>Cancel</button>
               <button className="dn-button dn-button--primary" disabled={isSaving || !profileName.trim()} onClick={onConfirm}><Icon name="upload" /> {isSaving ? "Building report..." : "Save and build report"}</button>
             </div>
-            <p className="dn-support-line">Supports .zip, .txt, .csv, .vcf, .vcf.gz · AncestryDNA, 23andMe, MyHeritage, FamilyTreeDNA, VCF</p>
+            <p className="dn-support-line">Supports .zip, .txt, .csv, .vcf, .vcf.gz, .gz VCF · AncestryDNA, 23andMe, MyHeritage, FamilyTreeDNA, VCF</p>
           </>
         )}
         {error ? <p className="dn-error-text" role="alert">{error}</p> : null}
