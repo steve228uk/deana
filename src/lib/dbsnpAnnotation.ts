@@ -11,7 +11,7 @@ export type DbsnpAnnotationRow = [
 
 export type DbsnpAnnotationLookup = Map<string, string[]>;
 
-function normalizeChromosome(raw: string): string {
+export function normalizeChromosome(raw: string): string {
   const refseqMatch = raw.trim().match(/^NC_0*(\d+)\.\d+$/i);
   if (refseqMatch) {
     const numeric = Number.parseInt(refseqMatch[1], 10);
@@ -84,20 +84,21 @@ export async function fetchDbsnpAnnotationLookup(
     throw new Error("Local evidence pack manifest is not compatible with this app version.");
   }
 
-  const indexes: Partial<Record<GenomeBuild, DbsnpAnnotationRow[]>> = {};
-  for (const index of manifest.annotationIndexes ?? []) {
-    if (build && index.build !== build) continue;
-    const response = await fetchImpl(`${LOCAL_EVIDENCE_PACK_BASE}/${index.recordsPath}`, { cache: "force-cache" });
-    if (!response.ok) {
-      throw new Error(`Local dbSNP annotation index failed with ${response.status}`);
-    }
-    const text = await response.text();
-    const digest = await sha256(text);
-    if (digest !== index.recordsSha256) {
-      throw new Error("Local dbSNP annotation checksum did not match the manifest.");
-    }
-    indexes[index.build] = JSON.parse(text) as DbsnpAnnotationRow[];
-  }
+  const filteredIndexes = (manifest.annotationIndexes ?? []).filter((index) => !build || index.build === build);
+  const indexEntries = await Promise.all(
+    filteredIndexes.map(async (index) => {
+      const response = await fetchImpl(`${LOCAL_EVIDENCE_PACK_BASE}/${index.recordsPath}`, { cache: "force-cache" });
+      if (!response.ok) {
+        throw new Error(`Local dbSNP annotation index failed with ${response.status}`);
+      }
+      const text = await response.text();
+      const digest = await sha256(text);
+      if (digest !== index.recordsSha256) {
+        throw new Error("Local dbSNP annotation checksum did not match the manifest.");
+      }
+      return [index.build, JSON.parse(text) as DbsnpAnnotationRow[]] as const;
+    }),
+  );
 
-  return buildDbsnpAnnotationLookup(indexes);
+  return buildDbsnpAnnotationLookup(Object.fromEntries(indexEntries));
 }

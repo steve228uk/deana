@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { createReadStream } from "node:fs";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
@@ -17,6 +16,7 @@ import type {
   ReputeStatus,
 } from "../src/types";
 import { normalizeConditions } from "../src/lib/normalization";
+import { normalizeChromosome } from "../src/lib/dbsnpAnnotation";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
@@ -225,27 +225,6 @@ function sourceRole(sourceId: string): EvidenceSourceRole {
 
 type DbsnpAnnotationRow = [chromosome: string, position: number, ref: string, alt: string, rsids: string[]];
 
-function normalizeChromosome(raw: string): string {
-  const refseqMatch = raw.trim().match(/^NC_0*(\d+)\.\d+$/i);
-  if (refseqMatch) {
-    const numeric = Number.parseInt(refseqMatch[1], 10);
-    if (numeric >= 1 && numeric <= 22) return String(numeric);
-    if (numeric === 23) return "X";
-    if (numeric === 24) return "Y";
-  }
-  if (/^NC_012920\.\d+$/i.test(raw.trim())) return "MT";
-  const normalized = raw.trim().replace(/^chr/i, "");
-  if (normalized === "23") return "X";
-  if (normalized === "24") return "Y";
-  if (normalized === "25") return "XY";
-  if (normalized === "26" || /^m(?:t)?$/i.test(normalized)) return "MT";
-  return normalized;
-}
-
-function singleBase(value: string): string | null {
-  const allele = value.trim().toUpperCase();
-  return /^[ACGT]$/.test(allele) ? allele : null;
-}
 
 function evidenceRsids(records: EvidencePackRecord[]): string[] {
   return Array.from(new Set(records.flatMap((record) => record.markerIds).map(normalizeRsid).filter(Boolean) as string[]))
@@ -277,7 +256,7 @@ async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids:
     const [chromosomeRaw, positionRaw, idsRaw, refRaw, altRaw] = line.split("\t");
     const chromosome = normalizeChromosome(chromosomeRaw ?? "");
     const position = Number(positionRaw);
-    const ref = singleBase(refRaw ?? "");
+    const ref = singleBaseAllele(refRaw ?? "");
     if (!chromosome || !Number.isFinite(position) || !ref) continue;
 
     const rsids = (idsRaw ?? "")
@@ -287,7 +266,7 @@ async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids:
     if (rsids.length === 0) continue;
 
     for (const altValue of (altRaw ?? "").split(",")) {
-      const alt = singleBase(altValue);
+      const alt = singleBaseAllele(altValue);
       if (!alt) continue;
       const key = [chromosome, position, ref, alt].join(":");
       const existing = rows.get(key);
@@ -772,7 +751,9 @@ async function main(): Promise<void> {
 
   for (const record of records) {
     const bucket = rsidBucket(record.markerIds[0] ?? record.id);
-    buckets.set(bucket, [...(buckets.get(bucket) ?? []), record]);
+    const arr = buckets.get(bucket);
+    if (arr) arr.push(record);
+    else buckets.set(bucket, [record]);
   }
 
   if (!options.check) {
@@ -816,16 +797,13 @@ async function main(): Promise<void> {
     ...(annotationResult.indexes.length > 0 ? { annotationIndexes: annotationResult.indexes } : {}),
     recordCount: records.length,
     attribution,
-    sources: sourceMetadata.map((source) => ({
-      ...source,
-      release: source.id === "clinvar" && checksums.clinvar
-        ? `${source.release}; sha256 ${checksums.clinvar.slice(0, 12)}`
-        : source.id === "gwas" && checksums.gwas
-          ? `${source.release}; sha256 ${checksums.gwas.slice(0, 12)}`
-          : source.id === "snpedia" && checksums.snpedia
-            ? `${source.release}; sha256 ${checksums.snpedia.slice(0, 12)}`
-            : source.release,
-    })),
+    sources: sourceMetadata.map((source) => {
+      const checksum = checksums[source.id as keyof typeof checksums];
+      return {
+        ...source,
+        release: checksum ? `${source.release}; sha256 ${checksum.slice(0, 12)}` : source.release,
+      };
+    }),
   } satisfies EvidencePackManifest;
   changed = (await writeIfChanged(existingManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, options.check)) || changed;
 

@@ -381,6 +381,7 @@ class DnaTextParser {
   private eligibleUnannotatedRows = 0;
   private unresolvedUnannotatedRows = 0;
   private skippedNonSnvRows = 0;
+  private cachedBuild: string | undefined = undefined;
 
   private delimitedSchema: DelimitedSchema | null = null;
   private delimitedDataRows = 0;
@@ -413,16 +414,16 @@ class DnaTextParser {
     }
 
     const isVcf = this.mode === "vcf" || this.variantRows > 0;
+    const build = this.cachedBuild ?? detectBuild(this.metadata);
     if (this.markers.length === 0) {
       if (isVcf && this.variantRows > 0 && this.genotypeRows > 0 && this.rsidRows === 0) {
-        const detectedBuild = detectBuild(this.metadata);
-        const annotationBuild = supportedBuild(detectedBuild);
+        const annotationBuild = supportedBuild(build);
         if (!annotationBuild) {
           throw new Error(UNSUPPORTED_ANNOTATION_BUILD_MESSAGE);
         }
         if (this.options.annotationLookup) {
           if (this.eligibleUnannotatedRows > 0) {
-            throw new Error(`That VCF is valid and appears to be ${detectedBuild}, but Deana could not annotate any eligible variants from the local dbSNP evidence-pack index.`);
+            throw new Error(`That VCF is valid and appears to be ${build}, but Deana could not annotate any eligible variants from the local dbSNP evidence-pack index.`);
           }
           throw new Error(MISSING_RSID_VCF_MESSAGE);
         }
@@ -438,7 +439,6 @@ class DnaTextParser {
     }
 
     const provider = detectProvider(this.fileName, this.metadata, isVcf);
-    const build = detectBuild(this.metadata);
     const annotation = this.annotationStats(build);
     return {
       provider,
@@ -525,11 +525,12 @@ class DnaTextParser {
 
     if (rsids.length === 0) {
       this.eligibleUnannotatedRows += 1;
+      this.cachedBuild ??= detectBuild(this.metadata);
       const selectedAltAlleles = selectedVcfAltAlleles(sampleValues[gtIndex] ?? "", alt);
       const annotatedRsids = selectedAltAlleles.flatMap((selectedAlt) =>
         annotateVariantRsids(
           this.options.annotationLookup,
-          detectBuild(this.metadata),
+          this.cachedBuild,
           chromosome,
           Number(position) || 0,
           ref,
