@@ -82,6 +82,24 @@ function lineLooksLikeVcf(line: string): boolean {
   return line.startsWith("##fileformat=VCF") || /^#CHROM\tPOS\tID\tREF\tALT(?:\t|$)/i.test(line);
 }
 
+function stripCommentPrefix(line: string): string {
+  return line.replace(/^#\s*/, "");
+}
+
+function parseDelimitedHeader(line: string): { delimiter: string; columns: string[] } {
+  const delimiter = line.includes("\t") ? "\t" : ",";
+  return {
+    delimiter,
+    columns: line.split(delimiter).map((part) => part.trim().replaceAll("\"", "").toLowerCase()),
+  };
+}
+
+function detectDelimitedHeaderType(columns: string[]): "allele" | "genotype" | null {
+  if (columns.includes("allele1") && columns.includes("allele2")) return "allele";
+  if (columns.includes("genotype") || columns.includes("result")) return "genotype";
+  return null;
+}
+
 function zipEntryScore(name: string): number {
   const lower = name.toLowerCase();
   if (/(^|\/)(readme|metadata|manifest|license)(\.|$)/.test(lower)) return 20;
@@ -153,8 +171,7 @@ class DnaTextParser {
   private skippedNonSnvRows = 0;
 
   private delimiter = "\t";
-  private headerCols: string[] = [];
-  private delimitedHeaderFound = false;
+  private headerType: "allele" | "genotype" | null = null;
 
   constructor(
     private readonly fileName: string,
@@ -211,7 +228,15 @@ class DnaTextParser {
     if (this.mode === "unknown") {
       if (lineLooksLikeVcf(line)) {
         this.mode = "vcf";
-      } else if (!line.startsWith("#")) {
+      } else if (line.startsWith("#")) {
+        const { delimiter, columns } = parseDelimitedHeader(stripCommentPrefix(line));
+        const detected = detectDelimitedHeaderType(columns);
+        if (detected !== null) {
+          this.mode = "delimited";
+          this.delimiter = delimiter;
+          this.headerType = detected;
+        }
+      } else {
         this.mode = "delimited";
       }
     }
@@ -266,19 +291,29 @@ class DnaTextParser {
   }
 
   private acceptDelimitedLine(line: string): void {
-    if (line.startsWith("#")) return;
+    if (line.startsWith("#")) {
+      if (this.headerType === null) {
+        const { delimiter, columns } = parseDelimitedHeader(stripCommentPrefix(line));
+        const detected = detectDelimitedHeaderType(columns);
+        if (detected !== null) {
+          this.delimiter = delimiter;
+          this.headerType = detected;
+        }
+      }
+      return;
+    }
 
-    if (!this.delimitedHeaderFound) {
-      this.delimiter = line.includes("\t") ? "\t" : ",";
-      this.headerCols = line.split(this.delimiter).map((part) => part.trim().toLowerCase());
-      this.delimitedHeaderFound = true;
+    if (this.headerType === null) {
+      const { delimiter, columns } = parseDelimitedHeader(line);
+      this.delimiter = delimiter;
+      this.headerType = detectDelimitedHeaderType(columns) ?? "genotype";
       return;
     }
 
     const parts = line.split(this.delimiter).map((part) => part.trim().replaceAll("\"", ""));
     if (parts.length < 4) return;
 
-    if (this.headerCols.includes("allele1") && this.headerCols.includes("allele2")) {
+    if (this.headerType === "allele") {
       const [rawRsid, chromosome, position, allele1, allele2] = parts;
       const rsid = normalizeRsid(rawRsid);
       if (!rsid) return;
@@ -286,14 +321,12 @@ class DnaTextParser {
       return;
     }
 
-    if (this.headerCols.includes("genotype") || this.headerCols.includes("result")) {
-      const rsid = normalizeRsid(parts[0]);
-      const chromosome = parts[1] ?? "";
-      const position = Number(parts[2] ?? 0);
-      const genotype = parts[3] ?? "--";
-      if (!rsid) return;
-      this.markers.push([rsid, chromosome, position, normalizeGenotype(genotype)]);
-    }
+    const rsid = normalizeRsid(parts[0]);
+    const chromosome = parts[1] ?? "";
+    const position = Number(parts[2] ?? 0);
+    const genotype = parts[3] ?? "--";
+    if (!rsid) return;
+    this.markers.push([rsid, chromosome, position, normalizeGenotype(genotype)]);
   }
 }
 
