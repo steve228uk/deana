@@ -170,6 +170,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const [deleteThreadError, setDeleteThreadError] = useState<string | null>(null);
   const [panel, setPanel] = useState<ChatPanel | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
   const setMessagesRef = useRef<((messages: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
   latestPropsRef.current = props;
   activeThreadRef.current = activeThread;
@@ -352,7 +353,10 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   }
 
   function storedMessagesFromUi(messages: UIMessage[], assistantMessage?: UIMessage): StoredChatMessage[] {
-    const now = new Date().toISOString();
+    const knownTimes = Object.values(createdAtByMessageRef.current)
+      .map((value) => Date.parse(value))
+      .filter(Number.isFinite);
+    let nextCreatedAtTime = Math.max(Date.now(), ...knownTimes) + 1;
     const assistantText = assistantMessage ? messageText(assistantMessage).trim() : "";
     const assistantTrace = assistantMessage && assistantText && pendingTraceRef.current ? pendingTraceRef.current : null;
     const assistantFindings = assistantMessage && assistantText && pendingFindingsRef.current ? pendingFindingsRef.current : null;
@@ -365,7 +369,8 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         return Boolean(messageText(message).trim() || messageReasoning(message) || traceByMessageRef.current[message.id] || contextFindingsByMessageRef.current[message.id]?.length);
       })
       .map((message) => {
-        const createdAt = createdAtByMessageRef.current[message.id] ?? now;
+        const existingCreatedAt = createdAtByMessageRef.current[message.id];
+        const createdAt = existingCreatedAt ?? new Date(nextCreatedAtTime++).toISOString();
         createdAtByMessageRef.current[message.id] = createdAt;
         const trace = message.id === assistantMessage?.id && assistantTrace ? assistantTrace : traceByMessageRef.current[message.id];
         const contextFindings = message.id === assistantMessage?.id && assistantFindings ? assistantFindings : contextFindingsByMessageRef.current[message.id];
@@ -481,6 +486,13 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   });
   setMessagesRef.current = setMessages;
   const isBusy = status === "submitted" || status === "streaming";
+  const messageScrollSignal = useMemo(() => messages
+    .map((message) => {
+      const text = messageText(message);
+      const reasoning = messageReasoning(message) ?? "";
+      return `${message.id}:${message.role}:${text.length}:${reasoning.length}`;
+    })
+    .join("|"), [messages]);
 
   useEffect(() => {
     const pendingText = pendingSendRef.current;
@@ -488,6 +500,15 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     pendingSendRef.current = null;
     void sendPreparedMessage(pendingText);
   }, [activeThread?.id]);
+
+  useEffect(() => {
+    const node = messagesRef.current;
+    if (!node) return;
+    const frameId = window.requestAnimationFrame(() => {
+      node.scrollTop = node.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [messageScrollSignal, status, searchStatus.status, error?.message]);
 
   function resizeInput() {
     const node = inputRef.current;
@@ -653,7 +674,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
           <AiConsent onAccept={() => void acceptConsent()} />
         ) : (
           <>
-            <div className="dn-ai-messages" aria-live="polite">
+            <div className="dn-ai-messages" ref={messagesRef} aria-live="polite">
               {messages.length === 0 ? (
                 <div className="dn-ai-empty">
                   <span className="dn-ai-empty__icon" aria-hidden="true">
@@ -1078,7 +1099,6 @@ function ChatMessage({
 
   return (
     <article className={`dn-ai-message dn-ai-message--${role}`}>
-      <span>{role === "user" ? "You" : "Deana AI"}</span>
       {hasReasoning && role === "assistant" ? <ModelReasoning reasoning={reasoningSummary ?? ""} /> : null}
       {content ? (
         <ReactMarkdown

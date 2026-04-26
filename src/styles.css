@@ -784,21 +784,23 @@ a { color: inherit; }
   display: grid;
   gap: 8px;
   width: min(100%, 715px);
-  margin: 0 auto 14px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid var(--dn-line);
-  background: #fff;
+  margin: 0 auto 20px;
 }
 .dn-ai-message--user {
+  width: fit-content;
+  max-width: min(100%, 715px);
+  margin-top: 10px;
+  margin-left: auto;
+  margin-right: max(0px, calc((100% - 715px) / 2));
+  margin-bottom: 24px;
+  padding: 12px 14px;
+  border: 1px solid var(--dn-eucalyptus);
+  border-radius: 12px;
   background: var(--dn-mint);
-  border-color: var(--dn-eucalyptus);
 }
-.dn-ai-message > span {
-  color: var(--dn-muted);
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-transform: uppercase;
+.dn-ai-message--user + .dn-ai-message--assistant,
+.dn-ai-message--assistant + .dn-ai-message--user {
+  margin-top: 10px;
 }
 .dn-ai-message p,
 .dn-ai-message ul,
@@ -992,15 +994,22 @@ a { color: inherit; }
 .dn-ai-findings-panel,
 .dn-ai-inspector-panel {
   display: grid;
-  gap: 18px;
+  gap: 30px;
   padding: 18px;
 }
-.dn-ai-findings-panel h3 { margin: 0 0 8px; color: var(--dn-ink); }
+.dn-ai-findings-panel section {
+  display: grid;
+  gap: 14px;
+}
+.dn-ai-findings-panel .dn-eyebrow {
+  margin-bottom: 2px;
+}
+.dn-ai-findings-panel h3 { margin: 0; color: var(--dn-ink); }
 .dn-ai-findings-panel p { margin: 0; color: var(--dn-muted); line-height: 1.5; }
 .dn-ai-findings-panel dl {
   display: grid;
-  gap: 8px;
-  margin: 14px 0 0;
+  gap: 12px;
+  margin: 2px 0 0;
 }
 .dn-ai-findings-panel dl > div {
   display: grid;
@@ -1009,7 +1018,7 @@ a { color: inherit; }
 }
 .dn-ai-findings-panel dt { color: var(--dn-ink); font-weight: 600; }
 .dn-ai-findings-panel dd { margin: 0; color: var(--dn-muted); overflow-wrap: anywhere; }
-.dn-ai-finding-list { display: grid; gap: 8px; }
+.dn-ai-finding-list { display: grid; gap: 10px; }
 .dn-ai-finding-list button {
   display: grid;
   gap: 4px;

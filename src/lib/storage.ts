@@ -427,6 +427,13 @@ function replaceMessagesForThread(store: IDBObjectStore, threadId: string, messa
   });
 }
 
+export function compareStoredChatMessages(left: StoredChatMessage, right: StoredChatMessage): number {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) return createdAtComparison;
+  if (left.role !== right.role) return left.role === "user" ? -1 : 1;
+  return left.id.localeCompare(right.id);
+}
+
 function writeNormalizedProfile(transaction: IDBTransaction, profile: SavedProfile): Promise<void> {
   const metaStore = transaction.objectStore(PROFILE_META_STORE);
   const dnaStore = transaction.objectStore(PROFILE_DNA_STORE);
@@ -719,7 +726,7 @@ export async function loadChatMessages(threadId: string): Promise<StoredChatMess
     .getAll(threadId) as IDBRequest<StoredChatMessage[]>;
   const records = await requestToPromise(request);
 
-  return records.slice().sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  return records.slice().sort(compareStoredChatMessages);
 }
 
 export async function saveChatMessages(threadId: string, messages: StoredChatMessage[]): Promise<void> {
