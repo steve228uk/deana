@@ -1798,6 +1798,26 @@
       "bucket": 255
     }
   ],
+  "annotationIndexes": [
+    {
+      "build": "GRCh37",
+      "recordsPath": "annotation/dbsnp-grch37.json",
+      "recordsSha256": "a6c15372e7d2434937acf286f1ad2f9cde7cbf07fc766e9938bb71109abdb7b0",
+      "recordCount": 203347,
+      "matchedRsidCount": 90692,
+      "missingRsidCount": 12697,
+      "sourcePath": ".evidence-cache/dbsnp/GRCh37/dbsnp.vcf.gz"
+    },
+    {
+      "build": "GRCh38",
+      "recordsPath": "annotation/dbsnp-grch38.json",
+      "recordsSha256": "9901eb73fe1a4eb07d64bcb1e88e54f41d5ed7f34482e8509841bd466ccfa6a9",
+      "recordCount": 206160,
+      "matchedRsidCount": 90693,
+      "missingRsidCount": 12696,
+      "sourcePath": ".evidence-cache/dbsnp/GRCh38/dbsnp.vcf.gz"
+    }
+  ],
   "recordCount": 154601,
   "attribution": "Local Deana evidence pack built from public ClinVar, CPIC, GWAS Catalog, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.",
   "sources": [

@@ -15,6 +15,7 @@ export type ProviderName =
   | "VCF"
   | "Unknown";
 
+export type GenomeBuild = "GRCh37" | "GRCh38";
 export type InsightCategory = "medical" | "traits" | "drug";
 export type ExplorerTab = "overview" | "medical" | "traits" | "drug" | "ai";
 export type InsightTone = "neutral" | "good" | "caution";
@@ -29,6 +30,20 @@ export type EvidenceSourceRole = "primary" | "frequency-context" | "citation" | 
 
 export type CompactMarker = [rsid: string, chromosome: string, position: number, genotype: string];
 
+export interface DnaAnnotationStats {
+  build: GenomeBuild;
+  annotatedMarkers: number;
+  eligibleRows: number;
+  unannotatedRows: number;
+  skippedNonSnvRows: number;
+}
+
+export interface DnaParseProgress {
+  phase: "reading" | "parsing" | "annotating" | "complete";
+  percent: number;
+  message: string;
+}
+
 export interface ParsedDnaFile {
   provider: ProviderName;
   build: string;
@@ -36,6 +51,7 @@ export interface ParsedDnaFile {
   fileName: string;
   importedFrom: "zip" | "gzip" | "text";
   markers: CompactMarker[];
+  annotation?: DnaAnnotationStats;
 }
 
 export interface EvidenceSource {
@@ -63,6 +79,16 @@ export interface EvidencePackManifest {
     recordsSha256: string;
     recordCount: number;
     bucket: number;
+  }>;
+  annotationIndexes?: Array<{
+    build: GenomeBuild;
+    recordsPath: string;
+    recordsSha256: string;
+    recordCount: number;
+    matchedRsidCount: number;
+    missingRsidCount: number;
+    sourcePath: string;
+    sourceSha256?: string;
   }>;
   recordCount?: number;
   attribution: string;

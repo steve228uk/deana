@@ -9,12 +9,12 @@ import {
   SavedReportCard,
   UploadReportModal,
 } from "../components/deana/marketing";
-import { ParsedDnaFile, SavedProfileSummary } from "../types";
+import { DnaParseProgress, ParsedDnaFile, SavedProfileSummary } from "../types";
 
 interface HomeScreenProps {
   profiles: SavedProfileSummary[];
   isLibraryReady: boolean;
-  parseFile: (file: File) => Promise<ParsedDnaFile>;
+  parseFile: (file: File, onProgress?: (progress: DnaParseProgress) => void) => Promise<ParsedDnaFile>;
   removeProfile: (id: string) => Promise<void>;
   startProcessing: (name: string, parsed: ParsedDnaFile) => void;
 }
@@ -53,6 +53,7 @@ export function HomeScreen({
   const [profileName, setProfileName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isParsing, setIsParsing] = useState(false);
+  const [parseProgress, setParseProgress] = useState<DnaParseProgress | null>(null);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [reportPendingRemoval, setReportPendingRemoval] = useState<SavedReportCard | null>(null);
   const [isRemovingReport, setIsRemovingReport] = useState(false);
@@ -63,6 +64,7 @@ export function HomeScreen({
     setParsed(null);
     setProfileName("");
     setError(null);
+    setParseProgress(null);
   }
 
   function closeUpload() {
@@ -71,14 +73,19 @@ export function HomeScreen({
     setParsed(null);
     setProfileName("");
     setError(null);
+    setParseProgress(null);
   }
 
   async function handleFile(file: File) {
+    if (isParsing) return;
+
     setIsParsing(true);
     setError(null);
+    setParseProgress({ phase: "reading", percent: 2, message: "Preparing local parser..." });
 
     try {
-      const nextParsed = await parseFile(file);
+      const nextParsed = await parseFile(file, setParseProgress);
+      setParseProgress({ phase: "complete", percent: 100, message: "Finished parsing locally." });
       setParsed(nextParsed);
       setProfileName(suggestedProfileName(file.name));
       setModalStep("name-profile");
@@ -149,6 +156,7 @@ export function HomeScreen({
           parsed={parsed ?? undefined}
           profileName={profileName}
           isParsing={isParsing}
+          parseProgress={parseProgress}
           error={error}
           onClose={closeUpload}
           onCancel={closeUpload}

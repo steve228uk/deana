@@ -1,6 +1,7 @@
 import { gzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { parseDnaBytes, parseDnaText } from "./dnaParser";
+import { buildDbsnpAnnotationLookup } from "./dbsnpAnnotation";
+import { annotationRetryBuild, parseDnaBytes, parseDnaText } from "./dnaParser";
 
 const nebulaLikeVcf = [
   "##fileformat=VCFv4.2",
@@ -129,8 +130,153 @@ describe("dnaParser", () => {
       "MT\t150\t.\tC\tT\t.\tPASS\t.\tGT\t0\t0",
     ].join("\n");
 
-    expect(() => parseDnaText("ALL.chrMT.phase3.vcf", vcf, "text")).toThrow(
-      "variant rows do not contain rsID identifiers",
+    let error: unknown;
+    try {
+      parseDnaText("ALL.chrMT.phase3.vcf", vcf, "text");
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("variant rows do not contain rsID identifiers");
+    expect(annotationRetryBuild(error)).toBe("GRCh37");
+  });
+
+  it("annotates unannotated GRCh37 VCF rows from a local dbSNP index", () => {
+    const annotationLookup = buildDbsnpAnnotationLookup({
+      GRCh37: [["19", 45411941, "T", "C", ["rs429358"]]],
+    });
+    const vcf = [
+      "##fileformat=VCFv4.2",
+      "##reference=GRCh37",
+      "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+      "19\t45411941\t.\tT\tC\t.\tPASS\t.\tGT\t0/1",
+    ].join("\n");
+
+    const parsed = parseDnaText("grch37.vcf", vcf, "text", { annotationLookup });
+
+    expect(parsed.build).toBe("GRCh37");
+    expect(parsed.markers).toEqual([["rs429358", "19", 45411941, "TC"]]);
+    expect(parsed.annotation).toEqual({
+      build: "GRCh37",
+      annotatedMarkers: 1,
+      eligibleRows: 1,
+      unannotatedRows: 0,
+      skippedNonSnvRows: 0,
+    });
+  });
+
+  it("detects b37 mitochondrial VCF metadata and annotates matching unannotated rows", () => {
+    const annotationLookup = buildDbsnpAnnotationLookup({
+      GRCh37: [["MT", 73, "A", "G", ["rs869183622"]]],
+    });
+    const vcf = [
+      "##fileformat=VCFv4.2",
+      "##reference=gi|251831106|ref|NC_012920.1| Homo sapiens mitochondrion, complete genome",
+      "##contig=<ID=MT,length=16569,assembly=b37>",
+      "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tHG00096\tHG00097",
+      "MT\t73\t.\tA\tG\t.\tPASS\t.\tGT\t0\t1",
+    ].join("\n");
+
+    const parsed = parseDnaText("ALL.chrMT.phase3.vcf", vcf, "text", { annotationLookup });
+
+    expect(parsed.build).toBe("GRCh37");
+    expect(parsed.markers).toEqual([["rs869183622", "MT", 73, "AA"]]);
+    expect(parsed.annotation).toEqual({
+      build: "GRCh37",
+      annotatedMarkers: 1,
+      eligibleRows: 1,
+      unannotatedRows: 0,
+      skippedNonSnvRows: 0,
+    });
+  });
+
+  it("annotates unannotated GRCh38 VCF rows from a local dbSNP index", () => {
+    const annotationLookup = buildDbsnpAnnotationLookup({
+      GRCh38: [["19", 44908684, "T", "C", ["rs429358"]]],
+    });
+    const vcf = [
+      "##fileformat=VCFv4.2",
+      "##reference=GRCh38",
+      "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+      "chr19\t44908684\t.\tT\tC\t.\tPASS\t.\tGT\t1/1",
+    ].join("\n");
+
+    const parsed = parseDnaText("grch38.vcf", vcf, "text", { annotationLookup });
+
+    expect(parsed.build).toBe("GRCh38");
+    expect(parsed.markers).toEqual([["rs429358", "19", 44908684, "CC"]]);
+    expect(parsed.annotation?.build).toBe("GRCh38");
+  });
+
+  it("detects b38 and RefSeq GRCh38 VCF metadata for local annotation", () => {
+    const annotationLookup = buildDbsnpAnnotationLookup({
+      GRCh38: [["1", 101, "A", "G", ["rs101"]]],
+    });
+    const b38Vcf = [
+      "##fileformat=VCFv4.2",
+      "##contig=<ID=1,length=248956422,assembly=b38>",
+      "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+      "1\t101\t.\tA\tG\t.\tPASS\t.\tGT\t0/1",
+    ].join("\n");
+    const refseqVcf = [
+      "##fileformat=VCFv4.2",
+      "##contig=<ID=NC_000001.11,length=248956422>",
+      "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+      "1\t101\t.\tA\tG\t.\tPASS\t.\tGT\t0/1",
+    ].join("\n");
+
+    expect(parseDnaText("b38.vcf", b38Vcf, "text", { annotationLookup }).build).toBe("GRCh38");
+    expect(parseDnaText("refseq.vcf", refseqVcf, "text", { annotationLookup }).build).toBe("GRCh38");
+  });
+
+  it("fails unannotated VCF rows clearly when the build is unknown", () => {
+    const annotationLookup = buildDbsnpAnnotationLookup({
+      GRCh37: [["19", 45411941, "T", "C", ["rs429358"]]],
+    });
+    const vcf = [
+      "##fileformat=VCFv4.2",
+      "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+      "19\t45411941\t.\tT\tC\t.\tPASS\t.\tGT\t0/1",
+    ].join("\n");
+
+    expect(() => parseDnaText("unknown-build.vcf", vcf, "text", { annotationLookup })).toThrow(
+      "could not detect a supported GRCh37 or GRCh38 build",
+    );
+  });
+
+  it("does not request annotation retry for unannotated VCF rows with unknown build", () => {
+    const vcf = [
+      "##fileformat=VCFv4.2",
+      "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+      "19\t45411941\t.\tT\tC\t.\tPASS\t.\tGT\t0/1",
+    ].join("\n");
+
+    let error: unknown;
+    try {
+      parseDnaText("unknown-build.vcf", vcf, "text");
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("could not detect a supported GRCh37 or GRCh38 build");
+    expect(annotationRetryBuild(error)).toBeNull();
+  });
+
+  it("fails unannotated VCF rows clearly when no local annotation rows match", () => {
+    const annotationLookup = buildDbsnpAnnotationLookup({
+      GRCh37: [["19", 45411941, "T", "C", ["rs429358"]]],
+    });
+    const vcf = [
+      "##fileformat=VCFv4.2",
+      "##contig=<ID=MT,length=16569,assembly=b37>",
+      "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+      "MT\t73\t.\tA\tG\t.\tPASS\t.\tGT\t0/1",
+    ].join("\n");
+
+    expect(() => parseDnaText("unmatched.vcf", vcf, "text", { annotationLookup })).toThrow(
+      "appears to be GRCh37",
     );
   });
 

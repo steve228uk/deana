@@ -137,6 +137,14 @@ bun run evidence:snpedia:sync
 bun run evidence:pack:build
 ```
 
+The monthly automation also refreshes dbSNP references for GRCh37 and GRCh38 so unannotated VCF imports can be annotated locally against evidence-relevant rsIDs:
+
+```bash
+bun run evidence:update:monthly
+```
+
+That command downloads large NCBI dbSNP VCFs into `.evidence-cache/dbsnp`, maps them against the current evidence pack, and writes compact annotation indexes into the checked-in static pack. The full dbSNP files stay out of git.
+
 Source caches are written under `.evidence-cache`, which is intentionally ignored. Generated candidate dumps under `docs/evidence-candidates` are also ignored. The shipped static pack in `public/evidence-packs` is tracked because the browser app serves it directly.
 
 GWAS sync is optional unless a current association export URL is supplied. The sync script accepts the current GWAS Catalog ZIP release and extracts the associations TSV into `.evidence-cache/gwas/associations.tsv`:
