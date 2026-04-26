@@ -517,30 +517,30 @@ function FindingDetailContent({
       <p className="dn-eyebrow">Inspector</p>
       <Title id={titleId}>{finding.title}</Title>
       <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
-      {summary ? <p className="dn-inspector__intro">{summary}</p> : null}
+      {summary ? <div className="dn-inspector__intro">{renderMarkdown(summary)}</div> : null}
       {finding.detail.trim() ? (
         <section>
           <h3>Details</h3>
-          <p>{finding.detail}</p>
+          {renderMarkdown(finding.detail)}
         </section>
       ) : null}
       <section>
         <h3>Genotype found</h3>
-        <p>{finding.genotypeSummary}</p>
+        {renderMarkdown(finding.genotypeSummary)}
       </section>
       <section>
         <h3>Why it matters</h3>
-        <p>{finding.whyItMatters}</p>
+        {renderMarkdown(finding.whyItMatters)}
       </section>
       <section>
         <h3>Confidence / evidence</h3>
-        <p>{finding.confidenceNote}</p>
+        {renderMarkdown(finding.confidenceNote)}
       </section>
       {finding.warnings.length > 0 ? (
         <section>
           <h3>Warnings</h3>
           <ul>
-            {finding.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+            {finding.warnings.map((warning) => <li key={warning}>{renderMarkdownInline(warning)}</li>)}
           </ul>
         </section>
       ) : null}
@@ -560,7 +560,7 @@ function FindingDetailContent({
         <section>
           <h3>Source details</h3>
           <ul>
-            {finding.sourceNotes.map((note) => <li key={note}>{note}</li>)}
+            {finding.sourceNotes.map((note) => <li key={note}>{renderMarkdownInline(note)}</li>)}
           </ul>
         </section>
       ) : null}
@@ -568,6 +568,102 @@ function FindingDetailContent({
       <div className="dn-callout dn-callout--success"><Icon name="lock" /> Private by design. Your DNA stays on this device.</div>
     </>
   );
+}
+
+function renderMarkdown(value: string): ReactNode {
+  const normalized = value.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return null;
+
+  const lines = normalized.split("\n");
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) {
+      index += 1;
+      continue;
+    }
+
+    const unorderedMatch = /^[-*]\s+(.+)$/.exec(line);
+    if (unorderedMatch) {
+      const items: ReactNode[] = [];
+      while (index < lines.length) {
+        const itemLine = lines[index].trim();
+        const itemMatch = /^[-*]\s+(.+)$/.exec(itemLine);
+        if (!itemMatch) break;
+        items.push(<li key={`markdown-li-${index}`}>{renderMarkdownInline(itemMatch[1])}</li>);
+        index += 1;
+      }
+      blocks.push(<ul key={`markdown-ul-${index}`}>{items}</ul>);
+      continue;
+    }
+
+    const orderedMatch = /^(\d+)\.\s+(.+)$/.exec(line);
+    if (orderedMatch) {
+      const items: ReactNode[] = [];
+      while (index < lines.length) {
+        const itemLine = lines[index].trim();
+        const itemMatch = /^(\d+)\.\s+(.+)$/.exec(itemLine);
+        if (!itemMatch) break;
+        items.push(<li key={`markdown-ol-li-${index}`}>{renderMarkdownInline(itemMatch[2])}</li>);
+        index += 1;
+      }
+      blocks.push(<ol key={`markdown-ol-${index}`}>{items}</ol>);
+      continue;
+    }
+
+    const paragraphLines: string[] = [];
+    while (index < lines.length) {
+      const paragraphLine = lines[index].trim();
+      if (!paragraphLine) break;
+      if (/^[-*]\s+/.test(paragraphLine) || /^\d+\.\s+/.test(paragraphLine)) break;
+      paragraphLines.push(paragraphLine);
+      index += 1;
+    }
+    blocks.push(<p key={`markdown-p-${index}`}>{renderMarkdownInline(paragraphLines.join(" "))}</p>);
+  }
+
+  return blocks;
+}
+
+function renderMarkdownInline(value: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  const pattern = /(\[[^\]]+\]\([^)]+\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g;
+  let lastIndex = 0;
+
+  for (const match of value.matchAll(pattern)) {
+    const token = match[0];
+    const tokenIndex = match.index ?? 0;
+    if (tokenIndex > lastIndex) {
+      nodes.push(value.slice(lastIndex, tokenIndex));
+    }
+
+    if (token.startsWith("[") && token.includes("](") && token.endsWith(")")) {
+      const label = token.slice(1, token.indexOf("]("));
+      const url = token.slice(token.indexOf("](") + 2, -1).trim();
+      nodes.push(
+        <a key={`${tokenIndex}-${url}`} href={url} target="_blank" rel="noreferrer">
+          {label}
+        </a>,
+      );
+    } else if ((token.startsWith("**") && token.endsWith("**")) || (token.startsWith("__") && token.endsWith("__"))) {
+      nodes.push(<strong key={tokenIndex}>{token.slice(2, -2)}</strong>);
+    } else if ((token.startsWith("*") && token.endsWith("*")) || (token.startsWith("_") && token.endsWith("_"))) {
+      nodes.push(<em key={tokenIndex}>{token.slice(1, -1)}</em>);
+    } else if (token.startsWith("`") && token.endsWith("`")) {
+      nodes.push(<code key={tokenIndex}>{token.slice(1, -1)}</code>);
+    } else {
+      nodes.push(token);
+    }
+    lastIndex = tokenIndex + token.length;
+  }
+
+  if (lastIndex < value.length) {
+    nodes.push(value.slice(lastIndex));
+  }
+
+  return nodes.length > 0 ? nodes : value;
 }
 
 function FilterSelect({
