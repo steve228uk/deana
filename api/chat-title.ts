@@ -1,7 +1,8 @@
 import { createGateway } from "@ai-sdk/gateway";
 import { generateText } from "ai";
 import { z } from "zod";
-import { DEFAULT_DEANA_LLM_MODEL } from "../src/lib/aiChat";
+import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth";
+import { buildGatewayProviderOptions, DEFAULT_DEANA_LLM_MODEL, formatChatTitle } from "../src/lib/aiChat";
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -14,10 +15,6 @@ export const config = {
 const MAX_BODY_BYTES = 3_000;
 const selectedModel = process.env.DEANA_LLM_MODEL ?? DEFAULT_DEANA_LLM_MODEL;
 
-const gateway = createGateway({
-  apiKey: process.env.AI_GATEWAY_API_KEY ?? process.env.VERCEL_OIDC_TOKEN,
-});
-
 const titleRequestSchema = z.object({
   prompt: z.string().min(1).max(2_000),
 });
@@ -26,60 +23,12 @@ function jsonResponse(status: number, body: Record<string, unknown>): Response {
   return Response.json(body, { status });
 }
 
-function isSameOrigin(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) return process.env.VERCEL_ENV !== "production";
-
-  try {
-    return new URL(origin).host === new URL(request.url).host;
-  } catch {
-    return false;
-  }
-}
-
-function buildProviderOptions(model: string) {
-  const isGeminiGatewayModel = model.startsWith("google/gemini-");
-  const isOpenAiGatewayModel = model.startsWith("openai/");
-
-  return {
-    ...(isGeminiGatewayModel
-      ? {
-          google: {
-            thinkingLevel: "low",
-            includeThoughts: false,
-          },
-        }
-      : {}),
-    ...(isOpenAiGatewayModel
-      ? {
-          openai: {
-            reasoningEffort: "low",
-          },
-        }
-      : {}),
-    gateway: {
-      zeroDataRetention: true,
-      disallowPromptTraining: true,
-      ...(isGeminiGatewayModel ? { only: ["vertex"] } : {}),
-    },
-  };
-}
-
-function cleanTitle(value: string): string {
-  const title = value
-    .replace(/\s+/g, " ")
-    .replace(/^["']|["']$/g, "")
-    .trim();
-
-  return title.length > 52 ? `${title.slice(0, 49)}...` : title;
-}
-
 export default async function handler(request: Request): Promise<Response> {
   if (request.method !== "POST") {
     return jsonResponse(405, { error: "Method not allowed." });
   }
 
-  if (!isSameOrigin(request)) {
+  if (!isSameOrigin(request, process.env)) {
     return jsonResponse(403, { error: "Title requests must come from this Deana deployment." });
   }
 
@@ -101,6 +50,10 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   try {
+    const gateway = createGateway({
+      apiKey: getGatewayApiKey(request, process.env),
+    });
+
     const result = await generateText({
       model: gateway(selectedModel),
       system: [
@@ -116,10 +69,10 @@ export default async function handler(request: Request): Promise<Response> {
       ].join("\n"),
       prompt: parsed.data.prompt,
       maxOutputTokens: 200,
-      providerOptions: buildProviderOptions(selectedModel),
+      providerOptions: buildGatewayProviderOptions(selectedModel),
     });
 
-    const title = cleanTitle(result.text);
+    const title = formatChatTitle(result.text);
     return jsonResponse(200, { title: title || "New chat" });
   } catch {
     return jsonResponse(503, { error: "AI title generation is unavailable." });

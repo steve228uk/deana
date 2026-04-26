@@ -82,7 +82,7 @@ Production setup:
 
 1. Deploy Deana on Vercel.
 2. Enable AI Gateway for the Vercel project or team.
-3. Use the default Vercel OIDC authentication provided to Vercel Functions. Do not expose AI credentials with a `VITE_` prefix.
+3. Use the default Vercel OIDC authentication provided to Vercel Functions. Deana reads the runtime OIDC token from Vercel's `x-vercel-oidc-token` Function request header, with `VERCEL_OIDC_TOKEN` kept as a local-development fallback. Do not expose AI credentials with a `VITE_` prefix.
 4. Optionally set the model:
 
 ```bash
@@ -116,6 +116,8 @@ DEANA_LLM_MODEL=google/gemini-3-flash
 ```
 
 Never commit `.env.local`, AI keys, raw DNA exports, or generated local evidence caches.
+
+If a preview deployment hides the AI tab or returns a generic chat error, check `/api/ai-status` on that preview URL first. It should return `{"enabled":true}` when Vercel is passing OIDC to the Function. If it returns false, confirm the preview belongs to the same Vercel project with AI Gateway enabled and that project security has OIDC federation enabled.
 
 ## Evidence Packs
 

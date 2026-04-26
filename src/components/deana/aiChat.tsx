@@ -9,6 +9,7 @@ import type { ExplorerFilters } from "../../lib/explorer";
 import {
   buildChatContext,
   CHAT_CONSENT_VERSION,
+  formatChatTitle,
   mergeChatFindings,
   type ChatContextFinding,
   type ChatReportContext,
@@ -95,12 +96,6 @@ function threadTitleFromPrompt(prompt: string): string {
   return title.length > 52 ? `${title.slice(0, 49)}...` : title;
 }
 
-function compactAssistantTitle(value: string): string {
-  const title = value.replace(/\s+/g, " ").trim().replace(/^["']|["']$/g, "");
-  if (!title) return "New chat";
-  return title.length > 52 ? `${title.slice(0, 49)}...` : title;
-}
-
 async function generateThreadTitle(prompt: string): Promise<string | null> {
   const response = await fetch("/api/chat-title", {
     method: "POST",
@@ -110,25 +105,9 @@ async function generateThreadTitle(prompt: string): Promise<string | null> {
 
   if (!response.ok) return null;
   const body = await response.json() as { title?: unknown };
-  return typeof body.title === "string" ? compactAssistantTitle(body.title) : null;
+  return typeof body.title === "string" ? formatChatTitle(body.title) || "New chat" : null;
 }
 
-function contextForProps({
-  profile,
-  currentTab,
-  filters,
-  visibleEntries,
-  selectedEntry,
-}: ExplorerAiChatProps, retrievedFindings?: ChatReportContext["findings"]): ChatReportContext {
-  return buildChatContext({
-    profile,
-    currentTab,
-    filters,
-    visibleEntries,
-    selectedEntry,
-    retrievedFindings,
-  });
-}
 
 function hasToolPart(message: UIMessage): boolean {
   return message.parts.some((part) => part.type.startsWith("tool-"));
@@ -413,7 +392,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
             accepted: true,
             version: CHAT_CONSENT_VERSION,
           },
-          context: contextForProps(latestPropsRef.current, latestFindingsRef.current),
+          context: buildChatContext({ ...latestPropsRef.current, retrievedFindings: latestFindingsRef.current }),
           messages,
         },
       };
@@ -574,7 +553,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       await deleteChatThread(threadPendingRemoval.id);
       const deletedActiveThread = activeThreadRef.current?.id === threadPendingRemoval.id;
       setThreadPendingRemoval(null);
-      const remainingThreads = (await loadChatThreads(props.profile.id)).filter((thread) => thread.id !== threadPendingRemoval.id);
+      const remainingThreads = await loadChatThreads(props.profile.id);
       setThreads(remainingThreads);
       if (deletedActiveThread) {
         const nextThread = remainingThreads[0] ?? null;
@@ -870,58 +849,19 @@ function ThreadList({
   );
 }
 
-function AiSearchCard({ status }: { status: SearchStatus }) {
-  if (status.status === "idle") return null;
-
-  if (status.status === "checking") {
-    return (
-      <div className="dn-ai-search-card">
-        <Icon name="search" />
-        <span>Checking available context...</span>
-      </div>
-    );
-  }
-
-  if (status.status === "searching") {
-    return (
-      <div className="dn-ai-search-card">
-        <Icon name="search" />
-        <span>Searching saved report findings...</span>
-      </div>
-    );
-  }
-
-  if (status.status === "error") {
-    return (
-      <div className="dn-ai-search-card dn-ai-search-card--error">
-        <Icon name="alert" />
-        <span>{status.message}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="dn-ai-search-card">
-      <Icon name="search" />
-      <div>
-        <strong>Searched {status.trace.scannedCategories.join(", ")}</strong>
-        <span>{status.trace.resultCount} matching report findings sent for interpretation.</span>
-        {status.trace.searchedTerms.length > 0 ? <small>{status.trace.searchedTerms.slice(0, 10).join(" · ")}</small> : null}
-      </div>
-    </div>
-  );
-}
-
 function GeneratingStatus({ status }: { status: SearchStatus }) {
-  const detail = status.status === "checking"
-    ? "Checking available context..."
-    : status.status === "searching"
-      ? "Searching saved report findings..."
-      : status.status === "ready"
-        ? `Interpreting ${status.trace.resultCount} matched findings...`
-        : status.status === "error"
-          ? status.message
-          : "Writing response...";
+  let detail: string;
+  if (status.status === "checking") {
+    detail = "Checking available context...";
+  } else if (status.status === "searching") {
+    detail = "Searching saved report findings...";
+  } else if (status.status === "ready") {
+    detail = `Interpreting ${status.trace.resultCount} matched findings...`;
+  } else if (status.status === "error") {
+    detail = status.message;
+  } else {
+    detail = "Writing response...";
+  }
 
   return (
     <div className="dn-ai-status">

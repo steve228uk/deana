@@ -1,7 +1,9 @@
 import { createGateway } from "@ai-sdk/gateway";
 import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { z } from "zod";
+import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth";
 import {
+  buildGatewayProviderOptions,
   CHAT_CONSENT_VERSION,
   CHAT_CONTEXT_VERSION,
   DEFAULT_DEANA_LLM_MODEL,
@@ -25,10 +27,6 @@ const RATE_LIMIT_MAX_REQUESTS = 20;
 
 const requestCounts = new Map<string, { count: number; resetAt: number }>();
 const selectedModel = process.env.DEANA_LLM_MODEL ?? DEFAULT_DEANA_LLM_MODEL;
-
-const gateway = createGateway({
-  apiKey: process.env.AI_GATEWAY_API_KEY ?? process.env.VERCEL_OIDC_TOKEN,
-});
 
 const messagePartSchema = z.object({
   type: z.string(),
@@ -138,17 +136,6 @@ function jsonResponse(status: number, message: string): Response {
   return Response.json({ error: message }, { status });
 }
 
-function isSameOrigin(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) return process.env.VERCEL_ENV !== "production";
-
-  try {
-    return new URL(origin).host === new URL(request.url).host;
-  } catch {
-    return false;
-  }
-}
-
 function isRateLimited(request: Request): boolean {
   const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   const key = forwardedFor || request.headers.get("x-real-ip") || "unknown";
@@ -156,6 +143,11 @@ function isRateLimited(request: Request): boolean {
   const record = requestCounts.get(key);
 
   if (!record || now > record.resetAt) {
+    if (requestCounts.size > 5_000) {
+      for (const [k, r] of requestCounts) {
+        if (now > r.resetAt) requestCounts.delete(k);
+      }
+    }
     requestCounts.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
     return false;
   }
@@ -197,40 +189,13 @@ function buildSystemPrompt(context: z.infer<typeof chatContextSchema>): string {
   ].join("\n\n");
 }
 
-function buildProviderOptions(model: string) {
-  const isGeminiGatewayModel = model.startsWith("google/gemini-");
-  const isOpenAiGatewayModel = model.startsWith("openai/");
-
-  return {
-    ...(isGeminiGatewayModel
-      ? {
-          google: {
-            thinkingLevel: "low",
-            includeThoughts: true,
-          },
-        }
-      : {}),
-    ...(isOpenAiGatewayModel
-      ? {
-          openai: {
-            reasoningEffort: "low",
-          },
-        }
-      : {}),
-    gateway: {
-      zeroDataRetention: true,
-      disallowPromptTraining: true,
-      ...(isGeminiGatewayModel ? { only: ["vertex"] } : {}),
-    },
-  };
-}
 
 export default async function handler(request: Request): Promise<Response> {
   if (request.method !== "POST") {
     return jsonResponse(405, "Method not allowed.");
   }
 
-  if (!isSameOrigin(request)) {
+  if (!isSameOrigin(request, process.env)) {
     return jsonResponse(403, "Chat requests must come from this Deana deployment.");
   }
 
@@ -261,6 +226,10 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   try {
+    const gateway = createGateway({
+      apiKey: getGatewayApiKey(request, process.env),
+    });
+
     const result = streamText({
       model: gateway(selectedModel),
       system: buildSystemPrompt(parsed.data.context),
@@ -276,7 +245,7 @@ export default async function handler(request: Request): Promise<Response> {
         },
       },
       maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-      providerOptions: buildProviderOptions(selectedModel),
+      providerOptions: buildGatewayProviderOptions(selectedModel, true),
     });
 
     return result.toUIMessageStreamResponse({

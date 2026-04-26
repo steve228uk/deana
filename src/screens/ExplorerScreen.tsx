@@ -346,45 +346,43 @@ export function ExplorerScreen({
   }
 
   return (
-    <>
-      <ExplorerShell
-        report={toReportCard(profile)}
-        activeTab={tab}
-        isAiEnabled={isAiEnabled === true}
-        onTabChange={setTab}
-        onBackHome={() => navigate("/")}
-      >
-        {tab === "overview" ? (
-          <OverviewContent profile={profile} onExploreCategory={setTab} />
-        ) : tab === "ai" && isAiEnabled === true ? (
-          <ExplorerAiChat
-            profile={profile}
-            currentTab={tab}
-            filters={filters}
-            visibleEntries={visibleEntries}
-            selectedEntry={selectedEntry}
-          />
-        ) : tab === "ai" ? (
-          <OverviewContent profile={profile} onExploreCategory={setTab} />
-        ) : (
-          <CategoryExplorerContent
-            activeTab={tab}
-            profile={profile}
-            filters={filters}
-            entries={visibleEntries}
-            selectedEntry={selectedEntry}
-            isLoading={isPageLoading}
-            hasMore={hasMore}
-            isLoadingMore={isLoadingMore}
-            isMobileSheetOpen={isMobileSheetOpen}
-            onFilterChange={setFilter}
-            onResetFilters={resetFilters}
-            onSelectEntry={selectCategoryEntry}
-            onCloseMobileSheet={() => setIsMobileSheetOpen(false)}
-            onLoadMore={() => void handleLoadMore()}
-          />
-        )}
-      </ExplorerShell>
-    </>
+    <ExplorerShell
+      report={toReportCard(profile)}
+      activeTab={tab}
+      isAiEnabled={isAiEnabled === true}
+      onTabChange={setTab}
+      onBackHome={() => navigate("/")}
+    >
+      {tab === "overview" ? (
+        <OverviewContent profile={profile} onExploreCategory={setTab} />
+      ) : tab === "ai" && isAiEnabled === true ? (
+        <ExplorerAiChat
+          profile={profile}
+          currentTab={tab}
+          filters={filters}
+          visibleEntries={visibleEntries}
+          selectedEntry={selectedEntry}
+        />
+      ) : tab === "ai" ? (
+        <OverviewContent profile={profile} onExploreCategory={setTab} />
+      ) : (
+        <CategoryExplorerContent
+          activeTab={tab}
+          profile={profile}
+          filters={filters}
+          entries={visibleEntries}
+          selectedEntry={selectedEntry}
+          isLoading={isPageLoading}
+          hasMore={hasMore}
+          isLoadingMore={isLoadingMore}
+          isMobileSheetOpen={isMobileSheetOpen}
+          onFilterChange={setFilter}
+          onResetFilters={resetFilters}
+          onSelectEntry={selectCategoryEntry}
+          onCloseMobileSheet={() => setIsMobileSheetOpen(false)}
+          onLoadMore={() => void handleLoadMore()}
+        />
+      )}
+    </ExplorerShell>
   );
 }

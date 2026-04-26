@@ -49,6 +49,39 @@ export interface ChatContextFinding {
   sourceUrls: string[];
 }
 
+export function formatChatTitle(value: string): string {
+  const title = value.replace(/\s+/g, " ").replace(/^["']|["']$/g, "").trim();
+  return title.length > 52 ? `${title.slice(0, 49)}...` : title;
+}
+
+export function buildGatewayProviderOptions(model: string, includeThoughts = false) {
+  const isGeminiGatewayModel = model.startsWith("google/gemini-");
+  const isOpenAiGatewayModel = model.startsWith("openai/");
+
+  return {
+    ...(isGeminiGatewayModel
+      ? {
+          google: {
+            thinkingLevel: "low",
+            includeThoughts,
+          },
+        }
+      : {}),
+    ...(isOpenAiGatewayModel
+      ? {
+          openai: {
+            reasoningEffort: "low",
+          },
+        }
+      : {}),
+    gateway: {
+      zeroDataRetention: true,
+      disallowPromptTraining: true,
+      ...(isGeminiGatewayModel ? { only: ["vertex"] } : {}),
+    },
+  };
+}
+
 export interface ChatReportContext {
   contextVersion: typeof CHAT_CONTEXT_VERSION;
   currentTab: ExplorerTab;
