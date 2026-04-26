@@ -1,16 +1,20 @@
-import { gunzipSync, strFromU8, unzipSync } from "fflate";
+import { Gunzip, unzipSync } from "fflate";
 import type { CompactMarker, ParsedDnaFile, ProviderName } from "../types";
 
 type ImportedFrom = ParsedDnaFile["importedFrom"];
+type ParserMode = "unknown" | "vcf" | "delimited";
+
+const TEXT_CHUNK_SIZE = 1024 * 1024;
+const METADATA_SAMPLE_LIMIT = 12000;
 
 function normalizeRsid(raw: string): string | null {
   const match = raw.trim().match(/^rs\d+$/i);
   return match ? match[0].toLowerCase() : null;
 }
 
-function metadataSample(text: string): string {
-  const vcfHeaderEnd = text.indexOf("\n#CHROM");
-  return vcfHeaderEnd > 0 ? text.slice(0, vcfHeaderEnd) : text.slice(0, 12000);
+function appendMetadataSample(sample: string, line: string): string {
+  if (sample.length >= METADATA_SAMPLE_LIMIT) return sample;
+  return (sample + line + "\n").slice(0, METADATA_SAMPLE_LIMIT);
 }
 
 function detectProvider(fileName: string, meta: string, isVcf: boolean): ProviderName {
@@ -62,8 +66,20 @@ function singleBaseAllele(raw: string | undefined): string | null {
   return allele && /^[ACGT]$/.test(allele) ? allele : null;
 }
 
-function isVcfText(text: string): boolean {
-  return text.startsWith("##fileformat=VCF") || /(?:^|\r?\n)#CHROM\tPOS\tID\tREF\tALT\t/i.test(text);
+function stripByteOrderMark(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+function stripGzipExtension(fileName: string): string {
+  return fileName.replace(/\.gz$/i, "");
+}
+
+function isVcfFileName(fileName: string): boolean {
+  return /\.vcf(?:\.gz)?$/i.test(fileName);
+}
+
+function lineLooksLikeVcf(line: string): boolean {
+  return line.startsWith("##fileformat=VCF") || /^#CHROM\tPOS\tID\tREF\tALT(?:\t|$)/i.test(line);
 }
 
 function zipEntryScore(name: string): number {
@@ -122,34 +138,113 @@ function genotypeFromVcf(gt: string, ref: string, alt: string): string | null {
   return alleles.join("");
 }
 
-function parseVcf(fileName: string, text: string, importedFrom: ImportedFrom): ParsedDnaFile {
-  const markers: CompactMarker[] = [];
-  let headerFound = false;
-  let variantRows = 0;
-  let genotypeRows = 0;
-  let rsidRows = 0;
-  let skippedNonSnvRows = 0;
+class DnaTextParser {
+  private mode: ParserMode;
+  private metadata = "";
+  private lineCarry = "";
+  private sawContentLine = false;
 
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
+  private readonly markers: CompactMarker[] = [];
 
-    if (line.startsWith("##")) continue;
-    if (line.startsWith("#CHROM")) {
-      headerFound = true;
-      continue;
+  private vcfHeaderFound = false;
+  private variantRows = 0;
+  private genotypeRows = 0;
+  private rsidRows = 0;
+  private skippedNonSnvRows = 0;
+
+  private delimiter = "\t";
+  private headerType: "allele" | "genotype" | null = null;
+
+  constructor(
+    private readonly fileName: string,
+    private readonly importedFrom: ImportedFrom,
+  ) {
+    this.mode = isVcfFileName(fileName) ? "vcf" : "unknown";
+  }
+
+  pushText(text: string): void {
+    if (!text) return;
+
+    const combined = this.lineCarry + text;
+    const lines = combined.split("\n");
+    this.lineCarry = lines.pop() ?? "";
+
+    for (const line of lines) {
+      this.acceptLine(line.endsWith("\r") ? line.slice(0, -1) : line);
     }
-    if (!headerFound) continue;
+  }
+
+  finish(): ParsedDnaFile {
+    if (this.lineCarry) {
+      this.acceptLine(this.lineCarry.endsWith("\r") ? this.lineCarry.slice(0, -1) : this.lineCarry);
+      this.lineCarry = "";
+    }
+
+    const isVcf = this.mode === "vcf" || this.variantRows > 0;
+    if (this.markers.length === 0) {
+      if (isVcf && this.variantRows > 0 && this.genotypeRows > 0 && this.rsidRows === 0) {
+        throw new Error("That VCF is valid, but its variant rows do not contain rsID identifiers. Deana needs rsIDs to match local evidence.");
+      }
+      if (isVcf && this.rsidRows > 0 && this.skippedNonSnvRows > 0) {
+        throw new Error("That VCF contains rsIDs, but no called single-nucleotide genotypes Deana can match.");
+      }
+      throw new Error("No DNA markers could be parsed from that file.");
+    }
+
+    return {
+      provider: detectProvider(this.fileName, this.metadata, isVcf),
+      build: detectBuild(this.metadata),
+      markerCount: this.markers.length,
+      fileName: this.fileName,
+      importedFrom: this.importedFrom,
+      markers: this.markers,
+    };
+  }
+
+  private acceptLine(rawLine: string): void {
+    const line = this.sawContentLine ? rawLine : stripByteOrderMark(rawLine).trimStart();
+    if (!line.trim()) return;
+    this.sawContentLine = true;
+
+    this.metadata = appendMetadataSample(this.metadata, line);
+
+    if (this.mode === "unknown") {
+      if (lineLooksLikeVcf(line)) {
+        this.mode = "vcf";
+      } else if (line.startsWith("#")) {
+        this.acceptDelimitedLine(line);
+        return;
+      } else {
+        this.mode = "delimited";
+      }
+    }
+
+    if (this.mode === "vcf") {
+      this.acceptVcfLine(line);
+      return;
+    }
+
+    this.acceptDelimitedLine(line);
+  }
+
+  private acceptVcfLine(line: string): void {
+    if (line.startsWith("##")) return;
+    if (line.startsWith("#CHROM")) {
+      this.vcfHeaderFound = true;
+      return;
+    }
+    if (!this.vcfHeaderFound) return;
 
     const parts = line.split("\t");
-    if (parts.length < 10) continue;
-    variantRows += 1;
+    if (parts.length < 10) return;
+    this.variantRows += 1;
 
     const [chromosome, position, ids, ref, alt] = parts;
     const formatKeys = parts[8].split(":");
     const sampleValues = parts[9].split(":");
     const gtIndex = formatKeys.indexOf("GT");
-    if (gtIndex < 0) continue;
-    genotypeRows += 1;
+    if (gtIndex < 0) return;
+    this.genotypeRows += 1;
 
     const rsids = ids
       .split(/[;,]/)
@@ -157,129 +252,139 @@ function parseVcf(fileName: string, text: string, importedFrom: ImportedFrom): P
       .filter((rsid): rsid is string => Boolean(rsid));
 
     if (rsids.length > 0) {
-      rsidRows += 1;
+      this.rsidRows += 1;
     }
 
     const genotype = genotypeFromVcf(sampleValues[gtIndex] ?? "", ref, alt);
     if (!genotype) {
-      skippedNonSnvRows += 1;
-      continue;
+      this.skippedNonSnvRows += 1;
+      return;
     }
 
     for (const rsid of rsids) {
-      markers.push([rsid, normalizeChromosome(chromosome), Number(position) || 0, genotype]);
+      this.markers.push([rsid, normalizeChromosome(chromosome), Number(position) || 0, genotype]);
     }
   }
 
-  if (markers.length === 0) {
-    if (variantRows > 0 && genotypeRows > 0 && rsidRows === 0) {
-      throw new Error("That VCF is valid, but its variant rows do not contain rsID identifiers. Deana needs rsIDs to match local evidence.");
-    }
-    if (rsidRows > 0 && skippedNonSnvRows > 0) {
-      throw new Error("That VCF contains rsIDs, but no called single-nucleotide genotypes Deana can match.");
-    }
-    throw new Error("No DNA markers could be parsed from that file.");
-  }
-
-  const meta = metadataSample(text);
-  return {
-    provider: detectProvider(fileName, meta, true),
-    build: detectBuild(meta),
-    markerCount: markers.length,
-    fileName,
-    importedFrom,
-    markers,
-  };
-}
-
-function parseDelimited(fileName: string, text: string, importedFrom: ImportedFrom): ParsedDnaFile {
-  const markers: CompactMarker[] = [];
-
-  let delimiter = "\t";
-  let headerType: "allele" | "genotype" | null = null;
-
-  function parseHeader(rawLine: string): { delimiter: string; columns: string[] } {
-    const nextDelimiter = rawLine.includes("\t") ? "\t" : ",";
+  private parseDelimitedHeader(rawLine: string): { delimiter: string; columns: string[] } {
+    const delimiter = rawLine.includes("\t") ? "\t" : ",";
     return {
-      delimiter: nextDelimiter,
-      columns: rawLine.split(nextDelimiter).map((part) => part.trim().replaceAll("\"", "").toLowerCase()),
+      delimiter,
+      columns: rawLine.split(delimiter).map((part) => part.trim().replaceAll("\"", "").toLowerCase()),
     };
   }
 
-  function detectHeaderType(columns: string[]): "allele" | "genotype" | null {
+  private detectDelimitedHeaderType(columns: string[]): "allele" | "genotype" | null {
     if (columns.includes("allele1") && columns.includes("allele2")) return "allele";
     if (columns.includes("genotype") || columns.includes("result")) return "genotype";
     return null;
   }
 
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-
+  private acceptDelimitedLine(line: string): void {
     if (line.startsWith("#")) {
-      if (headerType === null) {
-        const possibleHeader = parseHeader(line.replace(/^#\s*/, ""));
-        const detected = detectHeaderType(possibleHeader.columns);
+      if (this.headerType === null) {
+        const possibleHeader = this.parseDelimitedHeader(line.replace(/^#\s*/, ""));
+        const detected = this.detectDelimitedHeaderType(possibleHeader.columns);
         if (detected !== null) {
-          delimiter = possibleHeader.delimiter;
-          headerType = detected;
+          this.delimiter = possibleHeader.delimiter;
+          this.headerType = detected;
         }
       }
-      continue;
+      return;
     }
 
-    if (headerType === null) {
-      const header = parseHeader(line);
-      delimiter = header.delimiter;
-      headerType = detectHeaderType(header.columns) ?? "genotype";
-      continue;
+    if (this.headerType === null) {
+      const header = this.parseDelimitedHeader(line);
+      const detected = this.detectDelimitedHeaderType(header.columns);
+      if (detected === null) return;
+
+      this.delimiter = header.delimiter;
+      this.headerType = detected;
+      return;
     }
 
-    const parts = line.split(delimiter).map((part) => part.trim().replaceAll("\"", ""));
-    if (parts.length < 4) continue;
+    const parts = line.split(this.delimiter).map((part) => part.trim().replaceAll("\"", ""));
+    if (parts.length < 4) return;
 
-    if (headerType === "allele") {
+    if (this.headerType === "allele") {
       const [rawRsid, chromosome, position, allele1, allele2] = parts;
       const rsid = normalizeRsid(rawRsid);
-      if (!rsid) continue;
-      markers.push([rsid, chromosome, Number(position) || 0, normalizeGenotype(`${allele1}${allele2}`)]);
-      continue;
+      if (!rsid) return;
+      this.markers.push([rsid, chromosome, Number(position) || 0, normalizeGenotype(`${allele1}${allele2}`)]);
+      return;
     }
 
     const rsid = normalizeRsid(parts[0]);
     const chromosome = parts[1] ?? "";
     const position = Number(parts[2] ?? 0);
     const genotype = parts[3] ?? "--";
-    if (!rsid) continue;
-    markers.push([rsid, chromosome, position, normalizeGenotype(genotype)]);
+    if (!rsid) return;
+    this.markers.push([rsid, chromosome, position, normalizeGenotype(genotype)]);
   }
+}
 
-  if (markers.length === 0) {
-    throw new Error("No DNA markers could be parsed from that file.");
-  }
-
-  const meta = metadataSample(text);
-  return {
-    provider: detectProvider(fileName, meta, false),
-    build: detectBuild(meta),
-    markerCount: markers.length,
-    fileName,
-    importedFrom,
-    markers,
-  };
+function parseTextChunks(fileName: string, importedFrom: ImportedFrom, feed: (parser: DnaTextParser) => void): ParsedDnaFile {
+  const parser = new DnaTextParser(fileName, importedFrom);
+  feed(parser);
+  return parser.finish();
 }
 
 export function parseDnaText(fileName: string, text: string, importedFrom: ImportedFrom): ParsedDnaFile {
-  return isVcfText(text) ? parseVcf(fileName, text, importedFrom) : parseDelimited(fileName, text, importedFrom);
+  return parseTextChunks(fileName, importedFrom, (parser) => parser.pushText(text));
 }
 
-function stripGzipExtension(fileName: string): string {
-  return fileName.replace(/\.gz$/i, "");
+function parseTextBytes(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom): ParsedDnaFile {
+  return parseTextChunks(fileName, importedFrom, (parser) => {
+    const decoder = new TextDecoder();
+    for (let offset = 0; offset < bytes.byteLength; offset += TEXT_CHUNK_SIZE) {
+      const end = Math.min(offset + TEXT_CHUNK_SIZE, bytes.byteLength);
+      parser.pushText(decoder.decode(bytes.subarray(offset, end), { stream: end < bytes.byteLength }));
+    }
+    const flushed = decoder.decode();
+    if (flushed) parser.pushText(flushed);
+  });
+}
+
+function normalizeGzipError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function parseGzipBytes(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom): ParsedDnaFile {
+  const parsedFileName = stripGzipExtension(fileName);
+  return parseTextChunks(parsedFileName, importedFrom, (parser) => {
+    const decoder = new TextDecoder();
+    let sawFinalChunk = false;
+
+    const gunzip = new Gunzip((chunk, final) => {
+      if (chunk.byteLength) {
+        parser.pushText(decoder.decode(chunk, { stream: true }));
+      }
+      sawFinalChunk = sawFinalChunk || final;
+    });
+
+    try {
+      for (let offset = 0; offset < bytes.byteLength; offset += TEXT_CHUNK_SIZE) {
+        const end = Math.min(offset + TEXT_CHUNK_SIZE, bytes.byteLength);
+        gunzip.push(bytes.subarray(offset, end), end >= bytes.byteLength);
+      }
+    } catch (error) {
+      throw normalizeGzipError(error);
+    }
+
+    if (!sawFinalChunk) {
+      throw new Error("The gzip file ended before a complete DNA export could be decompressed.");
+    }
+
+    const flushed = decoder.decode();
+    if (flushed) parser.pushText(flushed);
+  });
 }
 
 function parseDnaEntry(fileName: string, bytes: Uint8Array, importedFrom: ImportedFrom): ParsedDnaFile {
   const isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
-  const text = isGzip ? strFromU8(gunzipSync(bytes)) : new TextDecoder().decode(bytes);
-  return parseDnaText(isGzip ? stripGzipExtension(fileName) : fileName, text, importedFrom);
+  return isGzip
+    ? parseGzipBytes(fileName, bytes, importedFrom)
+    : parseTextBytes(fileName, bytes, importedFrom);
 }
 
 export function parseDnaBytes(fileName: string, bytes: Uint8Array): ParsedDnaFile {
