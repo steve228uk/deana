@@ -136,6 +136,7 @@ export interface ReportEntry {
   publicationBucket: PublicationBucket;
   frequencyNote?: string;
   magnitude?: number | null;
+  sourceGenotype?: string;
   sourcePageKey?: string;
   sourcePageUrl?: string;
   coverage: CoverageStatus;

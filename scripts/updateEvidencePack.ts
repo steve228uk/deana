@@ -57,7 +57,7 @@ const sourceMetadata: EvidencePackManifest["sources"] = [
 ];
 
 const attribution =
-  "Local DeaNA evidence pack built from public ClinVar, CPIC, GWAS Catalog, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
+  "Local Deana evidence pack built from public ClinVar, CPIC, GWAS Catalog, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
 
 const evidenceTierValues = new Set<EvidenceTier>(["high", "moderate", "emerging", "preview", "supplementary"]);
 const sourceRoleValues = new Set<EvidenceSourceRole>(["primary", "frequency-context", "citation", "supplementary"]);

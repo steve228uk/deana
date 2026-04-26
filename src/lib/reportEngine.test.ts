@@ -138,6 +138,75 @@ describe("reportEngine", () => {
     expect(report.overview.curatedMarkerMatches).toBeGreaterThan(1);
   });
 
+  it("keeps SNPedia repute and magnitude as structured report fields", () => {
+    const dna = makeParsedDnaFile();
+    const supplement: EvidenceSupplement = {
+      status: "complete",
+      fetchedAt: "2026-04-25T00:00:00.000Z",
+      attribution: "test",
+      packVersion: EVIDENCE_PACK_VERSION,
+      manifest: null,
+      totalRsids: dna.markerCount,
+      processedRsids: dna.markerCount,
+      matchedRecords: [
+        {
+          record: {
+            id: "snpedia-rs762551(a;c)",
+            entryId: "local-traits-snpedia-rs762551-ac",
+            sourceId: "snpedia",
+            role: "supplementary",
+            category: "traits",
+            subcategory: "snpedia",
+            markerIds: ["rs762551"],
+            genes: ["CYP1A2"],
+            title: "rs762551 caffeine context",
+            technicalName: "Rs762551(A;C)",
+            url: "https://bots.snpedia.com/index.php/Rs762551(A;C)",
+            release: "SNPedia cached page export; page timestamp 2013-08-13T19:59:30Z",
+            evidenceLevel: "supplementary",
+            clinicalSignificance: null,
+            repute: "bad",
+            tone: "caution",
+            genotype: "A;C",
+            magnitude: 1.5,
+            pmids: ["16905672"],
+            notes: [
+              "SNPedia genotype page: Rs762551(A;C).",
+              "SNPedia magnitude: 1.5.",
+              "SNPedia repute: bad.",
+              "SNPedia is supplementary and should not be treated as a primary clinical source.",
+            ],
+          },
+          matchedMarkers: [
+            {
+              rsid: "rs762551",
+              genotype: "AC",
+              chromosome: "15",
+              position: 75041917,
+              gene: "CYP1A2",
+            },
+          ],
+        },
+      ],
+      unmatchedRsids: dna.markerCount - 1,
+      failedItems: [],
+      retries: 0,
+    };
+
+    const report = generateReport(dna, { evidence: supplement });
+    const localEntry = report.entries.find((entry) => entry.id === "local-traits-snpedia-rs762551-ac");
+
+    expect(localEntry).toMatchObject({
+      magnitude: 1.5,
+      repute: "bad",
+      sourceGenotype: "A;C",
+    });
+    expect(localEntry?.sourceNotes).toContain("SNPedia genotype page: Rs762551(A;C).");
+    expect(localEntry?.sourceNotes).toContain("PubMed PMID 16905672");
+    expect(localEntry?.sourceNotes).not.toContain("SNPedia magnitude: 1.5.");
+    expect(localEntry?.sourceNotes).not.toContain("SNPedia repute: bad.");
+  });
+
   it("demotes unresolved missing findings below actual elevated findings", () => {
     const dna = {
       ...makeParsedDnaFile(),

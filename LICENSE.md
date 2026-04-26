@@ -1,12 +1,12 @@
-# DeaNA Split License
+# Deana Split License
 
-DeaNA uses split licensing. The application code is available for non-commercial use only, while evidence data and documentation derived from SNPedia are governed by Creative Commons Attribution-NonCommercial-ShareAlike terms.
+Deana uses split licensing. The application code is available for non-commercial use only, while evidence data and documentation derived from SNPedia are governed by Creative Commons Attribution-NonCommercial-ShareAlike terms.
 
 ## 1. Application Code
 
 Copyright (c) 2026 Stephen Radford.
 
-The source code in this repository is licensed under the DeaNA Source Available Non-Commercial License v1.0.
+The source code in this repository is licensed under the Deana Source Available Non-Commercial License v1.0.
 
 Permission is granted to use, copy, modify, and redistribute the application code for non-commercial purposes only, subject to these conditions:
 
@@ -46,6 +46,6 @@ SNPedia:
 
 ## 3. No Warranty
 
-DeaNA is provided "as is", without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, and non-infringement.
+Deana is provided "as is", without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, and non-infringement.
 
-DeaNA is informational software. It is not medical advice, diagnosis, or treatment. Clinical interpretation requires qualified human review and confirmatory testing.
+Deana is informational software. It is not medical advice, diagnosis, or treatment. Clinical interpretation requires qualified human review and confirmatory testing.

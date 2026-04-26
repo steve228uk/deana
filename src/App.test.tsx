@@ -306,7 +306,7 @@ beforeEach(() => {
   });
 });
 
-describe("DeaNA app", () => {
+describe("Deana app", () => {
   it("requires upload then naming before saving and opening the explorer", async () => {
     const user = userEvent.setup();
     const { container } = renderApp("/");
@@ -491,6 +491,98 @@ describe("DeaNA app", () => {
     expect(await within(inspector).findByRole("heading", { name: "Duplicate finding title" })).toBeInTheDocument();
     expect(inspector.querySelector(".dn-inspector__intro")).toBeNull();
     expect(within(inspector).getByText("The detail remains visible even when the summary is redundant.")).toBeInTheDocument();
+  });
+
+  it("shows SNPedia genotype, repute, and magnitude without the elevated badge", async () => {
+    const baseProfile = makeSavedProfile({ id: "profile-snpedia" });
+    const template = baseProfile.report.entries.find((entry) => entry.category === "traits") ?? baseProfile.report.entries[0];
+    const snpediaEntry = {
+      ...template,
+      id: "local-traits-snpedia-rs995030-gg",
+      entryKind: "local-evidence" as const,
+      category: "traits" as const,
+      subcategory: "snpedia",
+      title: "rs995030 genotype context",
+      summary: "SNPedia summary for this genotype.",
+      detail: "SNPedia detail for this genotype.",
+      genotypeSummary: "Source genotype: G;G. rs995030 GG",
+      matchedMarkers: [
+        {
+          rsid: "rs995030",
+          genotype: "GG",
+          chromosome: "1",
+          position: 12345,
+          gene: "TEST",
+        },
+      ],
+      sources: [
+        {
+          id: "snpedia",
+          name: "SNPedia",
+          url: "https://bots.snpedia.com/index.php/Rs995030(G;G)",
+        },
+      ],
+      sourceNotes: [
+        "SNPedia cached page export; page timestamp 2013-08-13T19:59:30Z.",
+        "SNPedia genotype page: Rs995030(G;G).",
+        "PubMed PMID 16905672",
+      ],
+      evidenceTier: "supplementary" as const,
+      clinicalSignificance: null,
+      normalizedClinicalSignificance: null,
+      repute: "bad" as const,
+      publicationCount: 1,
+      publicationBucket: "1-5" as const,
+      magnitude: 1.5,
+      sourceGenotype: "G;G",
+      sourcePageKey: "snpedia-rs995030(g;g)",
+      sourcePageUrl: "https://bots.snpedia.com/index.php/Rs995030(G;G)",
+      coverage: "full" as const,
+      tone: "caution" as const,
+      outcome: "negative" as const,
+      sort: {
+        severity: 82,
+        evidence: 1,
+        alphabetical: "rs995030 genotype context",
+        publications: 1,
+      },
+    };
+
+    storedProfiles = [{
+      ...baseProfile,
+      report: {
+        ...baseProfile.report,
+        entries: [snpediaEntry],
+        tabs: baseProfile.report.tabs.map((tab) =>
+          tab.tab === "traits" || tab.tab === "overview" ? { ...tab, count: 1 } : { ...tab, count: 0 },
+        ),
+      },
+    }];
+
+    renderApp("/explorer/profile-snpedia?tab=traits&selected=local-traits-snpedia-rs995030-gg");
+
+    await screen.findByText("Current report");
+    const card = await screen.findByRole("button", { name: /rs995030 genotype context/i });
+    expect(within(card).getByText("Bad repute")).toBeInTheDocument();
+    expect(within(card).getByText("DNA")).toBeInTheDocument();
+    expect(within(card).getByText(/rs995030 GG/)).toBeInTheDocument();
+    expect(within(card).getByText("Magnitude")).toBeInTheDocument();
+    expect(within(card).getByText("1.5")).toBeInTheDocument();
+    expect(within(card).queryByText("Elevated")).not.toBeInTheDocument();
+
+    const inspector = screen.getByLabelText("Finding inspector");
+    expect(within(inspector).getByText("Evidence snapshot")).toBeInTheDocument();
+    expect(within(inspector).getByText("Your DNA")).toBeInTheDocument();
+    expect(within(inspector).getByText("rs995030 GG")).toBeInTheDocument();
+    expect(within(inspector).getByText("Source genotype")).toBeInTheDocument();
+    expect(within(inspector).getByText("G;G")).toBeInTheDocument();
+    expect(within(inspector).getByText("Bad")).toBeInTheDocument();
+    expect(within(inspector).getByText("SNPedia magnitude")).toBeInTheDocument();
+    expect(within(inspector).queryByText("Source page")).not.toBeInTheDocument();
+    expect(within(inspector).getByRole("link", { name: /SNPedia/i })).toHaveAttribute(
+      "href",
+      "https://bots.snpedia.com/index.php/Rs995030(G;G)",
+    );
   });
 
   it("renders markdown formatting in the inspector content", async () => {

@@ -64,7 +64,7 @@ export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
     evidenceNote: "Useful explanatory layer for consumer-facing context and genotype pages.",
     populationNote: "Coverage and wording quality vary; use as supporting context rather than primary authority.",
     chipCaveat: "Consumer-friendly summaries can oversimplify clinical nuance.",
-    disclaimer: "Supplementary reference only; DeaNA does not treat SNPedia as a primary clinical source.",
+    disclaimer: "Supplementary reference only; Deana does not treat SNPedia as a primary clinical source.",
   },
   pubmed: {
     id: "pubmed",
@@ -241,7 +241,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
       let confidenceNote =
         coverage === "full"
           ? "Both APOE markers needed for the common consumer-array interpretation were present."
-          : "One or both APOE markers were missing, so DeaNA cannot provide a confident common-pattern read.";
+          : "One or both APOE markers were missing, so Deana cannot provide a confident common-pattern read.";
 
       if (coverage === "full") {
         if (apoe429358 === "TT" && apoe7412 === "CC") {
@@ -440,7 +440,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
                 ? "One T allele is present, which is associated with moderately reduced enzyme activity."
                 : "No T alleles were detected at this marker.",
         detail:
-          "MTHFR is widely discussed online, often without enough nuance. DeaNA treats it as one biochemical input rather than a stand-alone medical explanation.",
+          "MTHFR is widely discussed online, often without enough nuance. Deana treats it as one biochemical input rather than a stand-alone medical explanation.",
         whyItMatters:
           "This marker is common in consumer DNA discussion, but trustworthy UX depends on explicitly avoiding overclaiming.",
         genotypeSummary: summaryList(markers),
@@ -451,8 +451,8 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
         ],
         confidenceNote:
           genotype === null
-            ? "The single common MTHFR marker DeaNA uses was not present."
-            : "The single common MTHFR marker DeaNA uses was present.",
+            ? "The single common MTHFR marker Deana uses was not present."
+            : "The single common MTHFR marker Deana uses was present.",
       };
     },
   },
@@ -487,7 +487,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
         detail:
           "Eye colour is polygenic, but rs12913832 is one of the most informative common markers on consumer arrays.",
         whyItMatters:
-          "This is a high-signal, low-stakes trait card that demonstrates how DeaNA handles common-variant evidence cleanly.",
+          "This is a high-signal, low-stakes trait card that demonstrates how Deana handles common-variant evidence cleanly.",
         genotypeSummary: summaryList(markers),
         matchedMarkers: markers,
         warnings: ["Trait tendency only; many other loci contribute to real-world eye colour."],
@@ -611,7 +611,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
         detail:
           "Athletic performance is overwhelmingly shaped by training and physiology. This marker works best as a light-touch tendency card.",
         whyItMatters:
-          "This entry stays in the seed pack because it is recognizable and interesting, but DeaNA labels it as emerging rather than overconfident.",
+          "This entry stays in the seed pack because it is recognizable and interesting, but Deana labels it as emerging rather than overconfident.",
         genotypeSummary: summaryList(markers),
         matchedMarkers: markers,
         warnings: ["Do not treat this as destiny or a coaching prescription."],
@@ -693,7 +693,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
         detail:
           "Warfarin is one of the better-known PGx examples, but dosing decisions need full clinical context and formal testing.",
         whyItMatters:
-          "This preview shows why DeaNA needs a distinct drug-response tab and stronger caveats than lifestyle traits.",
+          "This preview shows why Deana needs a distinct drug-response tab and stronger caveats than lifestyle traits.",
         genotypeSummary: summaryList(markers),
         matchedMarkers: markers,
         warnings: [
@@ -736,7 +736,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
         detail:
           "This is a narrow pharmacogenomic preview. It is useful context, but not a substitute for a formal PGx panel.",
         whyItMatters:
-          "It is a good example of how DeaNA can surface high-value PGx context without pretending consumer-array data is complete.",
+          "It is a good example of how Deana can surface high-value PGx context without pretending consumer-array data is complete.",
         genotypeSummary: summaryList(markers),
         matchedMarkers: markers,
         warnings: [

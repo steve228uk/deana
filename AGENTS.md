@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-DeaNA is a browser-first React + TypeScript app built with Vite. Application code lives in `src/`: route-level views are in `src/screens`, shared UI in `src/components`, domain logic and persistence in `src/lib`, web workers in `src/workers`, and shared types in `src/types.ts`. Test helpers live in `src/test`, with tests colocated near the code they cover, such as `src/App.test.tsx` and `src/lib/reportEngine.test.ts`. Project notes and research live in `docs/`.
+Deana is a browser-first React + TypeScript app built with Vite. Application code lives in `src/`: route-level views are in `src/screens`, shared UI in `src/components`, domain logic and persistence in `src/lib`, web workers in `src/workers`, and shared types in `src/types.ts`. Test helpers live in `src/test`, with tests colocated near the code they cover, such as `src/App.test.tsx` and `src/lib/reportEngine.test.ts`. Project notes and research live in `docs/`.
 
 ## Build, Test, and Development Commands
 

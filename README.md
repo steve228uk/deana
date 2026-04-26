@@ -1,6 +1,6 @@
-# DeaNA
+# Deana
 
-DeaNA is a browser-first DNA report app designed to run privately on-device.
+Deana is a browser-first DNA report app designed to run privately on-device.
 
 ## Current MVP
 
@@ -38,9 +38,9 @@ The evidence pack is built from local caches under `.evidence-cache` and shipped
 
 ## License
 
-DeaNA uses split licensing:
+Deana uses split licensing:
 
-- Application code is source-available for non-commercial use only under the DeaNA Source Available Non-Commercial License v1.0.
+- Application code is source-available for non-commercial use only under the Deana Source Available Non-Commercial License v1.0.
 - Evidence packs, generated evidence records, documentation, and notes that include or derive from SNPedia are licensed under Creative Commons Attribution-NonCommercial-ShareAlike 3.0, consistent with SNPedia's published terms.
 
 See [LICENSE.md](LICENSE.md) and [NOTICE](NOTICE) for details and attribution.

@@ -122,9 +122,9 @@ function HelpModal({ onClose }: { onClose: () => void }) {
       <section className="dn-modal dn-help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
         <button className="dn-icon-button dn-modal-close" onClick={onClose} aria-label="Close"><Icon name="x" /></button>
         <DeanaWordmark compact />
-        <h1 id="help-title">About DeaNA</h1>
+        <h1 id="help-title">About Deana</h1>
         <p className="dn-modal-intro">
-          DeaNA reads a consumer DNA export in your browser and matches markers against bundled evidence for medical,
+          Deana reads a consumer DNA export in your browser and matches markers against bundled evidence for medical,
           trait, and drug-response context.
         </p>
         <div className="dn-help-point-list">
@@ -431,6 +431,7 @@ function ExplorerFiltersForm({
 function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; selected?: boolean; onClick?: () => void }) {
   const firstMarker = entry.matchedMarkers[0];
   const summary = summaryUnlessTitle(entry.summary, entry.title);
+  const snapshot = evidenceSnapshotItems(entry);
 
   return (
     <button className={`dn-finding-card ${selected ? "is-selected" : ""} dn-finding-tone-${toneForEntry(entry)}`} onClick={onClick}>
@@ -444,6 +445,13 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
         </div>
         <h2>{entry.title} {firstMarker ? <small>{firstMarker.rsid} ({firstMarker.genotype ?? "n/a"})</small> : null}</h2>
         {summary ? <p>{summary}</p> : null}
+        {snapshot.length > 0 ? (
+          <div className="dn-finding-card__snapshot" aria-label="Evidence snapshot">
+            {snapshot.map((item) => (
+              <span key={item.label}><strong>{item.label}</strong> {item.value}</span>
+            ))}
+          </div>
+        ) : null}
         <div className="dn-finding-card__foot">
           <span><Icon name="file" /> {entry.publicationCount.toLocaleString()} publications</span>
           {entry.genes[0] ? <span><Icon name="dna" /> {entry.genes.join(", ")}</span> : null}
@@ -524,6 +532,7 @@ function FindingDetailContent({
           {renderMarkdown(finding.detail)}
         </section>
       ) : null}
+      <EvidenceSnapshot finding={finding} />
       <section>
         <h3>Genotype found</h3>
         {renderMarkdown(finding.genotypeSummary)}
@@ -567,6 +576,51 @@ function FindingDetailContent({
       <div className="dn-callout"><Icon name="alert" /> Informational only. Do not use for diagnosis or medication decisions.</div>
       <div className="dn-callout dn-callout--success"><Icon name="lock" /> Private by design. Your DNA stays on this device.</div>
     </>
+  );
+}
+
+function EvidenceSnapshot({ finding }: { finding: StoredReportEntry }) {
+  const firstMarker = finding.matchedMarkers[0];
+  const magnitude = typeof finding.magnitude === "number" ? finding.magnitude : null;
+  const magnitudeWidth = magnitude === null ? 0 : Math.max(0, Math.min(100, magnitude * 10));
+
+  return (
+    <section>
+      <h3>Evidence snapshot</h3>
+      <dl className="dn-evidence-snapshot">
+        {firstMarker ? (
+          <div>
+            <dt>Your DNA</dt>
+            <dd>{firstMarker.rsid} {firstMarker.genotype ?? "not found"}</dd>
+          </div>
+        ) : null}
+        {finding.sourceGenotype ? (
+          <div>
+            <dt>Source genotype</dt>
+            <dd>{finding.sourceGenotype}</dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Repute</dt>
+          <dd><span className={`dn-repute-chip dn-repute-chip--${finding.repute}`}>{reputeValueLabel(finding.repute)}</span></dd>
+        </div>
+        {magnitude !== null ? (
+          <div>
+            <dt>SNPedia magnitude</dt>
+            <dd>
+              <strong>{formatMagnitude(magnitude)}</strong>
+              <span className="dn-magnitude-bar" aria-label={`SNPedia magnitude ${formatMagnitude(magnitude)} out of 10`}>
+                <i style={{ width: `${magnitudeWidth}%` }} />
+              </span>
+            </dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Evidence</dt>
+          <dd>{finding.evidenceTier} · {finding.publicationCount.toLocaleString()} publications</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
 
@@ -810,11 +864,50 @@ function toneForEntry(entry: StoredReportEntry): "low" | "moderate" | "elevated"
   return "info";
 }
 
+function hasSnpediaSource(entry: Pick<StoredReportEntry, "sources" | "subcategory">): boolean {
+  return entry.subcategory === "snpedia" || entry.sources.some((source) => {
+    const sourceKey = `${source.id} ${source.name}`.toLowerCase();
+    return sourceKey.includes("snpedia");
+  });
+}
+
+function reputeValueLabel(repute: ReportEntry["repute"]): string {
+  if (repute === "good") return "Good";
+  if (repute === "bad") return "Bad";
+  if (repute === "mixed") return "Mixed";
+  return "Not set";
+}
+
+function reputePriorityLabel(repute: ReportEntry["repute"]): string {
+  if (repute === "not-set") return "Unrated";
+  return `${reputeValueLabel(repute)} repute`;
+}
+
+function formatMagnitude(magnitude: number): string {
+  return Number.isInteger(magnitude) ? String(magnitude) : magnitude.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function evidenceSnapshotItems(entry: StoredReportEntry): Array<{ label: string; value: string }> {
+  const firstMarker = entry.matchedMarkers[0];
+  const snapshot: Array<{ label: string; value: string }> = [];
+
+  if (firstMarker) {
+    snapshot.push({ label: "DNA", value: `${firstMarker.rsid} ${firstMarker.genotype ?? "not found"}` });
+  }
+
+  if (typeof entry.magnitude === "number") {
+    snapshot.push({ label: "Magnitude", value: formatMagnitude(entry.magnitude) });
+  }
+
+  return snapshot;
+}
+
 function priorityLabel(entry: StoredReportEntry): string {
   if (entry.outcome === "missing") return "Missing";
+  if (hasSnpediaSource(entry)) return reputePriorityLabel(entry.repute);
   if (entry.category === "drug") return entry.evidenceTier === "high" ? "High relevance" : "PGx preview";
-  if (entry.outcome === "positive") return "Low";
-  if (entry.sort.severity > 70) return "Elevated";
-  if (entry.sort.severity > 30) return "Moderate";
+  if (entry.outcome === "positive") return "Lower concern";
+  if (entry.sort.severity > 70) return "High priority";
+  if (entry.sort.severity > 30) return "Moderate priority";
   return "Informational";
 }

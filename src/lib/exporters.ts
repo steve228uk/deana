@@ -53,7 +53,7 @@ export function exportReportHtml(profile: ProfileMeta, entries: ReportEntry[]): 
 
       return `
         <section class="section">
-          <p class="eyebrow">DeaNA Explorer export</p>
+          <p class="eyebrow">Deana Explorer export</p>
           <h2>${escapeHtml(label)}</h2>
           <div class="cards">${cardsHtml}</div>
         </section>
@@ -85,7 +85,7 @@ export function exportReportHtml(profile: ProfileMeta, entries: ReportEntry[]): 
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>DeaNA report - ${escapeHtml(profile.name)}</title>
+      <title>Deana report - ${escapeHtml(profile.name)}</title>
       <style>
         :root {
           color-scheme: light;
@@ -169,7 +169,7 @@ export function exportReportHtml(profile: ProfileMeta, entries: ReportEntry[]): 
     <body>
       <main>
         <section class="hero">
-          <p class="eyebrow">DeaNA offline export</p>
+          <p class="eyebrow">Deana offline export</p>
           <h1>${escapeHtml(profile.name)}</h1>
           <p class="meta">${escapeHtml(profile.dna.provider)} • ${escapeHtml(profile.fileName)} • ${profile.dna.markerCount.toLocaleString()} markers • ${escapeHtml(profile.dna.build)}</p>
           <div class="overview">

@@ -263,7 +263,7 @@
     ],
     "title": "ABCC11 earwax and body-odour marker",
     "summary": "ABCC11 rs17822931 is a well-known common trait marker linked to wet versus dry earwax and related apocrine-gland traits.",
-    "detail": "This is a low-stakes trait association. DeaNA reports it as phenotype context only, not as health guidance.",
+    "detail": "This is a low-stakes trait association. Deana reports it as phenotype context only, not as health guidance.",
     "whyItMatters": "This marker is commonly present on consumer arrays and is useful for expanding local trait coverage beyond the small hand-authored seed set.",
     "topics": [
       "Appearance",
@@ -371,7 +371,7 @@
     "title": "BDNF Val66Met literature context",
     "summary": "BDNF rs6265 is a frequently studied neurobiology marker with mixed literature across cognition, mood, and exercise-response topics.",
     "detail": "This card is intentionally broad and conservative. It does not predict mental health, cognition, or training response.",
-    "whyItMatters": "It gives DeaNA local coverage for a marker users often see elsewhere while avoiding deterministic claims.",
+    "whyItMatters": "It gives Deana local coverage for a marker users often see elsewhere while avoiding deterministic claims.",
     "topics": [
       "Neuro",
       "Research"
@@ -432,7 +432,7 @@
     ],
     "title": "COMT Val158Met literature context",
     "summary": "COMT rs4680 is a heavily studied dopamine-metabolism marker with mixed and often overinterpreted associations.",
-    "detail": "DeaNA includes this as literature context only. Behavioural and mental-health claims around this marker are often overstated.",
+    "detail": "Deana includes this as literature context only. Behavioural and mental-health claims around this marker are often overstated.",
     "whyItMatters": "This marker is commonly requested by users, so including a cautious local card is better than leaving it entirely to SNPedia.",
     "topics": [
       "Neuro",
@@ -470,7 +470,7 @@
     "title": "ANKK1/DRD2 dopamine literature context",
     "summary": "ANKK1/DRD2 rs1800497 is widely discussed in dopamine and reward-related literature, with mixed interpretation quality.",
     "detail": "This local card exists to provide cautious context and avoid overclaiming from a single common marker.",
-    "whyItMatters": "It is a common consumer-DNA discussion marker that benefits from DeaNA's conservative framing.",
+    "whyItMatters": "It is a common consumer-DNA discussion marker that benefits from Deana's conservative framing.",
     "topics": [
       "Neuro",
       "Behaviour"
@@ -671,7 +671,7 @@
     "title": "OXTR social-behaviour literature context",
     "summary": "OXTR rs53576 appears in social-behaviour literature, but reported effects are mixed and context-dependent.",
     "detail": "This is included only as a cautious literature card. It should not be used to label personality or social ability.",
-    "whyItMatters": "SNPedia often surfaces behavioural markers; DeaNA's local database should cover them with stronger caveats.",
+    "whyItMatters": "SNPedia often surfaces behavioural markers; Deana's local database should cover them with stronger caveats.",
     "topics": [
       "Behaviour",
       "Neuro"

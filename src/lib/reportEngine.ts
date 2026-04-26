@@ -18,7 +18,7 @@ import {
   normalizeConditions,
 } from "./normalization";
 
-export const REPORT_VERSION = 6;
+export const REPORT_VERSION = 7;
 
 type MarkerMap = Map<string, CompactMarker>;
 
@@ -71,7 +71,7 @@ function buildFacets(entries: ReportEntry[]): ReportFacets {
 
 function buildWarnings(entries: ReportEntry[], supplements?: ProfileSupplements): string[] {
   const warnings = [
-    "DeaNA is informational and built from consumer-array data, not diagnostic sequencing.",
+    "Deana is informational and built from consumer-array data, not diagnostic sequencing.",
   ];
 
   if (entries.some((entry) => entry.category === "drug")) {
@@ -159,6 +159,19 @@ function publicationBucket(publicationCount: number): ReportEntry["publicationBu
         : "21+";
 }
 
+function sourceNotesForLocalEvidence(record: EvidencePackMatch["record"], sourceName: string): string[] {
+  const structuredNotePatterns = [
+    /^SNPedia magnitude:/i,
+    /^SNPedia repute:/i,
+  ];
+
+  return [
+    `${sourceName}: ${record.release}.`,
+    ...record.notes.filter((note) => !structuredNotePatterns.some((pattern) => pattern.test(note))),
+    ...record.pmids.map((pmid) => `PubMed PMID ${pmid}`),
+  ];
+}
+
 function markerLabel(marker: ReportEntry["matchedMarkers"][number]): string {
   const base = `${marker.rsid} ${marker.genotype ?? "not found"}`;
   if (!marker.matchedAllele) return base;
@@ -200,7 +213,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
           "This local evidence-pack entry adds source context for a marker present in the uploaded file.",
         whyItMatters:
           record.whyItMatters ??
-          "This finding came from DeaNA's bundled evidence database, so it can be matched locally without sending marker requests.",
+          "This finding came from Deana's bundled evidence database, so it can be matched locally without sending marker requests.",
         genotypeSummary: localEvidenceGenotypeSummary(match),
         matchedMarkers: match.matchedMarkers,
         genes: record.genes,
@@ -217,13 +230,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
             url: record.url,
           },
         ],
-        sourceNotes: [
-          `${sourceName}: ${record.release}.`,
-          ...(record.technicalName ? [`Technical source name: ${record.technicalName}.`] : []),
-          ...(record.magnitude !== undefined && record.magnitude !== null ? [`SNPedia magnitude: ${record.magnitude}.`] : []),
-          ...record.notes,
-          ...record.pmids.map((pmid) => `PubMed PMID ${pmid}`),
-        ],
+        sourceNotes: sourceNotesForLocalEvidence(record, sourceName),
         evidenceTier: record.evidenceLevel,
         clinicalSignificance: record.clinicalSignificance,
         normalizedClinicalSignificance,
@@ -231,6 +238,8 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         publicationCount,
         publicationBucket: publicationBucket(publicationCount),
         frequencyNote: record.frequencyNote,
+        magnitude: record.magnitude ?? null,
+        sourceGenotype: record.genotype,
         sourcePageKey: record.id,
         sourcePageUrl: record.url,
         coverage: "full",

@@ -27,7 +27,7 @@ const defaultVersion = (() => {
 })();
 
 const attribution =
-  "Local DeaNA evidence pack built from public ClinVar, CPIC, GWAS Catalog, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
+  "Local Deana evidence pack built from public ClinVar, CPIC, GWAS Catalog, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
 
 const sourceMetadata: EvidencePackManifest["sources"] = [
   {
@@ -47,7 +47,7 @@ const sourceMetadata: EvidencePackManifest["sources"] = [
   {
     id: "cpic",
     name: "CPIC",
-    release: "Curated CPIC records from DeaNA seed pack",
+    release: "Curated CPIC records from Deana seed pack",
     url: "https://cpicpgx.org/api-and-database/",
     role: "primary",
   },
@@ -61,7 +61,7 @@ const sourceMetadata: EvidencePackManifest["sources"] = [
   {
     id: "gnomad",
     name: "gnomAD",
-    release: "Curated gnomAD context from DeaNA seed pack",
+    release: "Curated gnomAD context from Deana seed pack",
     url: "https://gnomad.broadinstitute.org/",
     role: "frequency-context",
   },
@@ -299,7 +299,7 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
     technicalName,
     summary: `ClinVar classifies this ${gene} variant as ${significance.toLowerCase()} for ${condition}.`,
     detail: `ClinVar reports ${significance} for ${technicalName}. Review status: ${reviewStatus || "not supplied"}.`,
-    whyItMatters: `This is source-reviewed clinical context for ${condition}; DeaNA only surfaces it when the uploaded genotype matches the reported allele where ClinVar provides one.`,
+    whyItMatters: `This is source-reviewed clinical context for ${condition}; Deana only surfaces it when the uploaded genotype matches the reported allele where ClinVar provides one.`,
     topics: ["ClinVar", "Clinical variant"],
     conditions: traits,
     url: `https://www.ncbi.nlm.nih.gov/clinvar/variation/${variationId}/`,

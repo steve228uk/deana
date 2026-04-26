@@ -1,4 +1,4 @@
-# DeaNA MVP Status
+# Deana MVP Status
 
 Updated: 2026-04-24
 
@@ -6,7 +6,7 @@ Updated: 2026-04-24
 
 - `React + TypeScript + Vite` app structure for Bun workflows
 - Responsive two-column layout that collapses cleanly for mobile
-- Brand styling for `DeaNA` with a Jack & Jill-inspired editorial serif + soft-card UI direction
+- Brand styling for `Deana` with a Jack & Jill-inspired editorial serif + soft-card UI direction
 - Local file upload flow for:
   - `.zip`
   - `.txt`
@@ -32,7 +32,7 @@ Updated: 2026-04-24
 - The current medical and pharmacogenomic cards are a conservative starter knowledge base, not a complete evidence pack.
 - The current origin section is intentionally a methodology placeholder until a proper local reference-population pack is bundled.
 - Provider detection beyond Ancestry is format-aware but still needs real fixture files from each vendor before calling support battle-tested.
-- Storing full marker arrays in IndexedDB is fine for an MVP, but long term DeaNA should move to chunked storage or a lighter normalized index.
+- Storing full marker arrays in IndexedDB is fine for an MVP, but long term Deana should move to chunked storage or a lighter normalized index.
 
 ## Best next steps
 
