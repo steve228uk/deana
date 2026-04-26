@@ -215,14 +215,22 @@ export async function searchReportEntriesForChat({
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
 
-  for (const category of categories) {
-    for await (const entry of streamReportEntries(profileId, category)) {
-      if (seen.has(entry.id)) continue;
-      seen.add(entry.id);
-      const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
-      if (matchedFields.length > 0) {
-        ranked.push({ entry, score, matchedFields });
+  const categoryEntries = await Promise.all(
+    categories.map(async (category) => {
+      const entries: StoredReportEntry[] = [];
+      for await (const entry of streamReportEntries(profileId, category)) {
+        entries.push(entry);
       }
+      return entries;
+    }),
+  );
+
+  for (const entry of categoryEntries.flat()) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
+    if (matchedFields.length > 0) {
+      ranked.push({ entry, score, matchedFields });
     }
   }
 

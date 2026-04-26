@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls, type UIMessage } from "ai";
 import { useChat } from "@ai-sdk/react";
 import ReactMarkdown from "react-markdown";
@@ -570,11 +570,11 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     }
   }
 
-  async function openEntryPanel(href: string | undefined) {
+  const openEntryPanel = useCallback(async (href: string | undefined) => {
     if (!href?.startsWith("deana://entry/")) return;
     const entryId = decodeURIComponent(href.slice("deana://entry/".length));
     setPanel({ mode: "inspector", findingId: entryId, finding: null, isLoading: true, error: null });
-    const finding = await loadReportEntry(props.profile.id, entryId);
+    const finding = await loadReportEntry(latestPropsRef.current.profile.id, entryId);
     setPanel({
       mode: "inspector",
       findingId: entryId,
@@ -582,13 +582,13 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       isLoading: false,
       error: finding ? null : "This finding is no longer available in the saved report.",
     });
-  }
+  }, []);
 
-  function openFindingsPanel() {
+  const openFindingsPanel = useCallback(() => {
     setPanel({ mode: "findings" });
-  }
+  }, []);
 
-  const markdownComponents: Components = {
+  const markdownComponents: Components = useMemo(() => ({
     a({ href, children }) {
       if (href?.startsWith("deana://entry/")) {
         return (
@@ -628,7 +628,12 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (lastIndex < value.length) nodes.push(value.slice(lastIndex));
       return nodes.length > 0 ? <>{nodes}</> : <>{children}</>;
     },
-  };
+  }), [openEntryPanel]);
+
+  const handleOpenEntry = useCallback(
+    (entryId: string) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`),
+    [openEntryPanel],
+  );
 
   return (
     <section
@@ -689,7 +694,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
                   trace={traceByMessageRef.current[message.id]}
                   reasoningSummary={messageReasoning(message) ?? reasoningByMessageRef.current[message.id] ?? null}
                   components={markdownComponents}
-                  onOpenEntry={(entryId) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`)}
+                  onOpenEntry={handleOpenEntry}
                   onOpenFindings={openFindingsPanel}
                 />
               ))}
@@ -1053,7 +1058,10 @@ function ChatSidePanel({
   );
 }
 
-function ChatMessage({
+const remarkPlugins = [remarkGfm] as Parameters<typeof ReactMarkdown>[0]["remarkPlugins"] & object;
+const rehypePlugins = [[rehypeSanitize, markdownSchema]] as Parameters<typeof ReactMarkdown>[0]["rehypePlugins"] & object;
+
+const ChatMessage = memo(function ChatMessage({
   role,
   content,
   trace,
@@ -1079,8 +1087,8 @@ function ChatMessage({
       {hasReasoning && role === "assistant" ? <ModelReasoning reasoning={reasoningSummary ?? ""} /> : null}
       {content ? (
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[[rehypeSanitize, markdownSchema]]}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
           components={components}
           urlTransform={(url) => url}
         >
@@ -1092,7 +1100,7 @@ function ChatMessage({
       ) : null}
     </article>
   );
-}
+});
 
 function ModelReasoning({ reasoning }: { reasoning: string }) {
   return (
