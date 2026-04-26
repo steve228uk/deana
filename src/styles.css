@@ -355,6 +355,8 @@ a { color: inherit; }
 .dn-callout--success { background: var(--dn-success-bg); color: var(--dn-forest); border-color: transparent; }
 .dn-modal-actions { display: flex; gap: 14px; margin-top: 22px; }
 .dn-modal-actions .dn-button { flex: 1; }
+.dn-confirm-modal { max-width: 520px; text-align: center; }
+.dn-confirm-modal > .dn-round-icon { margin: 0 auto; background: var(--dn-danger-bg); color: var(--dn-clay-dark); }
 .dn-privacy-modal { max-width: 700px; }
 .dn-privacy-modal h1 { text-align: center; }
 .dn-privacy-point-list { display: grid; gap: 12px; }

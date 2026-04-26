@@ -544,13 +544,15 @@ export async function* streamReportEntries(
 export async function saveProfile(profile: SavedProfile): Promise<void> {
   const db = await openDb();
   const transaction = db.transaction([PROFILE_META_STORE, PROFILE_DNA_STORE, REPORT_ENTRY_STORE], "readwrite");
+  const done = transactionToPromise(transaction);
   await writeNormalizedProfile(transaction, ensureCurrentProfile(profile));
-  await transactionToPromise(transaction);
+  await done;
 }
 
 export async function deleteProfile(id: string): Promise<void> {
   const db = await openDb();
   const transaction = db.transaction([PROFILE_META_STORE, PROFILE_DNA_STORE, REPORT_ENTRY_STORE], "readwrite");
+  const done = transactionToPromise(transaction);
   const metaStore = transaction.objectStore(PROFILE_META_STORE);
   const dnaStore = transaction.objectStore(PROFILE_DNA_STORE);
   const entryStore = transaction.objectStore(REPORT_ENTRY_STORE);
@@ -558,7 +560,7 @@ export async function deleteProfile(id: string): Promise<void> {
   metaStore.delete(id);
   dnaStore.delete(id);
   await deleteEntriesForProfile(entryStore, id);
-  await transactionToPromise(transaction);
+  await done;
 }
 
 export { DB_NAME, DB_VERSION };

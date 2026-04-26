@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -331,6 +331,34 @@ describe("Deana app", () => {
     expect(await screen.findByText("Current report")).toBeInTheDocument();
   });
 
+  it("accepts a raw DNA file dropped onto the upload target", async () => {
+    const user = userEvent.setup();
+    renderApp("/");
+
+    await screen.findByText(/Private DNA reports/i);
+    await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
+
+    const dropzone = screen.getByText(/Drag and drop your file here/i).closest("label");
+    const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
+    expect(dropzone).not.toBeNull();
+
+    fireEvent.drop(dropzone!, {
+      dataTransfer: {
+        files: [file],
+        items: [
+          {
+            kind: "file",
+            type: file.type,
+            getAsFile: () => file,
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+
+    await screen.findByDisplayValue("stephen-kit");
+  });
+
   it("builds bundled evidence without a separate SNPedia worker pass", async () => {
     const user = userEvent.setup();
     const { container } = renderApp("/");
@@ -405,6 +433,10 @@ describe("Deana app", () => {
 
     await screen.findByText("Mum");
     await user.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(screen.getByRole("dialog", { name: /Remove this report/i })).toBeInTheDocument();
+    expect(deleteProfile).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Remove report" }));
 
     await waitFor(() => expect(deleteProfile).toHaveBeenCalledWith("profile-3"));
     await waitFor(() => expect(screen.queryByText("Mum")).not.toBeInTheDocument());

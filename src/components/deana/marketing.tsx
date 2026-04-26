@@ -1,3 +1,4 @@
+import type { DragEvent } from "react";
 import type { EvidenceProgressSnapshot, ParsedDnaFile } from "../../types";
 import { DeanaWordmark, Icon } from "./ui";
 
@@ -136,6 +137,40 @@ export function MarketingReturning({
   );
 }
 
+export function RemoveReportModal({
+  report,
+  isRemoving = false,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  report: SavedReportCard;
+  isRemoving?: boolean;
+  error?: string | null;
+  onCancel?: () => void;
+  onConfirm?: () => void;
+}) {
+  return (
+    <div className="dn-modal-backdrop" role="presentation">
+      <section className="dn-modal dn-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="remove-report-title">
+        <button className="dn-icon-button dn-modal-close" disabled={isRemoving} onClick={onCancel} aria-label="Close"><Icon name="x" /></button>
+        <span className="dn-round-icon"><Icon name="alert" /></span>
+        <h1 id="remove-report-title">Remove this report?</h1>
+        <p className="dn-modal-intro">
+          This will remove <strong>{report.name}</strong> and its saved report data from this browser.
+        </p>
+        <div className="dn-modal-actions">
+          <button className="dn-button dn-button--secondary" disabled={isRemoving} onClick={onCancel}>Cancel</button>
+          <button className="dn-button dn-button--coral" disabled={isRemoving} onClick={onConfirm}>
+            {isRemoving ? "Removing..." : "Remove report"}
+          </button>
+        </div>
+        {error ? <p className="dn-error-text" role="alert">{error}</p> : null}
+      </section>
+    </div>
+  );
+}
+
 export function UploadReportModal({
   step,
   parsed,
@@ -161,6 +196,27 @@ export function UploadReportModal({
   onConfirm?: () => void;
   onCancel?: () => void;
 }) {
+  function handleDragOver(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!isParsing) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (isParsing) return;
+
+    const file = event.dataTransfer.files[0];
+    if (file) {
+      onFileChange?.(file);
+    }
+  }
+
   return (
     <div className="dn-modal-backdrop" role="presentation">
       <section className="dn-modal dn-upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title">
@@ -176,7 +232,12 @@ export function UploadReportModal({
           <>
             <h1 id="upload-modal-title">Upload your DNA export</h1>
             <p className="dn-modal-intro">{isParsing ? "Parsing your file locally..." : "Choose a supported raw DNA export. The file is parsed locally in your browser."}</p>
-            <label className={`dn-dropzone ${isParsing ? "is-loading" : ""}`}>
+            <label
+              className={`dn-dropzone ${isParsing ? "is-loading" : ""}`}
+              onDragEnter={handleDragOver}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+            >
               <input
                 type="file"
                 accept=".zip,.txt,.csv,.vcf,.vcf.gz,.gz"

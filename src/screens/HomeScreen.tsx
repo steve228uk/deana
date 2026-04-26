@@ -5,6 +5,7 @@ import {
   MarketingFirstVisit,
   MarketingReturning,
   PrivacyModal,
+  RemoveReportModal,
   SavedReportCard,
   UploadReportModal,
 } from "../components/deana/marketing";
@@ -49,6 +50,9 @@ export function HomeScreen({
   const [error, setError] = useState<string | null>(null);
   const [isParsing, setIsParsing] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [reportPendingRemoval, setReportPendingRemoval] = useState<SavedReportCard | null>(null);
+  const [isRemovingReport, setIsRemovingReport] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   function openUpload() {
     setModalStep("choose-file");
@@ -94,6 +98,22 @@ export function HomeScreen({
     navigate("/processing");
   }
 
+  async function confirmRemoveReport() {
+    if (!reportPendingRemoval) return;
+
+    setIsRemovingReport(true);
+    setRemoveError(null);
+
+    try {
+      await removeProfile(reportPendingRemoval.id);
+      setReportPendingRemoval(null);
+    } catch (nextError) {
+      setRemoveError(nextError instanceof Error ? nextError.message : "Could not remove this report.");
+    } finally {
+      setIsRemovingReport(false);
+    }
+  }
+
   const reportCards = profiles.map(toReportCard);
 
   return (
@@ -108,7 +128,13 @@ export function HomeScreen({
           reports={reportCards}
           onCreateNew={openUpload}
           onOpenReport={(id) => navigate(`/explorer/${id}?tab=overview`)}
-          onRemoveReport={(id) => void removeProfile(id)}
+          onRemoveReport={(id) => {
+            const report = reportCards.find((candidate) => candidate.id === id);
+            if (report) {
+              setRemoveError(null);
+              setReportPendingRemoval(report);
+            }
+          }}
           onPrivacy={() => setShowPrivacy(true)}
         />
       )}
@@ -132,6 +158,19 @@ export function HomeScreen({
         <PrivacyModal
           onClose={() => setShowPrivacy(false)}
           onGithub={() => window.open(DEANA_GITHUB_URL, "_blank", "noopener,noreferrer")}
+        />
+      ) : null}
+
+      {reportPendingRemoval ? (
+        <RemoveReportModal
+          report={reportPendingRemoval}
+          isRemoving={isRemovingReport}
+          error={removeError}
+          onCancel={() => {
+            setReportPendingRemoval(null);
+            setRemoveError(null);
+          }}
+          onConfirm={() => void confirmRemoveReport()}
         />
       ) : null}
     </>
