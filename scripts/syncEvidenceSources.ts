@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { unzipSync } from "fflate";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
@@ -69,6 +70,27 @@ async function sha256(filePath: string): Promise<string> {
   return digest.digest("hex");
 }
 
+function isZipSource(source: SourceConfig, response: Response): boolean {
+  return (
+    source.id === "gwas" &&
+    (source.url?.toLowerCase().endsWith(".zip") ||
+      response.headers.get("content-type")?.toLowerCase().includes("zip") === true)
+  );
+}
+
+function extractGwasAssociationsZip(source: SourceConfig, bytes: Uint8Array): Uint8Array {
+  const entries = unzipSync(bytes);
+  const match = Object.entries(entries).find(([name]) =>
+    /associations/i.test(name) && /\.(tsv|txt)$/i.test(name),
+  );
+
+  if (!match) {
+    throw new Error(`${source.id} ZIP did not contain an associations TSV/TXT file.`);
+  }
+
+  return match[1];
+}
+
 async function download(source: SourceConfig, force: boolean): Promise<object> {
   if (!source.url) {
     return {
@@ -103,8 +125,13 @@ async function download(source: SourceConfig, force: boolean): Promise<object> {
     };
   }
 
+  const responseBytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = isZipSource(source, response)
+    ? extractGwasAssociationsZip(source, responseBytes)
+    : responseBytes;
+
   await mkdir(path.dirname(source.path), { recursive: true });
-  await writeFile(source.path, response.body);
+  await writeFile(source.path, bytes);
   return {
     id: source.id,
     status: "downloaded",

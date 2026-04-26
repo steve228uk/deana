@@ -82,10 +82,10 @@ bun run evidence:pack:build
 
 Source caches are written under `.evidence-cache`, which is intentionally ignored. Generated candidate dumps under `docs/evidence-candidates` are also ignored. The shipped static pack in `public/evidence-packs` is tracked because the browser app serves it directly.
 
-GWAS sync is optional unless a current association TSV URL is supplied:
+GWAS sync is optional unless a current association export URL is supplied. The sync script accepts the current GWAS Catalog ZIP release and extracts the associations TSV into `.evidence-cache/gwas/associations.tsv`:
 
 ```bash
-GWAS_ASSOCIATIONS_URL="https://example.com/associations.tsv" bun run evidence:sources:sync
+GWAS_ASSOCIATIONS_URL="https://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/gwas-catalog-associations-full.zip" bun run evidence:sources:sync
 ```
 
 Validate the checked-in evidence pack without rewriting files:

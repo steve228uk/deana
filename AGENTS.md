@@ -37,7 +37,7 @@ Use Bun for package scripts to match the README, lockfile, and GitHub Actions wo
 
 `scripts/buildEvidencePack.ts` is the canonical pack builder for the current sharded static pack. It writes `public/evidence-packs/<YYYY-MM-core>/manifest.json`, shard files, and the pack-version constants in `src/lib/evidencePack.ts` and `src/lib/evidencePackData.ts`.
 
-`scripts/syncEvidenceSources.ts` downloads public ClinVar data and optionally GWAS data into `.evidence-cache`. GWAS is skipped unless `GWAS_ASSOCIATIONS_URL` or `--gwas-url=...` is provided. `scripts/syncSnpedia.ts` caches SNPedia pages under `.evidence-cache/snpedia`.
+`scripts/syncEvidenceSources.ts` downloads public ClinVar data and optionally GWAS data into `.evidence-cache`. GWAS is skipped unless `GWAS_ASSOCIATIONS_URL` or `--gwas-url=...` is provided; the current GWAS Catalog association export is published as a ZIP, and the script extracts the associations TSV into `.evidence-cache/gwas/associations.tsv`. `scripts/syncSnpedia.ts` caches SNPedia pages under `.evidence-cache/snpedia`.
 
 Keep `.evidence-cache`, generated seed/bulk candidate JSON, and local DNA files out of git. Keep `public/evidence-packs` tracked because the deployed static app serves those files directly.
 
