@@ -4,11 +4,20 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import {
+  deleteChatThread,
   deleteProfile,
+  loadAiChatNoticeDismissal,
+  loadAiConsent,
   loadCategoryPage,
+  loadChatMessages,
+  loadChatThreads,
   loadProfileMeta,
   loadProfileSummaries,
   loadReportEntry,
+  saveAiConsent,
+  saveAiChatNoticeDismissal,
+  saveChatMessages,
+  saveChatThread,
   saveProfile,
   streamReportEntries,
 } from "./lib/storage";
@@ -24,12 +33,23 @@ import {
   SavedProfile,
   SavedProfileSummary,
   EvidenceSupplement,
+  StoredChatMessage,
+  StoredChatThread,
   StoredReportEntry,
 } from "./types";
 
 vi.mock("./lib/storage", () => ({
   loadProfileSummaries: vi.fn(),
   loadProfileMeta: vi.fn(),
+  loadAiConsent: vi.fn(),
+  loadAiChatNoticeDismissal: vi.fn(),
+  saveAiConsent: vi.fn(),
+  saveAiChatNoticeDismissal: vi.fn(),
+  loadChatThreads: vi.fn(),
+  deleteChatThread: vi.fn(),
+  saveChatThread: vi.fn(),
+  loadChatMessages: vi.fn(),
+  saveChatMessages: vi.fn(),
   loadCategoryPage: vi.fn(),
   loadReportEntry: vi.fn(),
   streamReportEntries: vi.fn(),
@@ -85,6 +105,9 @@ let nextEvidenceResponse:
   | { type: "done"; supplement: EvidenceSupplement }
   | { type: "error"; error: string };
 let storedProfiles: SavedProfile[] = [];
+let storedAiConsents: Record<string, { accepted: true; version: number; acceptedAt: string; chatNoticeDismissedAt?: string }> = {};
+let storedChatThreads: StoredChatThread[] = [];
+let storedChatMessages: StoredChatMessage[] = [];
 let workerPostCounts: Record<"parser" | "evidence", number>;
 
 class MockWorker {
@@ -197,6 +220,38 @@ function installStorageMocks() {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
     return profile ? profileMetaFromProfile(profile) : null;
   });
+  vi.mocked(loadAiConsent).mockImplementation(async (profileId: string) => storedAiConsents[profileId] ?? null);
+  vi.mocked(loadAiChatNoticeDismissal).mockImplementation(async (profileId: string) => storedAiConsents[profileId]?.chatNoticeDismissedAt ?? null);
+  vi.mocked(saveAiConsent).mockImplementation(async (profileId, consent) => {
+    storedAiConsents[profileId] = { ...storedAiConsents[profileId], ...consent };
+  });
+  vi.mocked(saveAiChatNoticeDismissal).mockImplementation(async (profileId, dismissedAt) => {
+    if (!storedAiConsents[profileId]) return;
+    storedAiConsents[profileId] = {
+      ...storedAiConsents[profileId],
+      chatNoticeDismissedAt: dismissedAt,
+    };
+  });
+  vi.mocked(loadChatThreads).mockImplementation(async (profileId: string) =>
+    storedChatThreads
+      .filter((thread) => thread.profileId === profileId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+  );
+  vi.mocked(saveChatThread).mockImplementation(async (thread: StoredChatThread) => {
+    storedChatThreads = [thread, ...storedChatThreads.filter((candidate) => candidate.id !== thread.id)];
+  });
+  vi.mocked(deleteChatThread).mockImplementation(async (threadId: string) => {
+    storedChatThreads = storedChatThreads.filter((thread) => thread.id !== threadId);
+    storedChatMessages = storedChatMessages.filter((message) => message.threadId !== threadId);
+  });
+  vi.mocked(loadChatMessages).mockImplementation(async (threadId: string) =>
+    storedChatMessages
+      .filter((message) => message.threadId === threadId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+  );
+  vi.mocked(saveChatMessages).mockImplementation(async (threadId: string, messages: StoredChatMessage[]) => {
+    storedChatMessages = [...storedChatMessages.filter((message) => message.threadId !== threadId), ...messages];
+  });
   vi.mocked(loadCategoryPage).mockImplementation(async ({ profileId, category, filters, cursor, pageSize = 50 }) => {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) {
@@ -237,6 +292,9 @@ function installStorageMocks() {
   });
   vi.mocked(deleteProfile).mockImplementation(async (profileId: string) => {
     storedProfiles = storedProfiles.filter((candidate) => candidate.id !== profileId);
+    delete storedAiConsents[profileId];
+    storedChatThreads = storedChatThreads.filter((thread) => thread.profileId !== profileId);
+    storedChatMessages = storedChatMessages.filter((message) => message.profileId !== profileId);
   });
 }
 
@@ -289,6 +347,10 @@ function renderApp(initialEntry = "/") {
   );
 }
 
+function fetchCallsFor(path: string): unknown[][] {
+  return vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes(path));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   nextWorkerResponse = { ok: true, data: parsed };
@@ -297,9 +359,24 @@ beforeEach(() => {
     supplement: mockSupplement,
   };
   storedProfiles = [];
+  storedAiConsents = {};
+  storedChatThreads = [];
+  storedChatMessages = [];
   workerPostCounts = { parser: 0, evidence: 0 };
   installStorageMocks();
   vi.stubGlobal("Worker", MockWorker);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("/api/ai-status")) {
+      return new Response(JSON.stringify({ enabled: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ error: "Not mocked" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }));
   vi.stubGlobal("print", vi.fn());
   vi.stubGlobal("crypto", {
     randomUUID: () => "profile-1",
@@ -471,6 +548,209 @@ describe("Deana app", () => {
     expect(within(inspector).getByText("Details")).toBeInTheDocument();
     expect(within(inspector).getByText(/This is one of the clearer consumer-array medical markers/i)).toBeInTheDocument();
     expect(screen.getAllByText("Why it matters").length).toBeGreaterThan(0);
+  });
+
+  it("gates AI chat behind explicit consent without making a request on tab open", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
+
+    renderApp("/explorer/profile-ai?tab=ai");
+
+    await screen.findByText(/AI chat sends report context off this device/i);
+    expect(fetchCallsFor("/api/ai-status").length).toBeGreaterThan(0);
+    expect(fetchCallsFor("/api/chat")).toHaveLength(0);
+
+    expect(screen.getByText(/AI chat sends report context off this device/i)).toBeInTheDocument();
+    expect(fetchCallsFor("/api/chat")).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "I understand" }));
+
+    expect(screen.getByLabelText("Message Deana AI")).toBeInTheDocument();
+    expect(fetchCallsFor("/api/chat")).toHaveLength(0);
+  });
+
+  it("hides the AI tab when AI Gateway credentials are unavailable", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/api/ai-status")) {
+        return new Response(JSON.stringify({ enabled: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "Not mocked" }), { status: 404 });
+    });
+    storedProfiles = [makeSavedProfile({ id: "profile-ai-disabled" })];
+
+    renderApp("/explorer/profile-ai-disabled?tab=ai");
+
+    await screen.findByText("Current report");
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toContain("tab=overview"));
+    expect(screen.queryByRole("button", { name: "AI" })).not.toBeInTheDocument();
+  });
+
+  it("shows chat privacy details from the empty-state learn more button without the old banner", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
+    storedAiConsents["profile-ai"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+
+    renderApp("/explorer/profile-ai?tab=ai");
+
+    await screen.findByRole("heading", { name: "Ask Deana about this report" });
+    expect(screen.queryByText(/Private opt-in/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Deana sends compact report context first/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "Learn more" }).at(-1)!);
+
+    expect(await screen.findByRole("heading", { name: "How AI chat works" })).toBeInTheDocument();
+    expect(screen.getByText(/Raw DNA files, full marker lists, profile names, and file names are not included/i)).toBeInTheDocument();
+  });
+
+  it("persists dismissal of the AI chat provider notice", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
+    storedAiConsents["profile-ai"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+
+    const view = renderApp("/explorer/profile-ai?tab=ai");
+
+    expect(await screen.findByText(/AI chat uses Vercel AI Gateway/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss AI chat note" }));
+
+    await waitFor(() => expect(saveAiChatNoticeDismissal).toHaveBeenCalledWith("profile-ai", expect.any(String)));
+    expect(screen.queryByText(/AI chat uses Vercel AI Gateway/i)).not.toBeInTheDocument();
+
+    view.unmount();
+    renderApp("/explorer/profile-ai?tab=ai");
+
+    await screen.findByRole("heading", { name: "Ask Deana about this report" });
+    expect(screen.queryByText(/AI chat uses Vercel AI Gateway/i)).not.toBeInTheDocument();
+  });
+
+  it("opens one unsaved blank chat and focuses the composer", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
+    storedAiConsents["profile-ai"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+    storedChatThreads = [{
+      id: "thread-old",
+      profileId: "profile-ai",
+      title: "Old chat",
+      createdAt: "2026-04-26T09:00:00.000Z",
+      updatedAt: "2026-04-26T09:00:00.000Z",
+    }];
+    storedChatMessages = [{
+      id: "message-old",
+      threadId: "thread-old",
+      profileId: "profile-ai",
+      role: "user",
+      content: "Previously selected question",
+      createdAt: "2026-04-26T09:01:00.000Z",
+    }];
+
+    renderApp("/explorer/profile-ai?tab=ai");
+
+    expect(await screen.findByText("Previously selected question")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+
+    await waitFor(() => expect(screen.queryByText("Previously selected question")).not.toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "Ask Deana about this report" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Message Deana AI")).toHaveFocus());
+    expect(screen.queryByText("New chat", { selector: "strong" })).not.toBeInTheDocument();
+    expect(saveChatThread).not.toHaveBeenCalled();
+  });
+
+  it("shows the first sent AI message immediately and then saves the chat", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
+    storedAiConsents["profile-ai"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+
+    renderApp("/explorer/profile-ai?tab=ai");
+
+    expect(await screen.findByRole("heading", { name: "Ask Deana about this report" })).toBeInTheDocument();
+    const input = screen.getByLabelText("Message Deana AI");
+    await user.type(input, "Summarize my medical findings");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(screen.getAllByText("Summarize my medical findings").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("heading", { name: "Ask Deana about this report" })).not.toBeInTheDocument();
+    await waitFor(() => expect(saveChatThread).toHaveBeenCalledWith(expect.objectContaining({
+      profileId: "profile-ai",
+      title: "Summarize my medical findings",
+    })));
+  });
+
+  it("deletes chats after confirmation", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
+    storedAiConsents["profile-ai"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+    storedChatThreads = [
+      {
+        id: "thread-delete",
+        profileId: "profile-ai",
+        title: "Delete me",
+        createdAt: "2026-04-26T10:00:00.000Z",
+        updatedAt: "2026-04-26T10:00:00.000Z",
+      },
+      {
+        id: "thread-keep",
+        profileId: "profile-ai",
+        title: "Keep me",
+        createdAt: "2026-04-26T09:00:00.000Z",
+        updatedAt: "2026-04-26T09:00:00.000Z",
+      },
+    ];
+    storedChatMessages = [{
+      id: "message-delete",
+      threadId: "thread-delete",
+      profileId: "profile-ai",
+      role: "user",
+      content: "Delete this message",
+      createdAt: "2026-04-26T10:01:00.000Z",
+    }];
+
+    renderApp("/explorer/profile-ai?tab=ai");
+
+    await screen.findByText("Delete this message");
+    await user.click(screen.getByRole("button", { name: "Delete chat Delete me" }));
+    expect(await screen.findByRole("heading", { name: "Remove this chat?" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Remove chat" }));
+
+    await waitFor(() => expect(deleteChatThread).toHaveBeenCalledWith("thread-delete"));
+    expect(screen.queryByText("Delete this message")).not.toBeInTheDocument();
+    expect(screen.getByText("Keep me", { selector: "strong" })).toBeInTheDocument();
+  });
+
+  it("opens deana entry chips in the chat inspector without navigating away", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makePaginatedProfile("profile-ai", 1)];
+    storedAiConsents["profile-ai"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+    storedChatThreads = [{
+      id: "thread-chip",
+      profileId: "profile-ai",
+      title: "Finding link",
+      createdAt: "2026-04-26T09:00:00.000Z",
+      updatedAt: "2026-04-26T09:00:00.000Z",
+    }];
+    storedChatMessages = [{
+      id: "message-chip",
+      threadId: "thread-chip",
+      profileId: "profile-ai",
+      role: "assistant",
+      content: "Review [Medical finding 01](deana://entry/medical-1).",
+      createdAt: "2026-04-26T09:01:00.000Z",
+    }];
+
+    renderApp("/explorer/profile-ai?tab=ai");
+
+    const message = await screen.findByText(/Review/i);
+    await user.click(within(message.closest(".dn-ai-message") as HTMLElement).getByRole("button", { name: "Medical finding 01" }));
+    await waitFor(() => expect(loadReportEntry).toHaveBeenCalledWith("profile-ai", "medical-1"));
+
+    const inspector = await screen.findByLabelText("Chat inspector");
+    expect(within(inspector).getByText("Details")).toBeInTheDocument();
+    expect(within(inspector).getByText("Medical finding 01", { selector: "h2" })).toBeInTheDocument();
+    expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-ai?tab=ai");
   });
 
   it("appends another page when the user loads more category results", async () => {

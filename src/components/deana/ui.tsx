@@ -27,6 +27,11 @@ export type IconName =
   | "help"
   | "menu"
   | "plus"
+  | "compose"
+  | "trash"
+  | "send"
+  | "stop"
+  | "chat"
   | "download"
   | "print"
   | "globe"
@@ -82,6 +87,11 @@ export function Icon({ name, size = 20, ...props }: IconProps) {
       {name === "help" && <><circle {...common} cx="12" cy="12" r="9" /><path {...common} d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4" /><path {...common} d="M12 17h.01" /></>}
       {name === "menu" && <><path {...common} d="M4 7h16" /><path {...common} d="M4 12h16" /><path {...common} d="M4 17h16" /></>}
       {name === "plus" && <><path {...common} d="M12 5v14" /><path {...common} d="M5 12h14" /></>}
+      {name === "compose" && <><path {...common} d="M12 20h9" /><path {...common} d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" /></>}
+      {name === "trash" && <><path {...common} d="M4 7h16" /><path {...common} d="M10 11v6" /><path {...common} d="M14 11v6" /><path {...common} d="M6 7l1 14h10l1-14" /><path {...common} d="M9 7V4h6v3" /></>}
+      {name === "send" && <><path {...common} d="M22 2 11 13" /><path {...common} d="M22 2 15 22l-4-9-9-4 20-7Z" /></>}
+      {name === "stop" && <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />}
+      {name === "chat" && <><path {...common} d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" /><path {...common} d="M8 9h8" /><path {...common} d="M8 13h5" /></>}
       {name === "download" && <><path {...common} d="M12 4v12" /><path {...common} d="m7 11 5 5 5-5" /><path {...common} d="M4 20h16" /></>}
       {name === "print" && <><path {...common} d="M7 8V3h10v5" /><rect {...common} x="6" y="14" width="12" height="7" rx="1" /><path {...common} d="M6 18H4V9h16v9h-2" /></>}
       {name === "globe" && <><circle {...common} cx="12" cy="12" r="9" /><path {...common} d="M3 12h18" /><path {...common} d="M12 3c3 3 3 15 0 18" /><path {...common} d="M12 3c-3 3-3 15 0 18" /></>}

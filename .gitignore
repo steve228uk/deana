@@ -1,6 +1,10 @@
 node_modules
 dist
 .DS_Store
+.env
+.env.*
+!.env.example
+.vercel
 bun.lock
 *.tsbuildinfo
 vite.config.js
@@ -9,3 +13,4 @@ docs/evidence-candidates/dna-seed-*.json
 docs/evidence-candidates/dna-seed-*/
 docs/evidence-candidates/dna-bulk-*.json
 .evidence-cache/
+.env*.local

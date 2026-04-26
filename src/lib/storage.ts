@@ -3,6 +3,7 @@ import { DEFAULT_FILTERS, ExplorerFilters, buildEntrySearchText, matchesEntryFil
 import { generateReport, REPORT_VERSION } from "./reportEngine";
 import {
   ExplorerPage,
+  AiConsentAcceptance,
   ParsedDnaFile,
   ProfileMeta,
   ProfileSupplements,
@@ -10,6 +11,9 @@ import {
   ReportDataMeta,
   SavedProfile,
   SavedProfileSummary,
+  StoredAiConsent,
+  StoredChatMessage,
+  StoredChatThread,
   StoredReportEntry,
 } from "../types";
 
@@ -18,7 +22,10 @@ const LEGACY_STORE = "profiles";
 const PROFILE_META_STORE = "profile_meta";
 const PROFILE_DNA_STORE = "profile_dna";
 const REPORT_ENTRY_STORE = "report_entries";
-const DB_VERSION = 3;
+const AI_CONSENT_STORE = "ai_consent";
+const AI_CHAT_THREAD_STORE = "ai_chat_threads";
+const AI_CHAT_MESSAGE_STORE = "ai_chat_messages";
+const DB_VERSION = 5;
 const PAGE_SIZE = 50;
 
 const ENTRY_PROFILE_INDEX = "profileId";
@@ -27,12 +34,26 @@ const ENTRY_SEVERITY_INDEX = "profileCategorySeverity";
 const ENTRY_EVIDENCE_INDEX = "profileCategoryEvidence";
 const ENTRY_PUBLICATIONS_INDEX = "profileCategoryPublications";
 const ENTRY_ALPHABETICAL_INDEX = "profileCategoryAlphabetical";
+const CHAT_THREAD_PROFILE_INDEX = "profileId";
+const CHAT_THREAD_PROFILE_UPDATED_INDEX = "profileUpdatedAt";
+const CHAT_MESSAGE_PROFILE_INDEX = "profileId";
+const CHAT_MESSAGE_THREAD_INDEX = "threadId";
+const CHAT_MESSAGE_THREAD_CREATED_INDEX = "threadCreatedAt";
 
 type SortIndexName =
   | typeof ENTRY_SEVERITY_INDEX
   | typeof ENTRY_EVIDENCE_INDEX
   | typeof ENTRY_PUBLICATIONS_INDEX
   | typeof ENTRY_ALPHABETICAL_INDEX;
+
+const REQUIRED_OBJECT_STORES = [
+  PROFILE_META_STORE,
+  PROFILE_DNA_STORE,
+  REPORT_ENTRY_STORE,
+  AI_CONSENT_STORE,
+  AI_CHAT_THREAD_STORE,
+  AI_CHAT_MESSAGE_STORE,
+] as const;
 
 interface StoredProfileMetaRecord extends Omit<ProfileMeta, "dna" | "supplements"> {
   dna: SavedProfileSummary["dna"];
@@ -74,9 +95,13 @@ function transactionToPromise(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-function openDb(): Promise<IDBDatabase> {
+function hasRequiredObjectStores(db: IDBDatabase): boolean {
+  return REQUIRED_OBJECT_STORES.every((storeName) => db.objectStoreNames.contains(storeName));
+}
+
+function openDb(version = DB_VERSION, canRepairMissingStores = true): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = indexedDB.open(DB_NAME, version);
 
     request.onupgradeneeded = (event) => {
       const db = request.result;
@@ -106,6 +131,23 @@ function openDb(): Promise<IDBDatabase> {
         });
       }
 
+      if (!db.objectStoreNames.contains(AI_CONSENT_STORE)) {
+        db.createObjectStore(AI_CONSENT_STORE, { keyPath: "profileId" });
+      }
+
+      if (!db.objectStoreNames.contains(AI_CHAT_THREAD_STORE)) {
+        const threadStore = db.createObjectStore(AI_CHAT_THREAD_STORE, { keyPath: "id" });
+        threadStore.createIndex(CHAT_THREAD_PROFILE_INDEX, "profileId", { unique: false });
+        threadStore.createIndex(CHAT_THREAD_PROFILE_UPDATED_INDEX, ["profileId", "updatedAt"], { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(AI_CHAT_MESSAGE_STORE)) {
+        const messageStore = db.createObjectStore(AI_CHAT_MESSAGE_STORE, { keyPath: "id" });
+        messageStore.createIndex(CHAT_MESSAGE_PROFILE_INDEX, "profileId", { unique: false });
+        messageStore.createIndex(CHAT_MESSAGE_THREAD_INDEX, "threadId", { unique: false });
+        messageStore.createIndex(CHAT_MESSAGE_THREAD_CREATED_INDEX, ["threadId", "createdAt"], { unique: false });
+      }
+
       if (event.oldVersion > 0 && db.objectStoreNames.contains(LEGACY_STORE)) {
         migrateLegacyProfiles(transaction);
       }
@@ -115,7 +157,18 @@ function openDb(): Promise<IDBDatabase> {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+
+      if (canRepairMissingStores && !hasRequiredObjectStores(db)) {
+        const repairVersion = db.version + 1;
+        db.close();
+        openDb(repairVersion, false).then(resolve, reject);
+        return;
+      }
+
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
   });
 }
@@ -329,9 +382,13 @@ function matchesStoredEntry(
 }
 
 function deleteEntriesForProfile(store: IDBObjectStore, profileId: string): Promise<void> {
+  return deleteByIndex(store, ENTRY_PROFILE_INDEX, profileId);
+}
+
+function deleteByIndex(store: IDBObjectStore, indexName: string, value: IDBValidKey | IDBKeyRange): Promise<void> {
   return new Promise((resolve, reject) => {
-    const range = IDBKeyRange.only(profileId);
-    const request = store.index(ENTRY_PROFILE_INDEX).openKeyCursor(range);
+    const range = value instanceof IDBKeyRange ? value : IDBKeyRange.only(value);
+    const request = store.index(indexName).openKeyCursor(range);
 
     request.onsuccess = () => {
       const cursor = request.result;
@@ -342,6 +399,28 @@ function deleteEntriesForProfile(store: IDBObjectStore, profileId: string): Prom
 
       store.delete(cursor.primaryKey);
       cursor.continue();
+    };
+
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function replaceMessagesForThread(store: IDBObjectStore, threadId: string, messages: StoredChatMessage[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = store.index(CHAT_MESSAGE_THREAD_INDEX).openKeyCursor(IDBKeyRange.only(threadId));
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (cursor) {
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+        return;
+      }
+
+      for (const message of messages) {
+        store.put(message);
+      }
+      resolve();
     };
 
     request.onerror = () => reject(request.error);
@@ -549,17 +628,130 @@ export async function saveProfile(profile: SavedProfile): Promise<void> {
   await done;
 }
 
+export async function loadAiConsent(profileId: string): Promise<AiConsentAcceptance | null> {
+  const db = await openDb();
+  const transaction = db.transaction(AI_CONSENT_STORE, "readonly");
+  const record = await requestToPromise(
+    transaction.objectStore(AI_CONSENT_STORE).get(profileId) as IDBRequest<StoredAiConsent | undefined>,
+  );
+
+  if (!record) return null;
+  return {
+    accepted: record.accepted,
+    version: record.version,
+    acceptedAt: record.acceptedAt,
+  };
+}
+
+export async function saveAiConsent(profileId: string, consent: AiConsentAcceptance): Promise<void> {
+  const db = await openDb();
+  const transaction = db.transaction(AI_CONSENT_STORE, "readwrite");
+  const done = transactionToPromise(transaction);
+  const existing = await requestToPromise(
+    transaction.objectStore(AI_CONSENT_STORE).get(profileId) as IDBRequest<StoredAiConsent | undefined>,
+  );
+  transaction.objectStore(AI_CONSENT_STORE).put({
+    ...existing,
+    ...consent,
+    profileId,
+  } satisfies StoredAiConsent);
+  await done;
+}
+
+export async function loadAiChatNoticeDismissal(profileId: string): Promise<string | null> {
+  const db = await openDb();
+  const transaction = db.transaction(AI_CONSENT_STORE, "readonly");
+  const record = await requestToPromise(
+    transaction.objectStore(AI_CONSENT_STORE).get(profileId) as IDBRequest<StoredAiConsent | undefined>,
+  );
+  return record?.chatNoticeDismissedAt ?? null;
+}
+
+export async function saveAiChatNoticeDismissal(profileId: string, dismissedAt: string): Promise<void> {
+  const db = await openDb();
+  const transaction = db.transaction(AI_CONSENT_STORE, "readwrite");
+  const done = transactionToPromise(transaction);
+  const store = transaction.objectStore(AI_CONSENT_STORE);
+  const existing = await requestToPromise(store.get(profileId) as IDBRequest<StoredAiConsent | undefined>);
+  if (existing) {
+    store.put({
+      ...existing,
+      chatNoticeDismissedAt: dismissedAt,
+    } satisfies StoredAiConsent);
+  }
+  await done;
+}
+
+export async function loadChatThreads(profileId: string): Promise<StoredChatThread[]> {
+  const db = await openDb();
+  const transaction = db.transaction(AI_CHAT_THREAD_STORE, "readonly");
+  const request = transaction.objectStore(AI_CHAT_THREAD_STORE)
+    .index(CHAT_THREAD_PROFILE_INDEX)
+    .getAll(profileId) as IDBRequest<StoredChatThread[]>;
+  const records = await requestToPromise(request);
+
+  return records.slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export async function saveChatThread(thread: StoredChatThread): Promise<void> {
+  const db = await openDb();
+  const transaction = db.transaction(AI_CHAT_THREAD_STORE, "readwrite");
+  const done = transactionToPromise(transaction);
+  transaction.objectStore(AI_CHAT_THREAD_STORE).put(thread);
+  await done;
+}
+
+export async function deleteChatThread(threadId: string): Promise<void> {
+  const db = await openDb();
+  const transaction = db.transaction([AI_CHAT_THREAD_STORE, AI_CHAT_MESSAGE_STORE], "readwrite");
+  const done = transactionToPromise(transaction);
+  transaction.objectStore(AI_CHAT_THREAD_STORE).delete(threadId);
+  const deleteMessages = deleteByIndex(transaction.objectStore(AI_CHAT_MESSAGE_STORE), CHAT_MESSAGE_THREAD_INDEX, threadId);
+  await deleteMessages;
+  await done;
+}
+
+export async function loadChatMessages(threadId: string): Promise<StoredChatMessage[]> {
+  const db = await openDb();
+  const transaction = db.transaction(AI_CHAT_MESSAGE_STORE, "readonly");
+  const request = transaction.objectStore(AI_CHAT_MESSAGE_STORE)
+    .index(CHAT_MESSAGE_THREAD_INDEX)
+    .getAll(threadId) as IDBRequest<StoredChatMessage[]>;
+  const records = await requestToPromise(request);
+
+  return records.slice().sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+export async function saveChatMessages(threadId: string, messages: StoredChatMessage[]): Promise<void> {
+  const db = await openDb();
+  const transaction = db.transaction(AI_CHAT_MESSAGE_STORE, "readwrite");
+  const done = transactionToPromise(transaction);
+  await replaceMessagesForThread(transaction.objectStore(AI_CHAT_MESSAGE_STORE), threadId, messages);
+  await done;
+}
+
 export async function deleteProfile(id: string): Promise<void> {
   const db = await openDb();
-  const transaction = db.transaction([PROFILE_META_STORE, PROFILE_DNA_STORE, REPORT_ENTRY_STORE], "readwrite");
+  const transaction = db.transaction(
+    [PROFILE_META_STORE, PROFILE_DNA_STORE, REPORT_ENTRY_STORE, AI_CONSENT_STORE, AI_CHAT_THREAD_STORE, AI_CHAT_MESSAGE_STORE],
+    "readwrite",
+  );
   const done = transactionToPromise(transaction);
   const metaStore = transaction.objectStore(PROFILE_META_STORE);
   const dnaStore = transaction.objectStore(PROFILE_DNA_STORE);
   const entryStore = transaction.objectStore(REPORT_ENTRY_STORE);
+  const consentStore = transaction.objectStore(AI_CONSENT_STORE);
+  const threadStore = transaction.objectStore(AI_CHAT_THREAD_STORE);
+  const messageStore = transaction.objectStore(AI_CHAT_MESSAGE_STORE);
 
   metaStore.delete(id);
   dnaStore.delete(id);
-  await deleteEntriesForProfile(entryStore, id);
+  consentStore.delete(id);
+  await Promise.all([
+    deleteEntriesForProfile(entryStore, id),
+    deleteByIndex(threadStore, CHAT_THREAD_PROFILE_INDEX, id),
+    deleteByIndex(messageStore, CHAT_MESSAGE_PROFILE_INDEX, id),
+  ]);
   await done;
 }
 

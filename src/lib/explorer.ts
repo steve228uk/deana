@@ -28,6 +28,10 @@ export const DEFAULT_FILTERS: ExplorerFilters = {
 
 type SearchableEntry = {
   searchText?: string;
+  id?: string;
+  entryKind?: string;
+  category?: string;
+  subcategory?: string;
   title: string;
   summary: string;
   detail: string;
@@ -36,32 +40,77 @@ type SearchableEntry = {
   genes: string[];
   topics: string[];
   conditions: string[];
+  warnings?: string[];
+  sources?: ReportEntry["sources"];
+  sourceNotes?: string[];
+  evidenceTier?: string;
+  clinicalSignificance?: string | null;
+  normalizedClinicalSignificance?: string | null;
+  repute?: string;
+  publicationBucket?: string;
+  frequencyNote?: string;
+  magnitude?: number | null;
+  sourceGenotype?: string;
+  sourcePageKey?: string;
+  sourcePageUrl?: string;
+  coverage?: string;
+  tone?: string;
+  outcome?: string;
+  confidenceNote?: string;
+  disclaimer?: string;
   matchedMarkers: ReportEntry["matchedMarkers"];
 };
 
-export function buildEntrySearchText(entry: Pick<
-  ReportEntry,
-  | "title"
-  | "summary"
-  | "detail"
-  | "whyItMatters"
-  | "genotypeSummary"
-  | "genes"
-  | "topics"
-  | "conditions"
-  | "matchedMarkers"
->): string {
+function compactSearchValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.map(compactSearchValue).join(" ");
+  if (typeof value === "object") return Object.values(value).map(compactSearchValue).join(" ");
+  return String(value);
+}
+
+export function buildEntrySearchText(entry: SearchableEntry): string {
   return [
+    entry.id,
+    entry.entryKind,
+    entry.category,
+    entry.subcategory,
     entry.title,
     entry.summary,
     entry.detail,
     entry.whyItMatters,
     entry.genotypeSummary,
+    entry.evidenceTier,
+    entry.clinicalSignificance,
+    entry.normalizedClinicalSignificance,
+    entry.repute,
+    entry.publicationBucket,
+    entry.frequencyNote,
+    entry.magnitude,
+    entry.sourceGenotype,
+    entry.sourcePageKey,
+    entry.sourcePageUrl,
+    entry.coverage,
+    entry.tone,
+    entry.outcome,
+    entry.confidenceNote,
+    entry.disclaimer,
     ...entry.genes,
     ...entry.topics,
     ...entry.conditions,
-    ...entry.matchedMarkers.map((marker) => marker.rsid),
+    ...(entry.warnings ?? []),
+    ...(entry.sourceNotes ?? []),
+    ...(entry.sources ?? []).flatMap((source) => [source.id, source.name, source.url]),
+    ...entry.matchedMarkers.flatMap((marker) => [
+      marker.rsid,
+      marker.genotype,
+      marker.chromosome,
+      marker.position,
+      marker.gene,
+      marker.matchedAllele,
+      marker.matchedAlleleCount,
+    ]),
   ]
+    .map(compactSearchValue)
     .join(" ")
     .toLowerCase();
 }
