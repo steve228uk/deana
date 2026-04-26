@@ -563,6 +563,7 @@ describe("Deana app", () => {
 
     await screen.findByText("Current report");
     const card = await screen.findByRole("button", { name: /rs995030 genotype context/i });
+    expect(within(card).queryByText("Local evidence")).not.toBeInTheDocument();
     expect(within(card).getByText("Bad repute")).toBeInTheDocument();
     expect(within(card).getByText("DNA")).toBeInTheDocument();
     expect(within(card).getByText(/rs995030 GG/)).toBeInTheDocument();

@@ -435,10 +435,9 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
 
   return (
     <button className={`dn-finding-card ${selected ? "is-selected" : ""} dn-finding-tone-${toneForEntry(entry)}`} onClick={onClick}>
-      <span className="dn-finding-card__icon"><Icon name={iconForTab(entry.category)} /></span>
+        <span className="dn-finding-card__icon"><Icon name={iconForTab(entry.category)} /></span>
       <div className="dn-finding-card__main">
         <div className="dn-finding-card__meta">
-          {entry.entryKind === "local-evidence" ? <span>Local evidence</span> : null}
           <span>{entry.sources[0]?.name ?? "Source"}</span>
           <span>{entry.evidenceTier} · {entry.coverage}</span>
           <span className="dn-priority-pill">{priorityLabel(entry)}</span>
