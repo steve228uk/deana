@@ -525,12 +525,12 @@ class DnaTextParser {
 
     if (rsids.length === 0) {
       this.eligibleUnannotatedRows += 1;
-      this.cachedBuild ??= detectBuild(this.metadata);
+      const currentBuild = this.cachedBuild ??= detectBuild(this.metadata);
       const selectedAltAlleles = selectedVcfAltAlleles(sampleValues[gtIndex] ?? "", alt);
       const annotatedRsids = selectedAltAlleles.flatMap((selectedAlt) =>
         annotateVariantRsids(
           this.options.annotationLookup,
-          this.cachedBuild,
+          currentBuild,
           chromosome,
           Number(position) || 0,
           ref,
