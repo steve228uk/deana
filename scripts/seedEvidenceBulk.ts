@@ -1,4 +1,3 @@
-import { gunzipSync, strFromU8, unzipSync } from "fflate";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -6,7 +5,8 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { createGunzip } from "node:zlib";
-import type { CompactMarker, ParsedDnaFile, ProviderName } from "../src/types";
+import { parseDnaBytes } from "../src/lib/dnaParser";
+import type { ParsedDnaFile } from "../src/types";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
@@ -67,97 +67,9 @@ function parseOptions(argv: string[]): Options {
   };
 }
 
-function detectProvider(text: string): ProviderName {
-  const sample = text.slice(0, 1200).toLowerCase();
-  if (sample.includes("ancestrydna raw data")) return "AncestryDNA";
-  if (sample.includes("23andme")) return "23andMe";
-  if (sample.includes("myheritage")) return "MyHeritage";
-  if (sample.includes("family tree dna") || sample.includes("familytreedna")) return "FamilyTreeDNA";
-  return "Unknown";
-}
-
-function detectBuild(text: string): string {
-  const lower = text.toLowerCase();
-  if (lower.includes("build 38") || lower.includes("grch38")) return "GRCh38";
-  if (lower.includes("build 37") || lower.includes("37.1") || lower.includes("grch37")) return "GRCh37";
-  return "Unknown";
-}
-
-function normalizeGenotype(raw: string): string {
-  const trimmed = raw.trim().replaceAll("\"", "");
-  if (!trimmed || trimmed === "0" || trimmed === "--") return "--";
-  if (/^[ACGTDI]{2}$/i.test(trimmed)) return trimmed.toUpperCase();
-  return trimmed.toUpperCase();
-}
-
-function pickZipEntry(entries: Record<string, Uint8Array>): { name: string; bytes: Uint8Array } {
-  const preferred = Object.entries(entries)
-    .filter(([name]) => !name.endsWith("/"))
-    .sort(([left], [right]) => {
-      const leftScore = /\.(txt|csv)$/i.test(left) ? 0 : 1;
-      const rightScore = /\.(txt|csv)$/i.test(right) ? 0 : 1;
-      return leftScore - rightScore;
-    });
-
-  if (preferred.length === 0) {
-    throw new Error("The zip file did not contain a readable DNA export.");
-  }
-
-  const [name, bytes] = preferred[0];
-  return { name, bytes };
-}
-
-function parseText(fileName: string, text: string, importedFrom: ParsedDnaFile["importedFrom"]): ParsedDnaFile {
-  const lines = text.split(/\r?\n/);
-  const provider = detectProvider(text);
-  const build = detectBuild(text);
-  const markers: CompactMarker[] = [];
-  let delimiter = "\t";
-  let headerCols: string[] = [];
-  let headerFound = false;
-
-  for (const line of lines) {
-    if (!line.trim() || line.startsWith("#")) continue;
-    if (!headerFound) {
-      delimiter = line.includes("\t") ? "\t" : ",";
-      headerCols = line.split(delimiter).map((part) => part.trim().toLowerCase());
-      headerFound = true;
-      continue;
-    }
-
-    const parts = line.split(delimiter).map((part) => part.trim().replaceAll("\"", ""));
-    if (parts.length < 4) continue;
-    if (headerCols.includes("allele1") && headerCols.includes("allele2")) {
-      const [rsid, chromosome, position, allele1, allele2] = parts;
-      if (!rsid) continue;
-      markers.push([rsid, chromosome, Number(position) || 0, normalizeGenotype(`${allele1}${allele2}`)]);
-      continue;
-    }
-
-    const rsid = parts[0];
-    if (!rsid) continue;
-    markers.push([rsid, parts[1] ?? "", Number(parts[2] ?? 0), normalizeGenotype(parts[3] ?? "--")]);
-  }
-
-  if (markers.length === 0) {
-    throw new Error("No DNA markers could be parsed from that file.");
-  }
-
-  return { provider, build, markerCount: markers.length, fileName, importedFrom, markers };
-}
-
 async function parseDnaFile(filePath: string): Promise<ParsedDnaFile> {
   const bytes = new Uint8Array(await readFile(filePath));
-  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
-  const isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
-  if (isZip) {
-    const entry = pickZipEntry(unzipSync(bytes));
-    return parseText(entry.name, strFromU8(entry.bytes), "zip");
-  }
-  if (isGzip) {
-    return parseText(path.basename(filePath).replace(/\.gz$/i, ""), strFromU8(gunzipSync(bytes)), "gzip");
-  }
-  return parseText(path.basename(filePath), new TextDecoder().decode(bytes), "text");
+  return parseDnaBytes(path.basename(filePath), bytes);
 }
 
 function splitTsv(line: string): string[] {

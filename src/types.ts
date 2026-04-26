@@ -3,6 +3,8 @@ export type ProviderName =
   | "23andMe"
   | "MyHeritage"
   | "FamilyTreeDNA"
+  | "Nebula Genomics"
+  | "VCF"
   | "Unknown";
 
 export type InsightCategory = "medical" | "traits" | "drug";
