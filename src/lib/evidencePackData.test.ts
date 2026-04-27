@@ -130,7 +130,7 @@ describe("fetchLocalEvidencePack", () => {
     expect(matches[0].matchedMarkers[0].matchedAlleleCount).toBe(1);
   });
 
-  it("requires exact genotypes for local SNPedia genotype pages", () => {
+  it("matches SNPedia genotype pages on either strand", () => {
     const matches = matchEvidenceRecords(
       [["rs7412", "19", 45412079, "CC"]],
       [
@@ -148,5 +148,45 @@ describe("fetchLocalEvidencePack", () => {
     );
 
     expect(matches.map((match) => match.record.id)).toEqual(["right-genotype"]);
+  });
+
+  it("matches a minus-strand heterozygous genotype against its plus-strand SNPedia record", () => {
+    // Consumer arrays report rs6025 as CT (minus strand) but SNPedia stores AG (plus strand)
+    const matches = matchEvidenceRecords(
+      [["rs6025", "1", 169519049, "CT"]],
+      [
+        { ...makeRecord("snpedia-rs6025-a-g", "rs6025"), sourceId: "snpedia", genotype: "AG" },
+        { ...makeRecord("snpedia-rs6025-a-a", "rs6025"), sourceId: "snpedia", genotype: "AA" },
+        { ...makeRecord("snpedia-rs6025-g-g", "rs6025"), sourceId: "snpedia", genotype: "GG" },
+      ],
+    );
+
+    expect(matches.map((m) => m.record.id)).toEqual(["snpedia-rs6025-a-g"]);
+  });
+
+  it("matches minus-strand homozygous risk against plus-strand SNPedia record", () => {
+    const matches = matchEvidenceRecords(
+      [["rs6025", "1", 169519049, "TT"]],
+      [
+        { ...makeRecord("snpedia-rs6025-a-g", "rs6025"), sourceId: "snpedia", genotype: "AG" },
+        { ...makeRecord("snpedia-rs6025-a-a", "rs6025"), sourceId: "snpedia", genotype: "AA" },
+        { ...makeRecord("snpedia-rs6025-g-g", "rs6025"), sourceId: "snpedia", genotype: "GG" },
+      ],
+    );
+
+    expect(matches.map((m) => m.record.id)).toEqual(["snpedia-rs6025-a-a"]);
+  });
+
+  it("matches minus-strand homozygous reference against plus-strand SNPedia record", () => {
+    const matches = matchEvidenceRecords(
+      [["rs6025", "1", 169519049, "CC"]],
+      [
+        { ...makeRecord("snpedia-rs6025-a-g", "rs6025"), sourceId: "snpedia", genotype: "AG" },
+        { ...makeRecord("snpedia-rs6025-a-a", "rs6025"), sourceId: "snpedia", genotype: "AA" },
+        { ...makeRecord("snpedia-rs6025-g-g", "rs6025"), sourceId: "snpedia", genotype: "GG" },
+      ],
+    );
+
+    expect(matches.map((m) => m.record.id)).toEqual(["snpedia-rs6025-g-g"]);
   });
 });

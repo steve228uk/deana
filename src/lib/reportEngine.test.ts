@@ -238,4 +238,49 @@ describe("reportEngine", () => {
     const factorV = report.entries.find((entry) => entry.id === "medical-factor-v");
     expect(factorV?.summary).toContain("One Leiden allele");
   });
+
+  it("interprets rs6025 CC (minus-strand homozygous reference) as no Leiden allele", () => {
+    const dna = {
+      ...makeParsedDnaFile(),
+      markers: [["rs6025", "1", 169519049, "CC"]] as [string, string, number, string][],
+      markerCount: 1,
+    };
+    const report = generateReport(dna);
+    const factorV = report.entries.find((entry) => entry.id === "medical-factor-v");
+    expect(factorV?.summary).toContain("No Leiden allele");
+  });
+
+  it("interprets rs6025 TT (minus-strand homozygous risk) as two Leiden alleles", () => {
+    const dna = {
+      ...makeParsedDnaFile(),
+      markers: [["rs6025", "1", 169519049, "TT"]] as [string, string, number, string][],
+      markerCount: 1,
+    };
+    const report = generateReport(dna);
+    const factorV = report.entries.find((entry) => entry.id === "medical-factor-v");
+    expect(factorV?.summary).toContain("Two Leiden alleles");
+  });
+
+  it("interprets rs1799963 CC (minus-strand reference) as no prothrombin risk", () => {
+    const dna = {
+      ...makeParsedDnaFile(),
+      markers: [["rs1799963", "11", 46761055, "CC"]] as [string, string, number, string][],
+      markerCount: 1,
+    };
+    const report = generateReport(dna);
+    const prothrombin = report.entries.find((entry) => entry.id === "medical-prothrombin");
+    expect(prothrombin?.summary).toContain("No risk allele");
+    expect(prothrombin?.tone).toBe("good");
+  });
+
+  it("interprets rs1799963 CT (minus-strand heterozygous) as one prothrombin risk allele", () => {
+    const dna = {
+      ...makeParsedDnaFile(),
+      markers: [["rs1799963", "11", 46761055, "CT"]] as [string, string, number, string][],
+      markerCount: 1,
+    };
+    const report = generateReport(dna);
+    const prothrombin = report.entries.find((entry) => entry.id === "medical-prothrombin");
+    expect(prothrombin?.summary).toContain("One risk allele");
+  });
 });
