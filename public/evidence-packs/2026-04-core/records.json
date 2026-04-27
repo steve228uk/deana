@@ -42,7 +42,7 @@
     "release": "ClinVar public release, weekly-maintained",
     "evidenceLevel": "high",
     "clinicalSignificance": "pathogenic",
-    "riskAllele": "C",
+    "riskAllele": "T",
     "pmids": [
       "8164741",
       "15718284"
