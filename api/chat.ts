@@ -158,9 +158,13 @@ function isRateLimited(request: Request): boolean {
   const record = requestCounts.get(key);
 
   if (!record || now > record.resetAt) {
-    if (requestCounts.size > 5_000) {
+    if (requestCounts.size > 1_000) {
+      let removed = 0;
       for (const [k, r] of requestCounts) {
-        if (now > r.resetAt) requestCounts.delete(k);
+        if (now > r.resetAt) {
+          requestCounts.delete(k);
+          if (++removed >= 100) break;
+        }
       }
     }
     requestCounts.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });

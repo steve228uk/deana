@@ -61,6 +61,8 @@ function markerToMatchedMarker(
   };
 }
 
+const verifiedShardPaths = new Set<string>();
+
 async function sha256(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -88,9 +90,13 @@ async function fetchRecordsFile(
   }
 
   const recordsText = await recordsResponse.text();
-  const digest = await sha256(recordsText);
-  if (digest !== expectedSha256) {
-    throw new Error("Local evidence pack checksum did not match the manifest.");
+
+  if (!verifiedShardPaths.has(expectedSha256)) {
+    const digest = await sha256(recordsText);
+    if (digest !== expectedSha256) {
+      throw new Error("Local evidence pack checksum did not match the manifest.");
+    }
+    verifiedShardPaths.add(expectedSha256);
   }
 
   return JSON.parse(recordsText) as EvidencePackRecord[];
