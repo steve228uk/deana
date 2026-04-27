@@ -341,17 +341,19 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
     evaluate: (map) => {
       const markers = [readMarker(map, "rs1799963", "F2")];
       const genotype = markers[0].genotype;
+      // Risk allele is A on the plus strand or T on the minus strand (consumer array reporting)
+      const riskCount = genotype ? [...genotype].filter((a) => a === "A" || a === "T").length : 0;
       return {
-        tone: genotype && genotype !== "GG" ? "caution" : "good",
+        tone: riskCount > 0 ? "caution" : "good",
         coverage: coverageFrom(markers),
         summary:
           genotype === null
             ? "This upload did not include the main prothrombin thrombophilia marker."
-            : genotype === "AG"
-              ? "One A allele is present, which is associated with elevated clotting risk."
-              : genotype === "AA"
-                ? "Two A alleles are present. This is uncommon and should be treated as clinically significant until confirmed."
-                : "No A allele was detected at this marker.",
+            : riskCount === 0
+              ? "No risk allele was detected at this marker."
+              : riskCount === 1
+                ? "One risk allele is present, which is associated with elevated clotting risk."
+                : "Two risk alleles are present. This is uncommon and should be treated as clinically significant until confirmed.",
         detail:
           "Prothrombin G20210A is commonly discussed alongside Factor V Leiden in clotting risk context, but chip data alone is still incomplete.",
         whyItMatters:
