@@ -12,6 +12,7 @@ import {
   ReportEntry,
 } from "../types";
 import { normalizeClinicalSignificance } from "./normalization";
+import { AUTO_DEFINITION_PARAMS } from "./autoDefinitions";
 
 export const EVIDENCE_PACK_VERSION = "2026-04-core";
 
@@ -79,6 +80,85 @@ export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
 };
 
 type MarkerMap = Map<string, CompactMarker>;
+
+export interface GenericDefinitionParams {
+  id: string;
+  rsid: string;
+  gene: string;
+  riskAllele: string | null;
+  category: InsightCategory;
+  subcategory: string;
+  title: string;
+  riskSummary: string;
+  topics: string[];
+  conditions: string[];
+  evidenceTier: EvidenceTier;
+  clinicalSignificance: string | null;
+  repute: ReputeStatus;
+  publicationCount: number;
+  sourceIds: string[];
+  frequencyNote?: string;
+}
+
+export function makeGenericDefinition(p: GenericDefinitionParams): EvidenceDefinition {
+  return {
+    id: p.id,
+    category: p.category,
+    subcategory: p.subcategory,
+    title: p.title,
+    markerIds: [p.rsid],
+    genes: p.gene ? [p.gene] : [],
+    topics: p.topics,
+    conditions: p.conditions,
+    evidenceTier: p.evidenceTier,
+    clinicalSignificance: p.clinicalSignificance,
+    repute: p.repute,
+    publicationCount: p.publicationCount,
+    sourceIds: p.sourceIds,
+    frequencyNote: p.frequencyNote,
+    evaluate: (map) => {
+      const markers = [readMarker(map, p.rsid, p.gene || undefined)];
+      const genotype = markers[0].genotype;
+      const riskCount =
+        p.riskAllele && genotype
+          ? [...genotype].filter((a) => a === p.riskAllele).length
+          : null;
+      const tone: InsightTone =
+        riskCount !== null && riskCount > 0 && p.repute === "bad"
+          ? "caution"
+          : riskCount !== null && riskCount > 0 && p.repute === "good"
+            ? "good"
+            : "neutral";
+      const summary =
+        genotype === null
+          ? `This upload did not include the ${p.rsid} marker.`
+          : riskCount === 0
+            ? `No risk allele detected at ${p.rsid}.`
+            : riskCount === 1
+              ? `One copy of the risk allele detected. ${p.riskSummary}.`
+              : riskCount === 2
+                ? `Two copies of the risk allele detected. ${p.riskSummary}.`
+                : `${p.rsid} present (${genotype}). ${p.riskSummary}.`;
+      return {
+        tone,
+        coverage: coverageFrom(markers),
+        summary,
+        detail: p.riskSummary,
+        whyItMatters: `${p.gene || p.rsid} is one of the better-characterised loci for ${p.conditions[0] ?? p.title}.`,
+        genotypeSummary: summaryList(markers),
+        matchedMarkers: markers,
+        warnings: [
+          "This finding came from an automatically ingested source; interpret alongside clinical context.",
+          "Consumer array coverage may not capture all relevant variants at this locus.",
+        ],
+        confidenceNote:
+          genotype === null
+            ? `The ${p.rsid} marker was not present in this upload.`
+            : `The ${p.rsid} marker was present.`,
+      };
+    },
+  };
+}
 
 export interface EvidenceDefinition {
   id: string;
@@ -755,6 +835,7 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
       };
     },
   },
+  ...AUTO_DEFINITION_PARAMS.map(makeGenericDefinition),
 ];
 
 export function createEntryFromDefinition(
