@@ -60,6 +60,33 @@ Do not add non-local AI tools. The `searchReportFindings` tool is a planner only
 
 Keep `.evidence-cache`, generated seed/bulk candidate JSON, and local DNA files out of git. Keep `public/evidence-packs` tracked because the deployed static app serves those files directly.
 
+### Curated Records (`records.json`)
+
+`public/evidence-packs/<version>/records.json` is a hand-maintained seed layer. The build script loads it first before ClinVar, GWAS, and SNPedia bulk records; curated records take precedence when IDs collide. It is **not** auto-generated — changes must be made manually.
+
+When editing a curated record's `riskAllele` or any other field, three files must be updated together:
+
+1. Edit `records.json`.
+2. Find the correct shard: `rsid_numeric % 256` gives the bucket (e.g. rs6025 → 6025 % 256 = 137 → `shards/m137.json`).
+3. Apply the same change to the matching record in the shard file.
+4. Recalculate the shard's SHA-256 and update `manifest.json` under that shard's `recordsSha256` entry.
+
+The browser validates every shard's content against the manifest checksum on load; a mismatch causes a hard error.
+
+### Strand Orientation in Evaluate Functions
+
+Consumer DNA arrays (AncestryDNA, 23andMe) frequently report SNPs on the minus strand. A SNP with plus-strand alleles G/A (risk allele A) appears as C/T (risk allele T) in minus-strand files. Evaluate functions in `src/lib/evidencePack.ts` must handle both orientations.
+
+For SNPs where the risk allele is A on the plus strand and T on the minus strand, count both:
+
+```typescript
+const riskCount = genotype ? [...genotype].filter((a) => a === "A" || a === "T").length : 0;
+```
+
+For the `riskAllele` field in curated records, use the minus-strand allele (e.g. `"T"` for rs6025 and rs1799963) because consumer arrays predominantly report those SNPs on the minus strand.
+
+SNPedia records store plus-strand genotypes parsed from page titles. `markerMatchesRecord` in `evidencePackData.ts` checks both the stored genotype and its Watson-Crick complement, so minus-strand user data matches automatically. Do **not** add complement checking to the `riskAllele` branch — the complement of a risk allele can equal the reference allele for some SNPs, causing false positives on reference-homozygous users.
+
 ## Coding Style & Naming Conventions
 
 Write strict TypeScript and React function components. Use 2-space indentation, double quotes, semicolons, and named exports for reusable modules, matching the existing code. Components and screens use `PascalCase` file names, for example `HomeScreen.tsx`; library modules use lower camel case, for example `reportEngine.ts`; workers use the `.worker.ts` suffix.

@@ -147,6 +147,8 @@ That command downloads large NCBI dbSNP VCFs into `.evidence-cache/dbsnp`, maps 
 
 Source caches are written under `.evidence-cache`, which is intentionally ignored. Generated candidate dumps under `docs/evidence-candidates` are also ignored. The shipped static pack in `public/evidence-packs` is tracked because the browser app serves it directly.
 
+`public/evidence-packs/<version>/records.json` is a hand-maintained curated seed layer loaded by the build script before bulk ClinVar, GWAS, and SNPedia records. It contains high-priority entries (specific ClinVar variants, CPIC pharmacogenomics records, and curated associations) that the automated pipeline does not produce in the correct form. When editing a curated record's fields, the corresponding shard file and the shard's SHA-256 in `manifest.json` must be updated to match — see `AGENTS.md` for the three-file update pattern.
+
 GWAS sync is optional unless a current association export URL is supplied. The sync script accepts the current GWAS Catalog ZIP release and extracts the associations TSV into `.evidence-cache/gwas/associations.tsv`:
 
 ```bash
@@ -203,4 +205,4 @@ See [LICENSE.md](LICENSE.md) and [NOTICE](NOTICE) for full terms and attribution
 
 ## Medical Disclaimer
 
-Deana is informational software. It is not medical advice, diagnosis, or treatment. Consumer raw DNA arrays can miss clinically important variants, can include strand/build differences, and should not be used for clinical decisions without qualified review and confirmatory testing.
+Deana is informational software. It is not medical advice, diagnosis, or treatment. Consumer raw DNA arrays can miss clinically important variants, report alleles on the minus strand (requiring strand-aware interpretation), and should not be used for clinical decisions without qualified review and confirmatory testing.
