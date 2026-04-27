@@ -293,17 +293,20 @@ export const EVIDENCE_DEFINITIONS: EvidenceDefinition[] = [
     evaluate: (map) => {
       const markers = [readMarker(map, "rs6025", "F5")];
       const genotype = markers[0].genotype;
+      // Risk allele is A on the plus strand (GRCh38 ALT) or T on the minus strand
+      // (how AncestryDNA/23andMe report this SNP). Count either to get allele count.
+      const riskCount = genotype ? [...genotype].filter((a) => a === "A" || a === "T").length : 0;
       return {
-        tone: genotype && genotype !== "TT" ? "caution" : "good",
+        tone: riskCount > 0 ? "caution" : "good",
         coverage: coverageFrom(markers),
         summary:
           genotype === null
             ? "Factor V Leiden was not covered by this file."
-            : genotype === "CT"
-              ? "One Leiden allele is present, which is associated with elevated venous thrombosis risk."
-              : genotype === "CC"
-                ? "Two Leiden alleles are present, which is associated with substantially elevated thrombosis risk."
-                : "No Leiden allele was detected at this marker.",
+            : riskCount === 0
+              ? "No Leiden allele was detected at this marker."
+              : riskCount === 1
+                ? "One Leiden allele is present, which is associated with elevated venous thrombosis risk."
+                : "Two Leiden alleles are present, which is associated with substantially elevated thrombosis risk.",
         detail:
           "This is one of the clearer consumer-array medical markers, but overall clotting risk still depends on medical history, hormones, surgery, pregnancy, and other factors.",
         whyItMatters:

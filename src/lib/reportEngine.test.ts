@@ -238,4 +238,26 @@ describe("reportEngine", () => {
     const factorV = report.entries.find((entry) => entry.id === "medical-factor-v");
     expect(factorV?.summary).toContain("One Leiden allele");
   });
+
+  it("interprets rs6025 CC (minus-strand homozygous reference) as no Leiden allele", () => {
+    const dna = {
+      ...makeParsedDnaFile(),
+      markers: [["rs6025", "1", 169519049, "CC"]] as [string, string, number, string][],
+      markerCount: 1,
+    };
+    const report = generateReport(dna);
+    const factorV = report.entries.find((entry) => entry.id === "medical-factor-v");
+    expect(factorV?.summary).toContain("No Leiden allele");
+  });
+
+  it("interprets rs6025 TT (minus-strand homozygous risk) as two Leiden alleles", () => {
+    const dna = {
+      ...makeParsedDnaFile(),
+      markers: [["rs6025", "1", 169519049, "TT"]] as [string, string, number, string][],
+      markerCount: 1,
+    };
+    const report = generateReport(dna);
+    const factorV = report.entries.find((entry) => entry.id === "medical-factor-v");
+    expect(factorV?.summary).toContain("Two Leiden alleles");
+  });
 });
