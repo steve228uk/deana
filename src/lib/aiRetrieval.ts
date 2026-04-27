@@ -213,33 +213,26 @@ export async function searchReportEntriesForChat({
   const categories = ALL_CATEGORIES;
   const terms = searchTerms(prompt, effectivePlan);
   const seen = new Set<string>();
-  const rankedTop: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
-  const maxRanked = Math.max(limit * 8, limit);
-  let scanned = 0;
+  const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
 
-  for await (const entry of streamReportEntries(profileId)) {
-    if (seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
-    if (matchedFields.length > 0) {
-      rankedTop.push({ entry, score, matchedFields });
-      rankedTop.sort((left, right) =>
-        right.score - left.score ||
-        right.entry.sort.severity - left.entry.sort.severity ||
-        left.entry.title.localeCompare(right.entry.title),
-      );
-      if (rankedTop.length > maxRanked) {
-        rankedTop.length = maxRanked;
+  for (const category of categories) {
+    for await (const entry of streamReportEntries(profileId, category)) {
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
+      if (matchedFields.length > 0) {
+        ranked.push({ entry, score, matchedFields });
       }
-    }
-
-    scanned += 1;
-    if (scanned % 200 === 0) {
-      await Promise.resolve();
     }
   }
 
-  const selectedRanked = rankedTop.slice(0, limit);
+  ranked.sort((left, right) =>
+    right.score - left.score ||
+    right.entry.sort.severity - left.entry.sort.severity ||
+    left.entry.title.localeCompare(right.entry.title),
+  );
+
+  const selectedRanked = ranked.slice(0, limit);
   const selected = selectedRanked.map(({ entry }) => findingToChatContext(entry));
 
   return {
