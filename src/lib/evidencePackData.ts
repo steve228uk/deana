@@ -91,12 +91,12 @@ async function fetchRecordsFile(
 
   const recordsText = await recordsResponse.text();
 
-  if (!verifiedShardPaths.has(path)) {
+  if (!verifiedShardPaths.has(expectedSha256)) {
     const digest = await sha256(recordsText);
     if (digest !== expectedSha256) {
       throw new Error("Local evidence pack checksum did not match the manifest.");
     }
-    verifiedShardPaths.add(path);
+    verifiedShardPaths.add(expectedSha256);
   }
 
   return JSON.parse(recordsText) as EvidencePackRecord[];

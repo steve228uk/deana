@@ -628,11 +628,11 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (lastIndex < value.length) nodes.push(value.slice(lastIndex));
       return nodes.length > 0 ? <>{nodes}</> : <>{children}</>;
     },
-  }), [openEntryPanel]);
+  }), []);
 
   const handleOpenEntry = useCallback(
     (entryId: string) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`),
-    [openEntryPanel],
+    [],
   );
 
   return (
@@ -743,7 +743,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
           searchStatus={searchStatus}
           onClose={() => setPanel(null)}
           onBack={() => setPanel({ mode: "findings" })}
-          onOpenEntry={(entryId) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`)}
+          onOpenEntry={handleOpenEntry}
         />
       ) : null}
       {modal === "chatPrivacy" ? <ChatPrivacyModal onClose={() => setModal(null)} /> : null}

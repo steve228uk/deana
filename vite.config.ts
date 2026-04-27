@@ -2,8 +2,11 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { visualizer } from "rollup-plugin-visualizer";
 
-export default defineConfig({
-  plugins: [react(), visualizer({ filename: "stats.html", gzipSize: true, brotliSize: true })],
+export default defineConfig(({ command }) => ({
+  plugins: [
+    react(),
+    ...(command === "build" ? [visualizer({ filename: "stats.html", gzipSize: true, brotliSize: true })] : []),
+  ],
   build: {
     rollupOptions: {
       output: {
@@ -19,4 +22,4 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
   },
-});
+}));
