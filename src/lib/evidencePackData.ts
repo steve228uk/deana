@@ -24,12 +24,20 @@ function alleleCount(genotype: string | null, allele?: string): number | null {
   return genotype.split("").filter((value) => value === allele.toUpperCase()).length;
 }
 
+const COMPLEMENT: Record<string, string> = { A: "T", T: "A", C: "G", G: "C" };
+
+function complementGenotype(genotype: string): string {
+  return genotype.toUpperCase().split("").map((a) => COMPLEMENT[a] ?? a).join("");
+}
+
 function markerMatchesRecord(marker: CompactMarker | undefined, record: EvidencePackRecord): boolean {
   const genotype = canonicalGenotype(marker?.[3] ?? null);
   if (!genotype) return false;
 
   if (record.genotype) {
-    return genotype === canonicalGenotype(record.genotype);
+    const stored = canonicalGenotype(record.genotype);
+    const comp = canonicalGenotype(complementGenotype(record.genotype));
+    return genotype === stored || (comp !== null && genotype === comp);
   }
 
   if (record.riskAllele && /^[ACGT]$/i.test(record.riskAllele)) {
