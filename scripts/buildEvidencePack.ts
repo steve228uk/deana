@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { createGunzip } from "node:zlib";
 import type {
   EvidencePackManifest,
   EvidencePackRecord,
@@ -17,6 +16,8 @@ import type {
 } from "../src/types";
 import { normalizeConditions } from "../src/lib/normalization";
 import { normalizeChromosome } from "../src/lib/dbsnpAnnotation";
+import { column, extractPmids, extractRsids, normalizeRsid, singleBaseAllele, splitTsv, tsvRows } from "./tsvUtils";
+import { DEFINITION_MARKERS, DEFINITION_TITLES } from "./definitionMarkers";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
@@ -133,49 +134,6 @@ function parseOptions(argv: string[]): Options {
   return options;
 }
 
-function splitTsv(line: string): string[] {
-  return line.split("\t").map((value) => value.trim());
-}
-
-async function* tsvRows(filePath: string): AsyncGenerator<Record<string, string>> {
-  const stream = filePath.endsWith(".gz")
-    ? createReadStream(filePath).pipe(createGunzip())
-    : createReadStream(filePath);
-  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  let headers: string[] | null = null;
-
-  for await (const line of lines) {
-    if (!line.trim()) continue;
-    if (!headers) {
-      headers = splitTsv(line);
-      continue;
-    }
-    const values = splitTsv(line);
-    const row: Record<string, string> = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index] ?? "";
-    });
-    yield row;
-  }
-}
-
-function column(row: Record<string, string>, names: string[]): string {
-  for (const name of names) {
-    const value = row[name];
-    if (value) return value;
-  }
-  return "";
-}
-
-function normalizeRsid(value: string): string | null {
-  const match = value.match(/rs\d+/i);
-  if (!match) return null;
-  return match[0].toLowerCase();
-}
-
-function extractRsids(value: string): string[] {
-  return Array.from(new Set(Array.from(value.matchAll(/rs\d+/gi), (match) => match[0].toLowerCase())));
-}
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -404,14 +362,6 @@ function plainClinvarTitle(gene: string, significance: string, conditions: strin
   return `${gene} variant reported for ${condition}`;
 }
 
-function singleBaseAllele(value: string): string | undefined {
-  const allele = value.trim().toUpperCase();
-  return /^[ACGT]$/.test(allele) ? allele : undefined;
-}
-
-function extractClinvarPmids(otherIds: string): string[] {
-  return Array.from(otherIds.matchAll(/(?:PubMed|PMID):(\d+)/gi), (m) => m[1]);
-}
 
 function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
   const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
@@ -431,7 +381,7 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
   const condition = primaryCondition(traits, "the reported condition");
   const riskAllele = singleBaseAllele(column(row, ["AlternateAlleleVCF", "AlternateAllele"]));
   const title = plainClinvarTitle(gene, significance, traits, category);
-  const pmids = extractClinvarPmids(column(row, ["OtherIDs"]));
+  const pmids = extractPmids(column(row, ["OtherIDs"]));
   const numSubmitters = column(row, ["NumberSubmitters"]);
   const lastEvaluated = column(row, ["LastEvaluated"]);
 
@@ -451,11 +401,7 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
     title,
     technicalName,
     summary: `ClinVar classifies this ${gene} variant as ${significance.toLowerCase()} for ${condition}.`,
-    detail: [
-      `ClinVar reports ${significance} for ${technicalName}.`,
-      `Review status: ${reviewStatus || "not supplied"}.`,
-      ...(submitterNote ? [submitterNote] : []),
-    ].join(" "),
+    detail: `ClinVar reports ${significance} for ${technicalName}.`,
     whyItMatters: `This is source-reviewed clinical context for ${condition}; Deana only surfaces it when the uploaded genotype matches the reported allele where ClinVar provides one.`,
     topics: ["ClinVar", "Clinical variant"],
     conditions: traits,
@@ -530,7 +476,7 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
   const rawUrl = column(row, ["LINK"]);
 
   const detailParts: string[] = [
-    `GWAS Catalog association with p=${column(row, ["P-VALUE"])}.`,
+    `GWAS Catalog association with p=${pValue}.`,
   ];
   if (orBetaRaw && Number.isFinite(orBeta)) {
     detailParts.push(`Effect: OR/Beta=${orBetaRaw}${ci ? ` ${ci}` : ""}.`);
@@ -548,7 +494,7 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
   ];
 
   const frequencyNote =
-    riskAlleleFreq && riskAlleleFreq !== "NR" && riskAlleleFreq !== ""
+    riskAlleleFreq && riskAlleleFreq !== "NR"
       ? `Risk allele frequency in study: ${riskAlleleFreq}`
       : undefined;
 
@@ -737,21 +683,6 @@ async function buildSnpediaRecords(): Promise<EvidencePackRecord[]> {
   });
 }
 
-// rsids declared in the 12 hand-crafted EVIDENCE_DEFINITIONS, grouped by definition id
-const DEFINITION_MARKERS: Record<string, string[]> = {
-  "medical-apoe":       ["rs429358", "rs7412"],
-  "medical-factor-v":   ["rs6025"],
-  "medical-prothrombin":["rs1799963"],
-  "medical-hfe":        ["rs1800562", "rs1799945"],
-  "medical-mthfr":      ["rs1801133"],
-  "trait-eye-colour":   ["rs12913832"],
-  "trait-lactase":      ["rs4988235"],
-  "trait-caffeine":     ["rs762551"],
-  "trait-actn3":        ["rs1815739"],
-  "drug-cyp2c19":       ["rs4244285"],
-  "drug-warfarin":      ["rs1057910", "rs9923231"],
-  "drug-slco1b1":       ["rs4149056"],
-};
 
 async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
   const clinvarFile = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
@@ -779,7 +710,7 @@ async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
       if (!defId) continue;
       const data = defData.get(defId)!;
       data.sourceIds.add("clinvar");
-      for (const pmid of extractClinvarPmids(column(row, ["OtherIDs"]))) data.pmids.add(pmid);
+      for (const pmid of extractPmids(column(row, ["OtherIDs"]))) data.pmids.add(pmid);
       const reviewStatus = column(row, ["ReviewStatus"]);
       if (reviewStatus) data.notes.add(`ClinVar review status: ${reviewStatus}.`);
     }
@@ -821,7 +752,7 @@ async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
       role: "primary",
       markerIds: rsids,
       genes: [],
-      title: defId,
+      title: DEFINITION_TITLES[defId] ?? defId,
       url: "",
       release: "Auto-generated from ClinVar/GWAS source data",
       evidenceLevel: "high",
