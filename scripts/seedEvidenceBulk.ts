@@ -1,12 +1,10 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { createReadStream } from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { createGunzip } from "node:zlib";
 import { parseDnaBytes } from "../src/lib/dnaParser";
 import type { ParsedDnaFile } from "../src/types";
+import { column, extractRsids, tsvRows } from "./tsvUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
@@ -72,43 +70,6 @@ async function parseDnaFile(filePath: string): Promise<ParsedDnaFile> {
   return parseDnaBytes(path.basename(filePath), bytes);
 }
 
-function splitTsv(line: string): string[] {
-  return line.split("\t").map((value) => value.trim());
-}
-
-function column(row: Record<string, string>, names: string[]): string {
-  for (const name of names) {
-    const hit = row[name];
-    if (hit) return hit;
-  }
-  return "";
-}
-
-function extractRsids(value: string): string[] {
-  return Array.from(new Set(Array.from(value.matchAll(/rs\d+/gi), (match) => match[0].toLowerCase())));
-}
-
-async function* tsvRows(filePath: string): AsyncGenerator<Record<string, string>> {
-  const stream = filePath.endsWith(".gz")
-    ? createReadStream(filePath).pipe(createGunzip())
-    : createReadStream(filePath);
-  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  let headers: string[] | null = null;
-
-  for await (const line of lines) {
-    if (!line.trim()) continue;
-    if (!headers) {
-      headers = splitTsv(line);
-      continue;
-    }
-    const values = splitTsv(line);
-    const row: Record<string, string> = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index] ?? "";
-    });
-    yield row;
-  }
-}
 
 async function collectClinVar(rsids: Set<string>): Promise<Candidate[]> {
   const filePath = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
