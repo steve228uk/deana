@@ -409,6 +409,10 @@ function singleBaseAllele(value: string): string | undefined {
   return /^[ACGT]$/.test(allele) ? allele : undefined;
 }
 
+function extractClinvarPmids(otherIds: string): string[] {
+  return Array.from(otherIds.matchAll(/(?:PubMed|PMID):(\d+)/gi), (m) => m[1]);
+}
+
 function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
   const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
   if (!rawRsid || rawRsid === "-1") return null;
@@ -427,6 +431,13 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
   const condition = primaryCondition(traits, "the reported condition");
   const riskAllele = singleBaseAllele(column(row, ["AlternateAlleleVCF", "AlternateAllele"]));
   const title = plainClinvarTitle(gene, significance, traits, category);
+  const pmids = extractClinvarPmids(column(row, ["OtherIDs"]));
+  const numSubmitters = column(row, ["NumberSubmitters"]);
+  const lastEvaluated = column(row, ["LastEvaluated"]);
+
+  const submitterNote = numSubmitters && numSubmitters !== "0"
+    ? `${numSubmitters} submitter${numSubmitters === "1" ? "" : "s"}.`
+    : null;
 
   return {
     id: `clinvar-${variationId}-${rsid}`,
@@ -440,7 +451,11 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
     title,
     technicalName,
     summary: `ClinVar classifies this ${gene} variant as ${significance.toLowerCase()} for ${condition}.`,
-    detail: `ClinVar reports ${significance} for ${technicalName}. Review status: ${reviewStatus || "not supplied"}.`,
+    detail: [
+      `ClinVar reports ${significance} for ${technicalName}.`,
+      `Review status: ${reviewStatus || "not supplied"}.`,
+      ...(submitterNote ? [submitterNote] : []),
+    ].join(" "),
     whyItMatters: `This is source-reviewed clinical context for ${condition}; Deana only surfaces it when the uploaded genotype matches the reported allele where ClinVar provides one.`,
     topics: ["ClinVar", "Clinical variant"],
     conditions: traits,
@@ -451,9 +466,11 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
     repute: reputeForSignificance(significance),
     tone: category === "drug" ? "caution" : "neutral",
     riskAllele,
-    pmids: [],
+    pmids,
     notes: [
       `Review status: ${reviewStatus || "not supplied"}.`,
+      ...(submitterNote ? [submitterNote] : []),
+      ...(lastEvaluated && lastEvaluated !== "-" ? [`Last evaluated: ${lastEvaluated}.`] : []),
       ...(riskAllele ? [`Reported alternate allele: ${riskAllele}.`] : []),
       "Generated from bulk ClinVar data; clinical interpretation requires human review and confirmatory testing.",
     ],
@@ -464,6 +481,21 @@ function includeGwas(row: Record<string, string>): boolean {
   const pValueRaw = column(row, ["P-VALUE"]);
   const pValue = Number(pValueRaw);
   return Number.isFinite(pValue) && pValue > 0 && pValue <= 5e-8;
+}
+
+function gwasEvidenceTier(pValue: number): EvidenceTier {
+  return pValue <= 1e-10 ? "high" : "moderate";
+}
+
+function gwasRepute(orBeta: number): ReputeStatus {
+  if (orBeta > 1.05) return "bad";
+  if (orBeta < 0.95 && orBeta > 0) return "good";
+  return "not-set";
+}
+
+function normalizeGwasUrl(raw: string): string {
+  if (!raw) return "";
+  return raw.startsWith("http") ? raw : `https://${raw}`;
 }
 
 function gwasRecords(row: Record<string, string>, index: number): EvidencePackRecord[] {
@@ -479,33 +511,72 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
   const pmid = column(row, ["PUBMEDID", "PUBMED ID"]);
   const strongestAllele = column(row, ["STRONGEST SNP-RISK ALLELE"]);
   const riskAllele = singleBaseAllele(strongestAllele.split("-").pop() ?? "");
+
+  const pValue = Number(column(row, ["P-VALUE"]));
+  const orBetaRaw = column(row, ["OR or BETA"]);
+  const orBeta = Number(orBetaRaw);
+  const ci = column(row, ["95% CI (TEXT)"]);
+  const sampleSize = column(row, ["INITIAL SAMPLE SIZE"]);
+  const firstAuthor = column(row, ["FIRST AUTHOR"]);
+  const journal = column(row, ["JOURNAL"]);
+  const date = column(row, ["DATE"]);
+  const studyAccession = column(row, ["STUDY ACCESSION"]);
+  const riskAlleleFreq = column(row, ["RISK ALLELE FREQUENCY"]);
+
+  const genes = Array.from(new Set(
+    mappedGene.split(/[;,]/).map((g) => g.trim()).filter(Boolean),
+  )).slice(0, 5);
+
+  const rawUrl = column(row, ["LINK"]);
+
+  const detailParts: string[] = [
+    `GWAS Catalog association with p=${column(row, ["P-VALUE"])}.`,
+  ];
+  if (orBetaRaw && Number.isFinite(orBeta)) {
+    detailParts.push(`Effect: OR/Beta=${orBetaRaw}${ci ? ` ${ci}` : ""}.`);
+  }
+  if (sampleSize) {
+    detailParts.push(`Initial sample: ${sampleSize}.`);
+  }
+
+  const citationNote = [firstAuthor, journal, date].filter(Boolean).join(", ");
+  const notes: string[] = [
+    `Risk allele: ${strongestAllele || "not supplied"}.`,
+    ...(citationNote ? [`Study: ${citationNote}.`] : []),
+    ...(studyAccession ? [`GWAS Catalog accession: ${studyAccession}.`] : []),
+    "Generated from bulk GWAS Catalog data; effect size and ancestry transferability require review.",
+  ];
+
+  const frequencyNote =
+    riskAlleleFreq && riskAlleleFreq !== "NR" && riskAlleleFreq !== ""
+      ? `Risk allele frequency in study: ${riskAlleleFreq}`
+      : undefined;
+
   return rsids.map((rsid) => ({
     id: `gwas-${rsid}-${index}`,
     entryId: `local-trait-gwas-${rsid}-${index}`,
     sourceId: "gwas",
     role: "primary",
-    category: "traits",
+    category: "traits" as const,
     subcategory: "association",
     markerIds: [rsid],
-    genes: mappedGene.split(/[;,]/).map((gene) => gene.trim()).filter(Boolean).slice(0, 5),
-    title: `${trait} association near ${mappedGene.split(/[;,]/)[0]?.trim() || rsid}`,
+    genes,
+    title: `${trait} association near ${genes[0] || rsid}`,
     technicalName: `${rsid} ${trait}`,
     summary: `GWAS Catalog links ${riskAllele ? `${rsid}-${riskAllele}` : rsid} with ${trait}.`,
-    detail: `GWAS Catalog association with p-value ${column(row, ["P-VALUE"])}.`,
+    detail: detailParts.join(" "),
     whyItMatters: "This common-variant association is matched locally against the uploaded genotype and should be treated as a tendency signal, not a prediction.",
     topics: ["GWAS", "Association"],
-    conditions: trait.split(",").map((value) => value.trim()).filter(Boolean),
-    url: column(row, ["LINK"]) || `https://www.ebi.ac.uk/gwas/search?query=${encodeURIComponent(rsid)}`,
+    conditions: trait.split(",").map((v) => v.trim()).filter(Boolean),
+    url: normalizeGwasUrl(rawUrl) || `https://www.ebi.ac.uk/gwas/search?query=${encodeURIComponent(rsid)}`,
     release: "GWAS Catalog association export",
-    evidenceLevel: "moderate",
+    evidenceLevel: gwasEvidenceTier(pValue),
     clinicalSignificance: "trait-association",
-    repute: "not-set",
+    repute: Number.isFinite(orBeta) ? gwasRepute(orBeta) : "not-set",
     riskAllele,
     pmids: pmid ? [pmid] : [],
-    notes: [
-      `Risk allele: ${strongestAllele || "not supplied"}.`,
-      "Generated from bulk GWAS Catalog data; effect size and ancestry transferability require review.",
-    ],
+    frequencyNote,
+    notes,
   }));
 }
 
@@ -666,10 +737,102 @@ async function buildSnpediaRecords(): Promise<EvidencePackRecord[]> {
   });
 }
 
-async function existingCuratedRecords(version: string): Promise<EvidencePackRecord[]> {
-  const recordsFile = path.join(packRoot, version, "records.json");
-  if (!existsSync(recordsFile)) return [];
-  return JSON.parse(await readFile(recordsFile, "utf8")) as EvidencePackRecord[];
+// rsids declared in the 12 hand-crafted EVIDENCE_DEFINITIONS, grouped by definition id
+const DEFINITION_MARKERS: Record<string, string[]> = {
+  "medical-apoe":       ["rs429358", "rs7412"],
+  "medical-factor-v":   ["rs6025"],
+  "medical-prothrombin":["rs1799963"],
+  "medical-hfe":        ["rs1800562", "rs1799945"],
+  "medical-mthfr":      ["rs1801133"],
+  "trait-eye-colour":   ["rs12913832"],
+  "trait-lactase":      ["rs4988235"],
+  "trait-caffeine":     ["rs762551"],
+  "trait-actn3":        ["rs1815739"],
+  "drug-cyp2c19":       ["rs4244285"],
+  "drug-warfarin":      ["rs1057910", "rs9923231"],
+  "drug-slco1b1":       ["rs4149056"],
+};
+
+async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
+  const clinvarFile = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
+  const gwasFile = path.join(cacheRoot, "gwas", "associations.tsv");
+
+  // rsid → definition id (for quick lookup)
+  const rsidToDefId = new Map<string, string>();
+  for (const [defId, rsids] of Object.entries(DEFINITION_MARKERS)) {
+    for (const rsid of rsids) rsidToDefId.set(rsid, defId);
+  }
+
+  // Collect per-definition data from sources
+  const defData = new Map<string, { pmids: Set<string>; notes: Set<string>; sourceIds: Set<string>; riskAllele?: string }>();
+  for (const defId of Object.keys(DEFINITION_MARKERS)) {
+    defData.set(defId, { pmids: new Set(), notes: new Set(), sourceIds: new Set() });
+  }
+
+  if (existsSync(clinvarFile)) {
+    for await (const row of tsvRows(clinvarFile)) {
+      const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
+      if (!rawRsid || rawRsid === "-1") continue;
+      const rsid = normalizeRsid(rawRsid.startsWith("rs") ? rawRsid : `rs${rawRsid}`);
+      if (!rsid) continue;
+      const defId = rsidToDefId.get(rsid);
+      if (!defId) continue;
+      const data = defData.get(defId)!;
+      data.sourceIds.add("clinvar");
+      for (const pmid of extractClinvarPmids(column(row, ["OtherIDs"]))) data.pmids.add(pmid);
+      const reviewStatus = column(row, ["ReviewStatus"]);
+      if (reviewStatus) data.notes.add(`ClinVar review status: ${reviewStatus}.`);
+    }
+  }
+
+  if (existsSync(gwasFile)) {
+    for await (const row of tsvRows(gwasFile)) {
+      const rsidsRaw = extractRsids([
+        column(row, ["SNPS", "SNP_ID_CURRENT"]),
+        column(row, ["STRONGEST SNP-RISK ALLELE"]),
+      ].join(" "));
+      for (const rsid of rsidsRaw) {
+        const defId = rsidToDefId.get(rsid);
+        if (!defId) continue;
+        const data = defData.get(defId)!;
+        data.sourceIds.add("gwas");
+        const pmid = column(row, ["PUBMEDID", "PUBMED ID"]);
+        if (pmid) data.pmids.add(pmid);
+        const riskAlleleFreq = column(row, ["RISK ALLELE FREQUENCY"]);
+        if (riskAlleleFreq && riskAlleleFreq !== "NR") {
+          data.notes.add(`Risk allele frequency in study: ${riskAlleleFreq}.`);
+        }
+      }
+    }
+  }
+
+  // Build one record per definition
+  const records: EvidencePackRecord[] = [];
+  for (const [defId, rsids] of Object.entries(DEFINITION_MARKERS)) {
+    const data = defData.get(defId)!;
+    const pmidsArr = Array.from(data.pmids);
+    const sourceIds = Array.from(data.sourceIds);
+    if (sourceIds.length === 0) sourceIds.push("clinvar"); // fallback
+
+    records.push({
+      id: `curated-${defId}`,
+      entryId: defId,
+      sourceId: sourceIds[0],
+      role: "primary",
+      markerIds: rsids,
+      genes: [],
+      title: defId,
+      url: "",
+      release: "Auto-generated from ClinVar/GWAS source data",
+      evidenceLevel: "high",
+      clinicalSignificance: null,
+      pmids: pmidsArr,
+      notes: Array.from(data.notes),
+    });
+  }
+
+  console.log(`Definition seed records: ${records.length} generated from source data.`);
+  return records;
 }
 
 async function buildClinvarRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
@@ -742,11 +905,11 @@ function replaceVersionConstant(source: string, exportName: string, version: str
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const targetDir = path.join(packRoot, options.version);
-  const curatedRecords = await existingCuratedRecords(options.version);
+  const definitionRecords = await buildDefinitionRecords();
   const clinvarRecords = await buildClinvarRecords(options.maxClinvarRecords);
   const gwasRecords = await buildGwasRecords(options.maxGwasRecords);
   const snpediaRecords = await buildSnpediaRecords();
-  const records = dedupeRecords(withKnownSourceRoles([...curatedRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords]));
+  const records = dedupeRecords(withKnownSourceRoles([...definitionRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords]));
   const buckets = new Map<number, EvidencePackRecord[]>();
 
   for (const record of records) {
@@ -820,7 +983,12 @@ async function main(): Promise<void> {
     options.check,
   )) || changed;
 
-  console.log(`Curated records: ${curatedRecords.length.toLocaleString()}`);
+  // Write records.json (auto-generated definition seeds — replaces hand-maintained file)
+  const recordsJsonPath = path.join(targetDir, "records.json");
+  const recordsJsonText = `${JSON.stringify(definitionRecords, null, 2)}\n`;
+  changed = (await writeIfChanged(recordsJsonPath, recordsJsonText, options.check)) || changed;
+
+  console.log(`Definition seed records: ${definitionRecords.length.toLocaleString()}`);
   console.log(`ClinVar records: ${clinvarRecords.length.toLocaleString()}`);
   console.log(`GWAS records: ${gwasRecords.length.toLocaleString()}`);
   console.log(`SNPedia records: ${snpediaRecords.length.toLocaleString()}`);
