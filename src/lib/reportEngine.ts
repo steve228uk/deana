@@ -23,7 +23,11 @@ export const REPORT_VERSION = 7;
 type MarkerMap = Map<string, CompactMarker>;
 
 function markerMap(markers: CompactMarker[]): MarkerMap {
-  return new Map(markers.map((marker) => [marker[0], marker]));
+  const map = new Map<string, CompactMarker>();
+  for (const marker of markers) {
+    if (!map.has(marker[0])) map.set(marker[0], marker);
+  }
+  return map;
 }
 
 function uniq(values: string[]): string[] {

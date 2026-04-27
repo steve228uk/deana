@@ -224,4 +224,18 @@ describe("reportEngine", () => {
     expect(factorV?.outcome).toBe("negative");
     expect(apoe?.sort.severity).toBeLessThan(factorV?.sort.severity ?? 0);
   });
+
+  it("uses the first occurrence when the same rsID appears more than once", () => {
+    const dna = {
+      ...makeParsedDnaFile(),
+      markers: [
+        ["rs6025", "1", 169519049, "CT"],
+        ["rs6025", "1", 169519049, "CC"],
+      ] as [string, string, number, string][],
+      markerCount: 2,
+    };
+    const report = generateReport(dna);
+    const factorV = report.entries.find((entry) => entry.id === "medical-factor-v");
+    expect(factorV?.summary).toContain("One Leiden allele");
+  });
 });
