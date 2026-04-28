@@ -129,6 +129,7 @@ export interface EvidencePackRecord {
   pmids: string[];
   frequencyNote?: string;
   riskSummary?: string;
+  qualityTier?: "tier-1";
   notes: string[];
 }
 
