@@ -25,6 +25,31 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set cache month
+        run: echo "CACHE_MONTH=$(date +'%Y-%m')" >> "$GITHUB_ENV"
+
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-install-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-install-${{ runner.os }}-
+
+      - name: Cache evidence sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            .evidence-cache/clinvar
+            .evidence-cache/gwas
+            .evidence-cache/snpedia
+            .evidence-cache/cpic
+            .evidence-cache/pharmgkb
+            .evidence-cache/clingen
+          key: evidence-sources-${{ runner.os }}-${{ env.CACHE_MONTH }}
+          restore-keys: |
+            evidence-sources-${{ runner.os }}-
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
