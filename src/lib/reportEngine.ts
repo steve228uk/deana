@@ -5,6 +5,7 @@ import {
   EvidencePackMatch,
   EvidenceSupplement,
   EvidenceTier,
+  InsightTone,
   ParsedDnaFile,
   ProfileSupplements,
   ReportData,
@@ -140,17 +141,16 @@ function buildTabs(entries: ReportEntry[]): TabSummary[] {
   ];
 }
 
-function outcomeForLocalEvidence(record: EvidencePackMatch["record"]): ReportEntry["outcome"] {
-  if (record.tone === "good" || record.repute === "good") return "positive";
-  if (record.tone === "caution" || record.repute === "bad" || record.repute === "mixed") return "negative";
+function outcomeForTone(tone: InsightTone, repute: ReportEntry["repute"]): ReportEntry["outcome"] {
+  if (tone === "good" || repute === "good") return "positive";
+  if (tone === "caution" || repute === "bad" || repute === "mixed") return "negative";
   return "informational";
 }
 
-function severityForLocalEvidence(record: EvidencePackMatch["record"], category: ReportEntry["category"]): number {
-  const outcome = outcomeForLocalEvidence(record);
+function severityForLocalEvidence(outcome: ReportEntry["outcome"], repute: ReportEntry["repute"], category: ReportEntry["category"]): number {
   if (outcome === "positive") return category === "medical" ? 22 : 18;
   if (outcome === "informational") return category === "drug" ? 34 : category === "medical" ? 30 : 24;
-  return category === "medical" ? (record.repute === "bad" ? 82 : 62) : category === "drug" ? 66 : 34;
+  return category === "medical" ? (repute === "bad" ? 82 : 62) : category === "drug" ? 66 : 34;
 }
 
 function publicationBucket(publicationCount: number): ReportEntry["publicationBucket"] {
@@ -202,15 +202,46 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
       const normalizedClinicalSignificance = normalizeClinicalSignificance(record.clinicalSignificance);
       const conditions = normalizeConditions(record.conditions ?? []);
 
+      const matchedMarker = match.matchedMarkers[0];
+      const genotype = matchedMarker?.genotype ?? null;
+      const riskAllele = record.riskAllele;
+      const riskCount =
+        riskAllele && genotype ? [...genotype].filter((a) => a === riskAllele).length : null;
+
+      const coverage: CoverageStatus = genotype ? "full" : "missing";
+      const tone: InsightTone =
+        riskCount !== null && riskCount > 0 && record.repute === "bad"
+          ? "caution"
+          : riskCount !== null && riskCount > 0 && record.repute === "good"
+            ? "good"
+            : record.tone ?? "neutral";
+      const repute = record.repute ?? "not-set";
+      const outcome = outcomeForTone(tone, repute);
+
+      const riskSummary = record.riskSummary;
+      const computedSummary =
+        !genotype
+          ? `This upload did not include the ${matchedMarker?.rsid ?? "relevant"} marker.`
+          : riskCount === 0
+            ? `No risk allele detected at ${matchedMarker.rsid}.`
+            : riskCount === 1 && riskSummary
+              ? `One copy of the risk allele detected. ${riskSummary}.`
+              : riskCount === 2 && riskSummary
+                ? `Two copies of the risk allele detected. ${riskSummary}.`
+                : null;
+
+      const summary =
+        computedSummary ??
+        record.summary ??
+        `${match.matchedMarkers.map((marker) => `${marker.rsid} ${marker.genotype}`).join(" • ")} matched a local ${sourceName} evidence record.`;
+
       return {
         id: record.entryId,
         entryKind: "local-evidence",
         category,
         subcategory: record.subcategory ?? record.sourceId,
         title: record.title,
-        summary:
-          record.summary ??
-          `${match.matchedMarkers.map((marker) => `${marker.rsid} ${marker.genotype}`).join(" • ")} matched a local ${sourceName} evidence record.`,
+        summary,
         detail:
           record.detail ??
           record.notes.join(" ") ??
@@ -238,7 +269,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         evidenceTier: record.evidenceLevel,
         clinicalSignificance: record.clinicalSignificance,
         normalizedClinicalSignificance,
-        repute: record.repute ?? "not-set",
+        repute,
         publicationCount,
         publicationBucket: publicationBucket(publicationCount),
         frequencyNote: record.frequencyNote,
@@ -246,11 +277,11 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         sourceGenotype: record.genotype,
         sourcePageKey: record.id,
         sourcePageUrl: record.url,
-        coverage: "full",
-        tone: record.tone ?? "neutral",
-        outcome: outcomeForLocalEvidence(record),
+        coverage,
+        tone,
+        outcome,
         sort: {
-          severity: severityForLocalEvidence(record, category),
+          severity: severityForLocalEvidence(outcome, repute, category),
           evidence:
             record.evidenceLevel === "high"
               ? 4

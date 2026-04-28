@@ -128,6 +128,7 @@ export interface EvidencePackRecord {
   magnitude?: number | null;
   pmids: string[];
   frequencyNote?: string;
+  riskSummary?: string;
   notes: string[];
 }
 
