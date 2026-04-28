@@ -86,11 +86,31 @@ function sha256(value: string): string {
 }
 
 async function fetchJson<T>(params: URLSearchParams): Promise<T> {
-  const response = await fetch(`${apiUrl}?${params.toString()}`);
-  if (!response.ok) {
-    throw new Error(`SNPedia request failed with ${response.status} ${response.statusText}`);
+  const url = `${apiUrl}?${params.toString()}`;
+  const maxAttempts = 5;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return response.json() as Promise<T>;
+
+      const retryable = response.status === 429 || response.status >= 500;
+      if (!retryable) throw new Error(`SNPedia request failed with ${response.status} ${response.statusText}`);
+
+      lastError = new Error(`SNPedia request failed with ${response.status} ${response.statusText}`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+
+    if (attempt < maxAttempts) {
+      const delay = 2000 * 2 ** (attempt - 1);
+      console.warn(`SNPedia request failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay / 1000}s: ${lastError?.message}`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
-  return response.json() as Promise<T>;
+
+  throw lastError;
 }
 
 async function categoryTitles(category: string, limit: number | null): Promise<string[]> {
