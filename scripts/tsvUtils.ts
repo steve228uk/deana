@@ -47,3 +47,21 @@ export function extractRsids(value: string): string[] {
 export function extractPmids(otherIds: string): string[] {
   return Array.from(otherIds.matchAll(/(?:PubMed|PMID):(\d+)/gi), (m) => m[1]);
 }
+
+export function riskSummaryForClinvar(gene: string, significance: string, condition: string): string {
+  if (/drug response|pharmacogen/i.test(significance)) {
+    return `${gene} variant with clinical drug-response annotation for ${condition}`;
+  }
+  if (/protective/i.test(significance)) {
+    return `${gene} variant reported as protective for ${condition}`;
+  }
+  if (/risk factor/i.test(significance)) {
+    return `${gene} variant reported as a risk factor for ${condition}`;
+  }
+  return `${gene} variant classified as ${significance.toLowerCase()} for ${condition} by an expert panel`;
+}
+
+export function riskSummaryForGwas(gene: string, trait: string, orBeta: number, ci: string): string {
+  const effect = orBeta > 0 ? `OR/Beta ${orBeta}${ci ? ` ${ci}` : ""}` : "";
+  return `${gene || "this locus"} risk allele is associated with ${trait}${effect ? ` (${effect})` : ""} in a large, replicated genome-wide study`;
+}

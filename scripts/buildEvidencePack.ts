@@ -16,7 +16,7 @@ import type {
 } from "../src/types";
 import { normalizeConditions } from "../src/lib/normalization";
 import { normalizeChromosome } from "../src/lib/dbsnpAnnotation";
-import { column, extractPmids, extractRsids, normalizeRsid, singleBaseAllele, splitTsv, tsvRows } from "./tsvUtils";
+import { column, extractPmids, extractRsids, normalizeRsid, riskSummaryForClinvar, riskSummaryForGwas, singleBaseAllele, splitTsv, tsvRows } from "./tsvUtils";
 import { DEFINITION_MARKERS, DEFINITION_TITLES } from "./definitionMarkers";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -412,6 +412,9 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
     repute: reputeForSignificance(significance),
     tone: category === "drug" ? "caution" : "neutral",
     riskAllele,
+    riskSummary: /reviewed by expert panel|practice guideline/i.test(reviewStatus)
+      ? riskSummaryForClinvar(gene, significance, condition)
+      : undefined,
     pmids,
     notes: [
       `Review status: ${reviewStatus || "not supplied"}.`,
@@ -498,6 +501,11 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
       ? `Risk allele frequency in study: ${riskAlleleFreq}`
       : undefined;
 
+  const gwasRiskSummary =
+    pValue <= 1e-10 && column(row, ["REPLICATION SAMPLE SIZE"]) && Number.isFinite(orBeta)
+      ? riskSummaryForGwas(genes[0] ?? mappedGene, trait, orBeta, ci)
+      : undefined;
+
   return rsids.map((rsid) => ({
     id: `gwas-${rsid}-${index}`,
     entryId: `local-trait-gwas-${rsid}-${index}`,
@@ -520,6 +528,7 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
     clinicalSignificance: "trait-association",
     repute: Number.isFinite(orBeta) ? gwasRepute(orBeta) : "not-set",
     riskAllele,
+    riskSummary: gwasRiskSummary,
     pmids: pmid ? [pmid] : [],
     frequencyNote,
     notes,

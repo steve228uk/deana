@@ -16,7 +16,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GenericDefinitionParams } from "../src/lib/evidencePack";
-import { column, extractPmids, normalizeRsid, singleBaseAllele, tsvRows } from "./tsvUtils";
+import { column, extractPmids, normalizeRsid, riskSummaryForClinvar, riskSummaryForGwas, singleBaseAllele, tsvRows } from "./tsvUtils";
 import { MANUAL_RSIDS } from "./definitionMarkers";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -51,24 +51,6 @@ function evidenceTierForGwas(pValue: number): GenericDefinitionParams["evidenceT
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function riskSummaryForClinvar(gene: string, sig: string, condition: string): string {
-  if (/drug response|pharmacogen/i.test(sig)) {
-    return `${gene} variant with clinical drug-response annotation for ${condition}`;
-  }
-  if (/protective/i.test(sig)) {
-    return `${gene} variant reported as protective for ${condition}`;
-  }
-  if (/risk factor/i.test(sig)) {
-    return `${gene} variant reported as a risk factor for ${condition}`;
-  }
-  return `${gene} variant classified as ${sig.toLowerCase()} for ${condition} by an expert panel`;
-}
-
-function riskSummaryForGwas(gene: string, trait: string, orBeta: number, ci: string): string {
-  const effect = orBeta > 0 ? `OR/Beta ${orBeta}${ci ? ` ${ci}` : ""}` : "";
-  return `${gene || "this locus"} risk allele is associated with ${trait}${effect ? ` (${effect})` : ""} in a large, replicated genome-wide study`;
 }
 
 // ── ClinVar ───────────────────────────────────────────────────────────────────
