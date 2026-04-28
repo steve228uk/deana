@@ -807,20 +807,16 @@ async function buildGwasRecords(maxRecords: number): Promise<EvidencePackRecord[
   const sourceFile = path.join(cacheRoot, "gwas", "associations.tsv");
   if (!existsSync(sourceFile)) return [];
 
-  const raw: EvidencePackRecord[] = [];
+  // Keep first-seen per (rsid, primary trait): the source file groups rows by study,
+  // so first occurrence tends to be the most-cited association for that pair.
+  const seen = new Map<string, EvidencePackRecord>();
   let rowIndex = 0;
   for await (const row of tsvRows(sourceFile)) {
     rowIndex += 1;
-    raw.push(...gwasRecords(row, rowIndex));
-  }
-
-  // Deduplicate: keep first-seen record per (rsid, primary trait) pair.
-  // The source file groups rows by study so first-seen tends to be the
-  // most-cited association for that rsid+trait combination.
-  const seen = new Map<string, EvidencePackRecord>();
-  for (const record of raw) {
-    const key = `${record.markerIds[0]}|${record.conditions[0] ?? ""}`;
-    if (!seen.has(key)) seen.set(key, record);
+    for (const record of gwasRecords(row, rowIndex)) {
+      const key = `${record.markerIds[0]}|${record.conditions[0] ?? ""}`;
+      if (!seen.has(key)) seen.set(key, record);
+    }
   }
   return Array.from(seen.values()).slice(0, maxRecords);
 }
@@ -1072,20 +1068,20 @@ async function writeIfChanged(filePath: string, text: string, check: boolean): P
 }
 
 async function sourceChecksums(): Promise<Record<string, string | null>> {
-  const clinvar = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
-  const gwas = path.join(cacheRoot, "gwas", "associations.tsv");
-  const snpedia = path.join(cacheRoot, "snpedia", "pages.json");
-  const cpic = path.join(cacheRoot, "cpic", "variants.json");
-  const pharmgkb = path.join(cacheRoot, "pharmgkb", "annotations.json");
-  const clingen = path.join(cacheRoot, "clingen", "gene_validity.json");
-  return {
-    clinvar: existsSync(clinvar) ? await fileSha256(clinvar) : null,
-    gwas: existsSync(gwas) ? await fileSha256(gwas) : null,
-    snpedia: existsSync(snpedia) ? await fileSha256(snpedia) : null,
-    cpic: existsSync(cpic) ? await fileSha256(cpic) : null,
-    pharmgkb: existsSync(pharmgkb) ? await fileSha256(pharmgkb) : null,
-    clingen: existsSync(clingen) ? await fileSha256(clingen) : null,
+  const sources: Record<string, string> = {
+    clinvar: path.join(cacheRoot, "clinvar", "variant_summary.txt.gz"),
+    gwas: path.join(cacheRoot, "gwas", "associations.tsv"),
+    snpedia: path.join(cacheRoot, "snpedia", "pages.json"),
+    cpic: path.join(cacheRoot, "cpic", "variants.json"),
+    pharmgkb: path.join(cacheRoot, "pharmgkb", "annotations.json"),
+    clingen: path.join(cacheRoot, "clingen", "gene_validity.json"),
   };
+  const entries = await Promise.all(
+    Object.entries(sources).map(async ([key, filePath]) =>
+      [key, existsSync(filePath) ? await fileSha256(filePath) : null] as const,
+    ),
+  );
+  return Object.fromEntries(entries);
 }
 
 function replaceVersionConstant(source: string, exportName: string, version: string): string {
@@ -1099,12 +1095,14 @@ function replaceVersionConstant(source: string, exportName: string, version: str
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const targetDir = path.join(packRoot, options.version);
-  const definitionRecords = await buildDefinitionRecords();
-  const clinvarRecords = await buildClinvarRecords(options.maxClinvarRecords);
-  const gwasRecords = await buildGwasRecords(options.maxGwasRecords);
-  const snpediaRecords = await buildSnpediaRecords();
-  const cpicRecords = await buildCpicRecords();
-  const pharmgkbRecords = await buildPharmgkbRecords();
+  const [definitionRecords, clinvarRecords, gwasRecords, snpediaRecords, cpicRecords, pharmgkbRecords] = await Promise.all([
+    buildDefinitionRecords(),
+    buildClinvarRecords(options.maxClinvarRecords),
+    buildGwasRecords(options.maxGwasRecords),
+    buildSnpediaRecords(),
+    buildCpicRecords(),
+    buildPharmgkbRecords(),
+  ]);
   const clingenRecords = await buildClinGenRecords(clinvarRecords);
   const records = dedupeRecords(withKnownSourceRoles([...definitionRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords, ...cpicRecords, ...pharmgkbRecords, ...clingenRecords]));
   const buckets = new Map<number, EvidencePackRecord[]>();

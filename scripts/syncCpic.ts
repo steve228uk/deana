@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fetchWithRetry } from "./fetchUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = path.join(repoRoot, ".evidence-cache", "cpic");
@@ -20,32 +21,6 @@ function parseOptions(argv: string[]): Options {
   return options;
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const maxAttempts = 5;
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const response = await fetch(url, { headers: { Accept: "application/json" } });
-      if (response.ok) return response.json() as Promise<T>;
-
-      const retryable = response.status === 429 || response.status >= 500;
-      if (!retryable) throw new Error(`CPIC API request failed: ${response.status} ${response.statusText} — ${url}`);
-      lastError = new Error(`${response.status} ${response.statusText}`);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-    }
-
-    if (attempt < maxAttempts) {
-      const delay = 2000 * 2 ** (attempt - 1);
-      console.warn(`CPIC request failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay / 1000}s: ${lastError?.message}`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-
-  throw lastError;
-}
-
 interface RawCpicVariant {
   rsid: string | null;
   genesymbol: string;
@@ -60,6 +35,8 @@ interface RawCpicPair {
   level: string;
 }
 
+const jsonHeaders = { headers: { Accept: "application/json" } };
+
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
 
@@ -73,23 +50,26 @@ async function main(): Promise<void> {
 
   await mkdir(cacheDir, { recursive: true });
 
-  // Fetch all variants with rsid annotations
-  console.log("Fetching CPIC variants...");
-  const rawVariants = await fetchJson<RawCpicVariant[]>(
-    `${apiBase}/variant?select=rsid,genesymbol,function&rsid=not.is.null&limit=5000`,
-  );
+  console.log("Fetching CPIC variants and gene-drug pairs...");
+  const [rawVariants, pairs] = await Promise.all([
+    fetchWithRetry<RawCpicVariant[]>(
+      `${apiBase}/variant?select=rsid,genesymbol,function&rsid=not.is.null&limit=5000`,
+      jsonHeaders,
+    ),
+    fetchWithRetry<RawCpicPair[]>(
+      `${apiBase}/pair?select=genesymbol,drugname,guidelineName,url,level&level=in.(A,B)&limit=2000`,
+      jsonHeaders,
+    ),
+  ]);
+
   const variants = rawVariants.filter((v) => v.rsid && v.genesymbol);
   console.log(`  ${variants.length.toLocaleString()} variants with rsid`);
-
-  // Fetch A and B level gene-drug pairs (the guideline-backed ones)
-  console.log("Fetching CPIC gene-drug pairs (levels A and B)...");
-  const pairs = await fetchJson<RawCpicPair[]>(
-    `${apiBase}/pair?select=genesymbol,drugname,guidelineName,url,level&level=in.(A,B)&limit=2000`,
-  );
   console.log(`  ${pairs.length.toLocaleString()} level A/B pairs`);
 
-  await writeFile(variantsFile, `${JSON.stringify(variants, null, 2)}\n`);
-  await writeFile(pairsFile, `${JSON.stringify(pairs, null, 2)}\n`);
+  await Promise.all([
+    writeFile(variantsFile, `${JSON.stringify(variants, null, 2)}\n`),
+    writeFile(pairsFile, `${JSON.stringify(pairs, null, 2)}\n`),
+  ]);
 
   console.log(`Wrote CPIC cache to ${path.relative(repoRoot, cacheDir)}/`);
 }

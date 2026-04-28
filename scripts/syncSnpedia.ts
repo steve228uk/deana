@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fetchWithRetry } from "./fetchUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = path.join(repoRoot, ".evidence-cache", "snpedia");
@@ -85,32 +86,8 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function fetchJson<T>(params: URLSearchParams): Promise<T> {
-  const url = `${apiUrl}?${params.toString()}`;
-  const maxAttempts = 5;
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return response.json() as Promise<T>;
-
-      const retryable = response.status === 429 || response.status >= 500;
-      if (!retryable) throw new Error(`SNPedia request failed with ${response.status} ${response.statusText}`);
-
-      lastError = new Error(`SNPedia request failed with ${response.status} ${response.statusText}`);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-    }
-
-    if (attempt < maxAttempts) {
-      const delay = 2000 * 2 ** (attempt - 1);
-      console.warn(`SNPedia request failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay / 1000}s: ${lastError?.message}`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-
-  throw lastError;
+function fetchJson<T>(params: URLSearchParams): Promise<T> {
+  return fetchWithRetry<T>(`${apiUrl}?${params.toString()}`);
 }
 
 async function categoryTitles(category: string, limit: number | null): Promise<string[]> {
