@@ -415,6 +415,7 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
     riskSummary: /reviewed by expert panel|practice guideline/i.test(reviewStatus)
       ? riskSummaryForClinvar(gene, significance, condition)
       : undefined,
+    qualityTier: /reviewed by expert panel|practice guideline/i.test(reviewStatus) ? "tier-1" : undefined,
     pmids,
     notes: [
       `Review status: ${reviewStatus || "not supplied"}.`,
@@ -501,10 +502,8 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
       ? `Risk allele frequency in study: ${riskAlleleFreq}`
       : undefined;
 
-  const gwasRiskSummary =
-    pValue <= 1e-10 && column(row, ["REPLICATION SAMPLE SIZE"]) && Number.isFinite(orBeta)
-      ? riskSummaryForGwas(genes[0] ?? mappedGene, trait, orBeta, ci)
-      : undefined;
+  const isTier1Gwas = pValue <= 1e-10 && Boolean(column(row, ["REPLICATION SAMPLE SIZE"])) && Number.isFinite(orBeta);
+  const gwasRiskSummary = isTier1Gwas ? riskSummaryForGwas(genes[0] ?? mappedGene, trait, orBeta, ci) : undefined;
 
   return rsids.map((rsid) => ({
     id: `gwas-${rsid}-${index}`,
@@ -529,6 +528,7 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
     repute: Number.isFinite(orBeta) ? gwasRepute(orBeta) : "not-set",
     riskAllele,
     riskSummary: gwasRiskSummary,
+    qualityTier: isTier1Gwas ? "tier-1" : undefined,
     pmids: pmid ? [pmid] : [],
     frequencyNote,
     notes,
