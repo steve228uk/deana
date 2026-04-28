@@ -505,7 +505,11 @@ function DataSourcesCard() {
       <dl className="dn-source-summary-list">
         <div>
           <dt>Clinical</dt>
-          <dd>ClinVar, CPIC</dd>
+          <dd>ClinVar, CPIC, ClinGen</dd>
+        </div>
+        <div>
+          <dt>Drug response</dt>
+          <dd>PharmGKB, CPIC</dd>
         </div>
         <div>
           <dt>Traits</dt>

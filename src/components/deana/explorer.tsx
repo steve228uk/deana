@@ -872,9 +872,10 @@ function iconForSource(source: string): IconName {
   const normalized = source.toLowerCase();
   if (normalized.includes("pub")) return "book";
   if (normalized.includes("snp")) return "dna";
-  if (normalized.includes("clin")) return "shield";
   if (normalized.includes("gwas")) return "chart";
   if (normalized.includes("cpic")) return "target";
+  if (normalized.includes("pharm")) return "target";
+  if (normalized.includes("clin")) return "shield";
   return "file";
 }
 

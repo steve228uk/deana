@@ -77,6 +77,13 @@ const sourceMetadata: EvidencePackManifest["sources"] = [
     role: "primary",
   },
   {
+    id: "clingen",
+    name: "ClinGen",
+    release: "ClinGen gene-disease validity classifications",
+    url: "https://clinicalgenome.org/",
+    role: "primary",
+  },
+  {
     id: "pubmed",
     name: "PubMed",
     release: "PubMed citation metadata carried by source rows",
@@ -971,6 +978,79 @@ async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
   return records;
 }
 
+interface ClinGenClassification {
+  gene: string;
+  disease: string;
+  diseaseId: string;
+  classification: string;
+  url: string;
+}
+
+async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promise<EvidencePackRecord[]> {
+  const sourceFile = path.join(cacheRoot, "clingen", "gene_validity.json");
+  if (!existsSync(sourceFile)) return [];
+
+  const classifications = JSON.parse(await readFile(sourceFile, "utf8")) as ClinGenClassification[];
+
+  // Build gene → rsid map from ClinVar records so we can key ClinGen data on rsids
+  const geneToRsids = new Map<string, string[]>();
+  for (const record of clinvarRecords) {
+    for (const gene of record.genes ?? []) {
+      const upper = gene.toUpperCase();
+      const existing = geneToRsids.get(upper);
+      if (existing) { if (!existing.includes(record.markerIds[0])) existing.push(record.markerIds[0]); }
+      else geneToRsids.set(upper, [record.markerIds[0]]);
+    }
+  }
+
+  const records: EvidencePackRecord[] = [];
+  for (const cls of classifications) {
+    const gene = cls.gene.toUpperCase();
+    const rsids = geneToRsids.get(gene);
+    if (!rsids || rsids.length === 0) continue;
+
+    const evidenceLevel: EvidenceTier =
+      cls.classification === "Definitive" ? "high" :
+      cls.classification === "Strong" ? "high" : "moderate";
+
+    const slug = cls.gene.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const diseaseSlug = cls.disease.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+
+    records.push({
+      id: `clingen-${slug}-${diseaseSlug}`,
+      entryId: `local-medical-clingen-${slug}-${diseaseSlug}`,
+      sourceId: "clingen",
+      role: "primary",
+      category: "medical",
+      subcategory: "gene-disease-validity",
+      markerIds: rsids.slice(0, 3),
+      genes: [cls.gene],
+      title: `${cls.gene} / ${cls.disease} (ClinGen ${cls.classification})`,
+      summary: `ClinGen has classified the relationship between ${cls.gene} and ${cls.disease} as ${cls.classification} based on systematic evidence review.`,
+      riskSummary: `${cls.gene} variant in a gene with ClinGen ${cls.classification} evidence for ${cls.disease}`,
+      qualityTier: cls.classification === "Definitive" || cls.classification === "Strong" ? "tier-1" : undefined,
+      detail: `ClinGen ${cls.classification} classification: expert curation found ${cls.classification.toLowerCase()} evidence that ${cls.gene} variants cause ${cls.disease}.`,
+      whyItMatters: "ClinGen gene-disease validity classifications reflect the strength of evidence that variants in this gene cause the specified disease, using a rigorous semi-quantitative framework.",
+      topics: ["ClinGen", "Gene-disease validity"],
+      conditions: [cls.disease],
+      url: cls.url,
+      release: "ClinGen gene-disease validity classifications",
+      evidenceLevel,
+      clinicalSignificance: "pathogenic",
+      repute: "bad",
+      tone: "caution",
+      pmids: [],
+      notes: [
+        `ClinGen classification: ${cls.classification}.`,
+        ...(cls.diseaseId ? [`Disease identifier: ${cls.diseaseId}.`] : []),
+        "ClinGen classifications reflect published literature and expert panel review; they do not replace diagnostic genetic testing.",
+      ],
+    });
+  }
+
+  return records;
+}
+
 function dedupeRecords(records: EvidencePackRecord[]): EvidencePackRecord[] {
   return Array.from(new Map(records.map((record) => [record.id, record])).values());
 }
@@ -997,12 +1077,14 @@ async function sourceChecksums(): Promise<Record<string, string | null>> {
   const snpedia = path.join(cacheRoot, "snpedia", "pages.json");
   const cpic = path.join(cacheRoot, "cpic", "variants.json");
   const pharmgkb = path.join(cacheRoot, "pharmgkb", "annotations.json");
+  const clingen = path.join(cacheRoot, "clingen", "gene_validity.json");
   return {
     clinvar: existsSync(clinvar) ? await fileSha256(clinvar) : null,
     gwas: existsSync(gwas) ? await fileSha256(gwas) : null,
     snpedia: existsSync(snpedia) ? await fileSha256(snpedia) : null,
     cpic: existsSync(cpic) ? await fileSha256(cpic) : null,
     pharmgkb: existsSync(pharmgkb) ? await fileSha256(pharmgkb) : null,
+    clingen: existsSync(clingen) ? await fileSha256(clingen) : null,
   };
 }
 
@@ -1023,7 +1105,8 @@ async function main(): Promise<void> {
   const snpediaRecords = await buildSnpediaRecords();
   const cpicRecords = await buildCpicRecords();
   const pharmgkbRecords = await buildPharmgkbRecords();
-  const records = dedupeRecords(withKnownSourceRoles([...definitionRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords, ...cpicRecords, ...pharmgkbRecords]));
+  const clingenRecords = await buildClinGenRecords(clinvarRecords);
+  const records = dedupeRecords(withKnownSourceRoles([...definitionRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords, ...cpicRecords, ...pharmgkbRecords, ...clingenRecords]));
   const buckets = new Map<number, EvidencePackRecord[]>();
 
   for (const record of records) {
@@ -1108,6 +1191,7 @@ async function main(): Promise<void> {
   console.log(`SNPedia records: ${snpediaRecords.length.toLocaleString()}`);
   console.log(`CPIC records: ${cpicRecords.length.toLocaleString()}`);
   console.log(`PharmGKB records: ${pharmgkbRecords.length.toLocaleString()}`);
+  console.log(`ClinGen records: ${clingenRecords.length.toLocaleString()}`);
   console.log(`Packed records: ${records.length.toLocaleString()} across ${shards.length.toLocaleString()} shards.`);
   if (options.check && changed) {
     process.exitCode = 1;
