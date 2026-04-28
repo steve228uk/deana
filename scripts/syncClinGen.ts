@@ -1,0 +1,106 @@
+import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { splitTsv } from "./tsvUtils";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const cacheDir = path.join(repoRoot, ".evidence-cache", "clingen");
+
+// ClinGen publishes gene-disease validity classifications as a stable CSV download.
+// The endpoint returns all curated pairs with classification level and disease info.
+const downloadUrl = "https://search.clinicalgenome.org/api/curations?type=gene_disease_summary&format=csv&size=all";
+
+// Only include classifications with meaningful positive evidence
+const INCLUDED_CLASSIFICATIONS = new Set(["Definitive", "Strong", "Moderate"]);
+
+interface Options {
+  force: boolean;
+}
+
+function parseOptions(argv: string[]): Options {
+  const options: Options = { force: false };
+  for (const arg of argv) {
+    if (arg === "--force") { options.force = true; continue; }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+  return options;
+}
+
+export interface ClinGenClassification {
+  gene: string;
+  disease: string;
+  diseaseId: string;
+  classification: string;
+  url: string;
+}
+
+function parseClinGenCsv(text: string): ClinGenClassification[] {
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return [];
+
+  const headers = splitTsv(lines[0].replace(/,/g, "\t"));
+  const results: ClinGenClassification[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    // CSV rows — convert commas to tabs for reuse of splitTsv, handling quoted fields
+    const raw = lines[i];
+    // Simple CSV parse: split on commas not inside quotes
+    const values: string[] = [];
+    let current = "";
+    let inQuote = false;
+    for (const char of raw) {
+      if (char === '"') { inQuote = !inQuote; continue; }
+      if (char === "," && !inQuote) { values.push(current.trim()); current = ""; continue; }
+      current += char;
+    }
+    values.push(current.trim());
+
+    const row: Record<string, string> = {};
+    headers.forEach((h, idx) => { row[h] = values[idx] ?? ""; });
+
+    const classification = row["Classification"] ?? row["classification"] ?? "";
+    if (!INCLUDED_CLASSIFICATIONS.has(classification)) continue;
+
+    const gene = row["Gene Symbol"] ?? row["gene_symbol"] ?? row["GENE SYMBOL"] ?? "";
+    const disease = row["Disease Label"] ?? row["disease_label"] ?? row["DISEASE LABEL"] ?? "";
+    const diseaseId = row["Disease ID"] ?? row["disease_id"] ?? row["DISEASE ID"] ?? "";
+    const url = row["Online Report"] ?? row["online_report"] ?? `https://search.clinicalgenome.org/kb/gene-validity`;
+
+    if (!gene || !disease) continue;
+    results.push({ gene, disease, diseaseId, classification, url });
+  }
+
+  return results;
+}
+
+async function main(): Promise<void> {
+  const options = parseOptions(process.argv.slice(2));
+  const outputFile = path.join(cacheDir, "gene_validity.json");
+
+  if (!options.force && existsSync(outputFile)) {
+    console.log("Using cached ClinGen data (pass --force to refresh).");
+    return;
+  }
+
+  await mkdir(cacheDir, { recursive: true });
+
+  console.log("Downloading ClinGen gene-disease validity classifications...");
+  const response = await fetch(downloadUrl, { headers: { Accept: "text/csv,application/csv,text/plain" } });
+  if (!response.ok) {
+    throw new Error(`ClinGen download failed: ${response.status} ${response.statusText}`);
+  }
+
+  const text = await response.text();
+  const classifications = parseClinGenCsv(text);
+
+  await writeFile(outputFile, `${JSON.stringify(classifications, null, 2)}\n`);
+  console.log(`ClinGen: ${classifications.length.toLocaleString()} Definitive/Strong/Moderate classifications written to ${path.relative(repoRoot, outputFile)}`);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}
