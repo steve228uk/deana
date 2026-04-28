@@ -45,7 +45,7 @@ const defaultVersion = (() => {
 })();
 
 const attribution =
-  "Local Deana evidence pack built from public ClinVar, CPIC, GWAS Catalog, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
+  "Local Deana evidence pack built from public ClinVar, CPIC, GWAS Catalog, PharmGKB, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
 
 const sourceMetadata: EvidencePackManifest["sources"] = [
   {
@@ -65,8 +65,15 @@ const sourceMetadata: EvidencePackManifest["sources"] = [
   {
     id: "cpic",
     name: "CPIC",
-    release: "Curated CPIC records from Deana seed pack",
+    release: "CPIC API variant and pair data",
     url: "https://cpicpgx.org/api-and-database/",
+    role: "primary",
+  },
+  {
+    id: "pharmgkb",
+    name: "PharmGKB",
+    release: "PharmGKB clinical annotations bulk download",
+    url: "https://www.pharmgkb.org/downloads",
     role: "primary",
   },
   {
@@ -103,8 +110,8 @@ function parseOptions(argv: string[]): Options {
   const options: Options = {
     version: defaultVersion,
     check: false,
-    maxClinvarRecords: 50000,
-    maxGwasRecords: 50000,
+    maxClinvarRecords: 100000,
+    maxGwasRecords: 100000,
   };
 
   for (const arg of argv) {
@@ -793,14 +800,175 @@ async function buildGwasRecords(maxRecords: number): Promise<EvidencePackRecord[
   const sourceFile = path.join(cacheRoot, "gwas", "associations.tsv");
   if (!existsSync(sourceFile)) return [];
 
-  const records: EvidencePackRecord[] = [];
+  const raw: EvidencePackRecord[] = [];
   let rowIndex = 0;
   for await (const row of tsvRows(sourceFile)) {
     rowIndex += 1;
-    records.push(...gwasRecords(row, rowIndex));
-    if (records.length >= maxRecords) break;
+    raw.push(...gwasRecords(row, rowIndex));
   }
-  return records.slice(0, maxRecords);
+
+  // Deduplicate: keep first-seen record per (rsid, primary trait) pair.
+  // The source file groups rows by study so first-seen tends to be the
+  // most-cited association for that rsid+trait combination.
+  const seen = new Map<string, EvidencePackRecord>();
+  for (const record of raw) {
+    const key = `${record.markerIds[0]}|${record.conditions[0] ?? ""}`;
+    if (!seen.has(key)) seen.set(key, record);
+  }
+  return Array.from(seen.values()).slice(0, maxRecords);
+}
+
+interface CpicVariant {
+  rsid: string;
+  genesymbol: string;
+  function: string | null;
+}
+
+interface CpicPair {
+  genesymbol: string;
+  drugname: string;
+  guidelineName: string | null;
+  url: string | null;
+  level: string;
+}
+
+async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
+  const variantsFile = path.join(cacheRoot, "cpic", "variants.json");
+  const pairsFile = path.join(cacheRoot, "cpic", "pairs.json");
+  if (!existsSync(variantsFile) || !existsSync(pairsFile)) return [];
+
+  const variants = JSON.parse(await readFile(variantsFile, "utf8")) as CpicVariant[];
+  const pairs = JSON.parse(await readFile(pairsFile, "utf8")) as CpicPair[];
+
+  const pairsByGene = new Map<string, CpicPair[]>();
+  for (const pair of pairs) {
+    const gene = pair.genesymbol.toUpperCase();
+    const arr = pairsByGene.get(gene);
+    if (arr) arr.push(pair);
+    else pairsByGene.set(gene, [pair]);
+  }
+
+  const records: EvidencePackRecord[] = [];
+  for (const variant of variants) {
+    const rsid = normalizeRsid(variant.rsid);
+    if (!rsid) continue;
+    const gene = variant.genesymbol.toUpperCase();
+    const genePairs = pairsByGene.get(gene);
+    if (!genePairs || genePairs.length === 0) continue;
+
+    const drugs = Array.from(new Set(genePairs.map((p) => p.drugname))).slice(0, 4);
+    const topPair = genePairs[0];
+    const level = topPair.level;
+    const evidenceLevel: EvidenceTier = level === "A" ? "high" : "moderate";
+    const functionNote = variant.function ? `Variant function: ${variant.function}.` : null;
+
+    records.push({
+      id: `cpic-${rsid}-${gene.toLowerCase()}`,
+      entryId: `local-drug-cpic-${rsid}`,
+      sourceId: "cpic",
+      role: "primary",
+      category: "drug",
+      subcategory: "pharmacogenomics",
+      markerIds: [rsid],
+      genes: [gene],
+      title: `${gene} pharmacogenomic variant — ${drugs[0]} context (CPIC)`,
+      summary: `${rsid} affects ${gene} function and is relevant to ${drugs.slice(0, 2).join(" and ")} dosing per CPIC level ${level} guidelines.`,
+      riskSummary: `${gene} variant with altered function (${variant.function ?? "see guideline"}) — ${drugs[0]} dosing may require adjustment`,
+      qualityTier: level === "A" ? "tier-1" : undefined,
+      detail: `CPIC level ${level} guideline covers ${gene} and ${drugs.join(", ")}.`,
+      whyItMatters: "CPIC guidelines provide evidence-based recommendations for adjusting drug therapy based on pharmacogenomic results.",
+      topics: ["CPIC", "Drug response", "Pharmacogenomics"],
+      conditions: drugs.map((d) => `${d} response`),
+      url: topPair.url ?? `https://cpicpgx.org/guidelines/`,
+      release: "CPIC API variant and pair data",
+      evidenceLevel,
+      clinicalSignificance: "drug-response",
+      repute: "mixed",
+      tone: "caution",
+      pmids: [],
+      notes: [
+        `CPIC level ${level} guideline.`,
+        ...(functionNote ? [functionNote] : []),
+        "Consumer arrays may not cover all alleles needed for a complete CPIC phenotype call.",
+        "Medication changes require clinical review and confirmatory testing.",
+      ],
+    });
+  }
+
+  return records;
+}
+
+interface PharmGkbAnnotation {
+  variantId: string;
+  rsid: string;
+  gene: string;
+  drugs: string[];
+  phenotypeCategory: string;
+  evidenceLevel: string;
+  significance: string;
+  pmids: string[];
+  url: string;
+}
+
+async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
+  const annotationsFile = path.join(cacheRoot, "pharmgkb", "annotations.json");
+  if (!existsSync(annotationsFile)) return [];
+
+  const annotations = JSON.parse(await readFile(annotationsFile, "utf8")) as PharmGkbAnnotation[];
+  const records: EvidencePackRecord[] = [];
+
+  for (const ann of annotations) {
+    const rsid = normalizeRsid(ann.rsid);
+    if (!rsid) continue;
+
+    const evidenceLevel: EvidenceTier =
+      ann.evidenceLevel === "1A" || ann.evidenceLevel === "1B" ? "high" :
+      ann.evidenceLevel === "2A" || ann.evidenceLevel === "2B" ? "moderate" :
+      "emerging";
+
+    const drugs = ann.drugs.slice(0, 4);
+    const category = ann.phenotypeCategory.toLowerCase();
+    const isEfficacy = /efficacy/i.test(category);
+    const isToxicity = /toxicity|adverse/i.test(category);
+    const tone: InsightTone = isToxicity ? "caution" : isEfficacy ? "good" : "neutral";
+    const repute: ReputeStatus = isToxicity ? "bad" : isEfficacy ? "good" : "not-set";
+
+    records.push({
+      id: `pharmgkb-${ann.variantId}-${rsid}`,
+      entryId: `local-drug-pharmgkb-${ann.variantId}`,
+      sourceId: "pharmgkb",
+      role: "primary",
+      category: "drug",
+      subcategory: "pharmacogenomics",
+      markerIds: [rsid],
+      genes: ann.gene ? [ann.gene] : [],
+      title: `${ann.gene || rsid} / ${drugs[0] ?? "drug response"} (PharmGKB level ${ann.evidenceLevel})`,
+      summary: `PharmGKB level ${ann.evidenceLevel} annotation links ${rsid} to ${ann.phenotypeCategory.toLowerCase()} with ${drugs.slice(0, 2).join(" and ")}.`,
+      riskSummary: evidenceLevel === "high" || evidenceLevel === "moderate"
+        ? `${ann.gene || rsid} variant associated with ${ann.phenotypeCategory.toLowerCase()} for ${drugs[0] ?? "the reported drug"}`
+        : undefined,
+      qualityTier: ann.evidenceLevel === "1A" || ann.evidenceLevel === "1B" ? "tier-1" : undefined,
+      detail: `PharmGKB clinical annotation level ${ann.evidenceLevel}: ${ann.phenotypeCategory} for ${drugs.join(", ")}.`,
+      whyItMatters: "PharmGKB curates pharmacogenomic evidence from the literature, with level 1A–2B annotations backed by expert review and published clinical studies.",
+      topics: ["PharmGKB", "Drug response", "Pharmacogenomics"],
+      conditions: drugs.map((d) => `${d} ${ann.phenotypeCategory.toLowerCase()}`),
+      url: ann.url,
+      release: "PharmGKB clinical annotations bulk download",
+      evidenceLevel,
+      clinicalSignificance: "drug-response",
+      repute,
+      tone,
+      pmids: ann.pmids,
+      notes: [
+        `PharmGKB evidence level: ${ann.evidenceLevel}.`,
+        `Phenotype category: ${ann.phenotypeCategory}.`,
+        ...(ann.significance ? [`Significance: ${ann.significance}.`] : []),
+        "PharmGKB annotations reflect published literature and should not replace clinical pharmacogenomic testing.",
+      ],
+    });
+  }
+
+  return records;
 }
 
 function dedupeRecords(records: EvidencePackRecord[]): EvidencePackRecord[] {
@@ -827,10 +995,14 @@ async function sourceChecksums(): Promise<Record<string, string | null>> {
   const clinvar = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
   const gwas = path.join(cacheRoot, "gwas", "associations.tsv");
   const snpedia = path.join(cacheRoot, "snpedia", "pages.json");
+  const cpic = path.join(cacheRoot, "cpic", "variants.json");
+  const pharmgkb = path.join(cacheRoot, "pharmgkb", "annotations.json");
   return {
     clinvar: existsSync(clinvar) ? await fileSha256(clinvar) : null,
     gwas: existsSync(gwas) ? await fileSha256(gwas) : null,
     snpedia: existsSync(snpedia) ? await fileSha256(snpedia) : null,
+    cpic: existsSync(cpic) ? await fileSha256(cpic) : null,
+    pharmgkb: existsSync(pharmgkb) ? await fileSha256(pharmgkb) : null,
   };
 }
 
@@ -849,7 +1021,9 @@ async function main(): Promise<void> {
   const clinvarRecords = await buildClinvarRecords(options.maxClinvarRecords);
   const gwasRecords = await buildGwasRecords(options.maxGwasRecords);
   const snpediaRecords = await buildSnpediaRecords();
-  const records = dedupeRecords(withKnownSourceRoles([...definitionRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords]));
+  const cpicRecords = await buildCpicRecords();
+  const pharmgkbRecords = await buildPharmgkbRecords();
+  const records = dedupeRecords(withKnownSourceRoles([...definitionRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords, ...cpicRecords, ...pharmgkbRecords]));
   const buckets = new Map<number, EvidencePackRecord[]>();
 
   for (const record of records) {
@@ -932,6 +1106,8 @@ async function main(): Promise<void> {
   console.log(`ClinVar records: ${clinvarRecords.length.toLocaleString()}`);
   console.log(`GWAS records: ${gwasRecords.length.toLocaleString()}`);
   console.log(`SNPedia records: ${snpediaRecords.length.toLocaleString()}`);
+  console.log(`CPIC records: ${cpicRecords.length.toLocaleString()}`);
+  console.log(`PharmGKB records: ${pharmgkbRecords.length.toLocaleString()}`);
   console.log(`Packed records: ${records.length.toLocaleString()} across ${shards.length.toLocaleString()} shards.`);
   if (options.check && changed) {
     process.exitCode = 1;
