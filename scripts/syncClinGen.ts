@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { splitTsv } from "./tsvUtils";
+import { splitCsv } from "./tsvUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = path.join(repoRoot, ".evidence-cache", "clingen");
@@ -39,23 +39,11 @@ function parseClinGenCsv(text: string): ClinGenClassification[] {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return [];
 
-  const headers = splitTsv(lines[0].replace(/,/g, "\t"));
+  const headers = splitCsv(lines[0]);
   const results: ClinGenClassification[] = [];
 
   for (let i = 1; i < lines.length; i++) {
-    // CSV rows — convert commas to tabs for reuse of splitTsv, handling quoted fields
-    const raw = lines[i];
-    // Simple CSV parse: split on commas not inside quotes
-    const values: string[] = [];
-    let current = "";
-    let inQuote = false;
-    for (const char of raw) {
-      if (char === '"') { inQuote = !inQuote; continue; }
-      if (char === "," && !inQuote) { values.push(current.trim()); current = ""; continue; }
-      current += char;
-    }
-    values.push(current.trim());
-
+    const values = splitCsv(lines[i]);
     const row: Record<string, string> = {};
     headers.forEach((h, idx) => { row[h] = values[idx] ?? ""; });
 

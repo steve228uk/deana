@@ -48,6 +48,19 @@ export function extractPmids(otherIds: string): string[] {
   return Array.from(otherIds.matchAll(/(?:PubMed|PMID):(\d+)/gi), (m) => m[1]);
 }
 
+export function splitCsv(line: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let inQuote = false;
+  for (const char of line) {
+    if (char === '"') { inQuote = !inQuote; continue; }
+    if (char === "," && !inQuote) { values.push(current.trim()); current = ""; continue; }
+    current += char;
+  }
+  values.push(current.trim());
+  return values;
+}
+
 export function riskSummaryForClinvar(gene: string, significance: string, condition: string): string {
   if (/drug response|pharmacogen/i.test(significance)) {
     return `${gene} variant with clinical drug-response annotation for ${condition}`;
