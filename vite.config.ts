@@ -28,9 +28,9 @@ export default defineConfig(({ command }) => ({
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
-    // Stub out the auto-generated definitions file — it can be very large
-    // after the evidence pack build and would cause V8 to OOM while parsing it.
-    // Tests only exercise the 12 hand-crafted definitions, not auto-generated ones.
-    alias: [{ find: /\/autoDefinitions$/, replacement: autoDefinitionsStub }],
+    // Belt-and-suspenders: also alias the import so Vite's transform stage
+    // never tries to read the potentially huge generated file.
+    // The regex anchors on ^ and $ so String.replace swaps the entire specifier.
+    alias: [{ find: /^.*\/autoDefinitions(\.ts)?$/, replacement: autoDefinitionsStub }],
   },
 }));
