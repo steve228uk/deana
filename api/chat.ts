@@ -255,7 +255,7 @@ export default async function handler(request: Request): Promise<Response> {
       ? [process.env.DEANA_LLM_MODEL]
       : selectChatModels(parsed.data.context.findings, lastUserMessage ? textFromMessage(lastUserMessage) : "");
 
-    const { result } = await runStreamWithFallback({
+    const { result, modelUsed } = await runStreamWithFallback({
       gateway,
       models: selectedModels,
       system: buildSystemPrompt(parsed.data.context),
@@ -275,10 +275,13 @@ export default async function handler(request: Request): Promise<Response> {
       taskName: "chat",
     });
 
+    const exposeModelName = process.env.VERCEL_ENV !== "production";
+
     return result.toUIMessageStreamResponse({
       headers: {
         "Cache-Control": "no-store",
       },
+      messageMetadata: () => (exposeModelName ? { model: modelUsed } : undefined),
       sendReasoning: true,
       onError: () => "AI chat is unavailable with the current Gateway privacy settings.",
     });
