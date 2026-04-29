@@ -16,6 +16,7 @@ import {
   type ChatSearchPlan,
 } from "../../lib/aiChat";
 import { searchReportEntriesForChat } from "../../lib/aiRetrieval";
+import { prewarmSearchIndex } from "../../lib/ai/searchIndex";
 import {
   loadAiConsent,
   loadChatMessages,
@@ -127,6 +128,8 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const latestFindingsRef = useRef<ChatReportContext["findings"]>([]);
   const traceByMessageRef = useRef<Record<string, ChatRetrievalTrace>>({});
   const contextFindingsByMessageRef = useRef<Record<string, ChatContextFinding[]>>({});
+  const entryCacheRef = useRef<Map<string, Awaited<ReturnType<typeof loadReportEntry>>>>(new Map());
+  const contextCacheRef = useRef<{ key: string; context: ChatReportContext } | null>(null);
   const createdAtByMessageRef = useRef<Record<string, string>>({});
   const reasoningByMessageRef = useRef<Record<string, string>>({});
   const pendingTraceRef = useRef<ChatRetrievalTrace | null>(null);
@@ -153,6 +156,12 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const setMessagesRef = useRef<((messages: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
   latestPropsRef.current = props;
   activeThreadRef.current = activeThread;
+
+  useEffect(() => {
+    entryCacheRef.current.clear();
+    contextCacheRef.current = null;
+    void prewarmSearchIndex(props.profile.id);
+  }, [props.profile.id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -379,6 +388,28 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       });
   }
 
+  function resolveChatContext(): ChatReportContext {
+    const latest = latestPropsRef.current;
+    const retrievedFindings = latestFindingsRef.current;
+    const key = JSON.stringify({
+      profileId: latest.profile.id,
+      profileCreatedAt: latest.profile.createdAt,
+      currentTab: latest.currentTab,
+      filters: latest.filters,
+      visibleIds: latest.visibleEntries.map((entry) => entry.id),
+      selectedId: latest.selectedEntry?.id ?? null,
+      retrievedIds: retrievedFindings.map((finding) => finding.id),
+    });
+
+    const cached = contextCacheRef.current;
+    if (cached?.key === key) return cached.context;
+
+    const context = buildChatContext({ ...latest, retrievedFindings });
+    contextCacheRef.current = { key, context };
+    return context;
+  }
+
+
   const transport = useMemo(() => new DefaultChatTransport({
     api: "/api/chat",
     prepareSendMessagesRequest: async ({ api, messages, body }) => {
@@ -392,7 +423,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
             accepted: true,
             version: CHAT_CONSENT_VERSION,
           },
-          context: buildChatContext({ ...latestPropsRef.current, retrievedFindings: latestFindingsRef.current }),
+          context: resolveChatContext(),
           messages,
         },
       };
@@ -574,7 +605,11 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     if (!href?.startsWith("deana://entry/")) return;
     const entryId = decodeURIComponent(href.slice("deana://entry/".length));
     setPanel({ mode: "inspector", findingId: entryId, finding: null, isLoading: true, error: null });
-    const finding = await loadReportEntry(latestPropsRef.current.profile.id, entryId);
+    const cached = entryCacheRef.current.get(entryId);
+    const finding = cached === undefined
+      ? await loadReportEntry(latestPropsRef.current.profile.id, entryId)
+      : cached;
+    if (cached === undefined) entryCacheRef.current.set(entryId, finding);
     setPanel({
       mode: "inspector",
       findingId: entryId,

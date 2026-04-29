@@ -1,6 +1,7 @@
 import { DEFAULT_FILTERS, matchesEntryFilters } from "./explorer";
-import { findingToChatContext, MAX_CHAT_SEARCH_RESULTS, type ChatContextFinding, type ChatSearchPlan } from "./aiChat";
-import { streamReportEntries } from "./storage";
+import { findingToChatContext, type ChatContextFinding, type ChatSearchPlan } from "./aiChat";
+import { queryCandidateIds } from "./ai/searchIndex";
+import { loadReportEntriesByIds, streamReportEntries } from "./storage";
 import type { ChatRetrievalTrace, InsightCategory, StoredReportEntry } from "../types";
 
 const ALL_CATEGORIES: InsightCategory[] = ["medical", "traits", "drug"];
@@ -198,11 +199,18 @@ function fallbackPlan(prompt: string): ChatSearchPlan {
   };
 }
 
+function resolveLimit(plan: ChatSearchPlan): number {
+  if (plan.rsids.length > 0) return 5;
+  if (plan.genes.length > 0) return 10;
+  if (plan.conditions.length + plan.topics.length > 3) return 15;
+  return 12;
+}
+
 export async function searchReportEntriesForChat({
   profileId,
   prompt,
   plan,
-  limit = MAX_CHAT_SEARCH_RESULTS,
+  limit,
 }: {
   profileId: string;
   prompt: string;
@@ -214,15 +222,22 @@ export async function searchReportEntriesForChat({
   const terms = searchTerms(prompt, effectivePlan);
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
+  const candidateIds = await queryCandidateIds(profileId, terms, 50);
+  const indexedEntries = candidateIds.length > 0 ? await loadReportEntriesByIds(profileId, candidateIds) : [];
 
-  for (const category of categories) {
-    for await (const entry of streamReportEntries(profileId, category)) {
+  for (const entry of indexedEntries) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
+    if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
+  }
+
+  if (ranked.length === 0) {
+    for await (const entry of streamReportEntries(profileId)) {
       if (seen.has(entry.id)) continue;
       seen.add(entry.id);
       const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
-      if (matchedFields.length > 0) {
-        ranked.push({ entry, score, matchedFields });
-      }
+      if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
     }
   }
 
@@ -232,7 +247,7 @@ export async function searchReportEntriesForChat({
     left.entry.title.localeCompare(right.entry.title),
   );
 
-  const selectedRanked = ranked.slice(0, limit);
+  const selectedRanked = ranked.slice(0, limit ?? resolveLimit(effectivePlan));
   const selected = selectedRanked.map(({ entry }) => findingToChatContext(entry));
 
   return {

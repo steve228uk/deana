@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { deleteProfile, loadProfileMeta, loadProfileSummaries, saveProfile } from "./lib/storage";
 import { createProfile as buildProfile } from "./lib/profiles";
+import { clearSearchIndex, prewarmSearchIndex } from "./lib/ai/searchIndex";
 import {
   DnaParseProgress,
   EvidenceProgressSnapshot,
@@ -156,6 +157,8 @@ export default function App() {
       packVersion: evidenceSupplement.packVersion,
     });
     await saveProfile(nextProfile);
+    clearSearchIndex(nextProfile.id);
+    void prewarmSearchIndex(nextProfile.id);
     const summary = summaryFromProfile(nextProfile);
     setProfiles((current) => [summary, ...current.filter((candidate) => candidate.id !== summary.id)]);
     void loadProfileSummaries().then(setProfiles).catch(() => {});
@@ -188,6 +191,7 @@ export default function App() {
       report: generateReport(existing.dna, { ...existing.supplements, evidence: runningSupplement }),
     };
     await saveProfile(runningProfile);
+    clearSearchIndex(runningProfile.id);
     setProfiles(await loadProfileSummaries());
 
     const supplement = await enrichWithEvidence(existing.dna);
@@ -197,6 +201,8 @@ export default function App() {
       report: generateReport(existing.dna, { ...runningProfile.supplements, evidence: supplement }),
     };
     await saveProfile(refreshed);
+    clearSearchIndex(refreshed.id);
+    void prewarmSearchIndex(refreshed.id);
     setProfiles(await loadProfileSummaries());
   }
 

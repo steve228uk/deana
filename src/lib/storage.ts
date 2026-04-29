@@ -592,6 +592,14 @@ export async function loadReportEntry(profileId: string, entryId: string): Promi
   return entry ?? null;
 }
 
+export async function loadReportEntriesByIds(
+  profileId: string,
+  ids: string[],
+): Promise<StoredReportEntry[]> {
+  const entries = await Promise.all(ids.map((id) => loadReportEntry(profileId, id)));
+  return entries.filter((entry): entry is StoredReportEntry => Boolean(entry));
+}
+
 async function loadAllEntriesForCategory(
   profileId: string,
   category: StoredReportEntry["category"],
