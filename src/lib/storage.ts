@@ -596,7 +596,13 @@ export async function loadReportEntriesByIds(
   profileId: string,
   ids: string[],
 ): Promise<StoredReportEntry[]> {
-  const entries = await Promise.all(ids.map((id) => loadReportEntry(profileId, id)));
+  if (ids.length === 0) return [];
+  const db = await openDb();
+  const transaction = db.transaction(REPORT_ENTRY_STORE, "readonly");
+  const store = transaction.objectStore(REPORT_ENTRY_STORE);
+  const entries = await Promise.all(
+    ids.map((id) => requestToPromise(store.get([profileId, id]) as IDBRequest<StoredReportEntry | undefined>)),
+  );
   return entries.filter((entry): entry is StoredReportEntry => Boolean(entry));
 }
 

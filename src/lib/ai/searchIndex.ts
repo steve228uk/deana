@@ -15,6 +15,21 @@ interface LightEntry {
   sourceNotes: string;
   markers: string;
   searchText: string;
+  sortSeverity: number;
+  sortEvidence: number;
+}
+
+export interface SearchCandidate {
+  id: string;
+  category: string;
+  evidenceTier: string;
+  genes: string;
+  topics: string;
+  conditions: string;
+  rsids: string;
+  title: string;
+  sortSeverity: number;
+  sortEvidence: number;
 }
 
 const indexes = new Map<string, MiniSearch<LightEntry>>();
@@ -40,6 +55,8 @@ function toLightEntry(entry: Awaited<ReturnType<typeof streamReportEntries>> ext
     sourceNotes: entry.sourceNotes.join(" ").slice(0, 320),
     markers,
     searchText: (entry.searchText || "").slice(0, 960),
+    sortSeverity: entry.sort.severity,
+    sortEvidence: entry.sort.evidence,
   };
 }
 
@@ -51,7 +68,7 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
     const miniSearch = new MiniSearch<LightEntry>({
       idField: "id",
       fields: ["genes", "conditions", "topics", "title", "rsids", "markers", "summary", "detail", "sourceNotes", "searchText", "category", "evidenceTier"],
-      storeFields: ["id"],
+      storeFields: ["id", "category", "evidenceTier", "genes", "topics", "conditions", "rsids", "title", "sortSeverity", "sortEvidence"],
       searchOptions: {
         fuzzy: 0.2,
         prefix: true,
@@ -86,6 +103,31 @@ export async function queryCandidateIds(profileId: string, terms: string[], limi
   const query = terms.join(" ").trim();
   if (!query) return [];
   return index.search(query, { fuzzy: 0.2, prefix: true }).slice(0, limit).map((result) => result.id as string);
+}
+
+export async function searchWithFields(profileId: string, terms: string[], limit: number): Promise<SearchCandidate[]> {
+  const index = indexes.get(profileId);
+  if (!index || terms.length === 0) return [];
+  const query = terms.join(" ").trim();
+  if (!query) return [];
+  return index.search(query, { fuzzy: 0.2, prefix: true })
+    .slice(0, limit)
+    .map((result) => ({
+      id: result.id as string,
+      category: (result["category"] as string) ?? "",
+      evidenceTier: (result["evidenceTier"] as string) ?? "",
+      genes: (result["genes"] as string) ?? "",
+      topics: (result["topics"] as string) ?? "",
+      conditions: (result["conditions"] as string) ?? "",
+      rsids: (result["rsids"] as string) ?? "",
+      title: (result["title"] as string) ?? "",
+      sortSeverity: (result["sortSeverity"] as number) ?? 0,
+      sortEvidence: (result["sortEvidence"] as number) ?? 0,
+    }));
+}
+
+export async function waitForIndex(profileId: string): Promise<void> {
+  return inFlight.get(profileId) ?? Promise.resolve();
 }
 
 export function clearSearchIndex(profileId?: string): void {
