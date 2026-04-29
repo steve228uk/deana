@@ -16,6 +16,7 @@ import {
   type ChatSearchPlan,
 } from "../../lib/aiChat";
 import { searchReportEntriesForChat } from "../../lib/aiRetrieval";
+import { prewarmSearchIndex } from "../../lib/ai/searchIndex";
 import {
   loadAiConsent,
   loadChatMessages,
@@ -154,6 +155,10 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const setMessagesRef = useRef<((messages: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
   latestPropsRef.current = props;
   activeThreadRef.current = activeThread;
+
+  useEffect(() => {
+    void prewarmSearchIndex(props.profile.id);
+  }, [props.profile.id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -407,7 +412,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     status,
     error,
     clearError,
-    addToolOutput,
     setMessages,
   } = useChat({
     id: activeThread?.id,
@@ -421,13 +425,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (searchCallCountRef.current > 2) {
         const limitMessage = "Search limit reached for this message.";
         setSearchStatus({ status: "error", message: limitMessage });
-        await addToolOutput({
-          tool: "searchReportFindings",
-          toolCallId: toolCall.toolCallId,
-          state: "output-error",
-          errorText: limitMessage,
-        });
-        return;
+        return { error: limitMessage, findings: [], resultCount: 0 };
       }
 
       setSearchStatus({ status: "searching" });
@@ -446,24 +444,15 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         pendingTraceRef.current = retrieval.trace;
         pendingFindingsRef.current = latestFindingsRef.current;
         setSearchStatus({ status: "ready", trace: retrieval.trace });
-        await addToolOutput({
-          tool: "searchReportFindings",
-          toolCallId: toolCall.toolCallId,
-          output: {
-            findings: retrieval.findings,
-            trace: retrieval.trace,
-            resultCount: retrieval.resultCount,
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "AI report search is unavailable right now.";
+        return {
+          findings: retrieval.findings,
+          trace: retrieval.trace,
+          resultCount: retrieval.resultCount,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "AI report search is unavailable right now.";
         setSearchStatus({ status: "error", message });
-        await addToolOutput({
-          tool: "searchReportFindings",
-          toolCallId: toolCall.toolCallId,
-          state: "output-error",
-          errorText: message,
-        });
+        return { error: message, findings: [], resultCount: 0 };
       }
     },
     onFinish: async ({ message, messages: finishedMessages }) => {

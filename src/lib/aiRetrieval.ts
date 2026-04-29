@@ -1,6 +1,6 @@
 import { DEFAULT_FILTERS, matchesEntryFilters } from "./explorer";
 import { findingToChatContext, type ChatContextFinding, type ChatSearchPlan } from "./aiChat";
-import { queryCandidateIds } from "./ai/searchIndex";
+import { prewarmSearchIndex, queryCandidateIds } from "./ai/searchIndex";
 import { loadReportEntriesByIds, streamReportEntries } from "./storage";
 import type { ChatRetrievalTrace, InsightCategory, StoredReportEntry } from "../types";
 
@@ -217,6 +217,7 @@ export async function searchReportEntriesForChat({
   plan?: ChatSearchPlan;
   limit?: number;
 }): Promise<ChatRetrievalResult> {
+  await prewarmSearchIndex(profileId);
   const effectivePlan = compactPlan(plan ?? fallbackPlan(prompt));
   const categories = ALL_CATEGORIES;
   const terms = searchTerms(prompt, effectivePlan);
