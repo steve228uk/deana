@@ -136,6 +136,8 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const isActiveThreadSavedRef = useRef(false);
   const pendingSendRef = useRef<string | null>(null);
   const searchCallCountRef = useRef(0);
+  const pendingModelRef = useRef<string | null>(null);
+  const modelByMessageRef = useRef<Record<string, string>>({});
   const [hasConsented, setHasConsented] = useState(false);
   const [threads, setThreads] = useState<StoredChatThread[]>([]);
   const [activeThread, setActiveThread] = useState<StoredChatThread | null>(null);
@@ -387,6 +389,12 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
 
   const transport = useMemo(() => new DefaultChatTransport({
     api: "/api/chat",
+    fetch: async (url, init) => {
+      const response = await globalThis.fetch(url, init);
+      const model = response.headers.get("X-Deana-Model");
+      if (model) pendingModelRef.current = model;
+      return response;
+    },
     prepareSendMessagesRequest: async ({ api, messages, body }) => {
       setSearchStatus((current) => current.status === "searching" || current.status === "ready" ? current : { status: "checking" });
 
@@ -476,6 +484,10 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (!thread) return;
       setSearchStatus((current) => current.status === "checking" ? { status: "idle" } : current);
       if (message.role === "assistant" && hasToolPart(message) && !messageText(message).trim()) return;
+      if (message.role === "assistant" && pendingModelRef.current) {
+        modelByMessageRef.current[message.id] = pendingModelRef.current;
+        pendingModelRef.current = null;
+      }
       const now = new Date().toISOString();
       const nextThread = {
         ...thread,
@@ -713,6 +725,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
                   content={messageText(message)}
                   trace={traceByMessageRef.current[message.id]}
                   reasoningSummary={messageReasoning(message) ?? reasoningByMessageRef.current[message.id] ?? null}
+                  modelId={modelByMessageRef.current[message.id]}
                   components={markdownComponents}
                   onOpenEntry={handleOpenEntry}
                   onOpenFindings={openFindingsPanel}
@@ -1086,6 +1099,7 @@ const ChatMessage = memo(function ChatMessage({
   content,
   trace,
   reasoningSummary,
+  modelId,
   components,
   onOpenEntry,
   onOpenFindings,
@@ -1094,6 +1108,7 @@ const ChatMessage = memo(function ChatMessage({
   content: string;
   trace?: ChatRetrievalTrace;
   reasoningSummary: string | null;
+  modelId?: string;
   components: Components;
   onOpenEntry: (entryId: string) => void;
   onOpenFindings: () => void;
@@ -1117,6 +1132,9 @@ const ChatMessage = memo(function ChatMessage({
       ) : null}
       {role === "assistant" && trace ? (
         <TracePanel trace={trace} onOpenFindings={onOpenFindings} />
+      ) : null}
+      {role === "assistant" && modelId ? (
+        <div className="dn-ai-model-badge">{modelId}</div>
       ) : null}
     </article>
   );

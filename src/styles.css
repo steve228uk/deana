@@ -1031,6 +1031,12 @@ a { color: inherit; }
   margin-top: 2px;
   font-size: 0.86rem;
 }
+.dn-ai-model-badge {
+  margin-top: 6px;
+  color: var(--dn-muted);
+  font-size: 0.78rem;
+  font-family: var(--dn-font-mono, monospace);
+}
 .dn-ai-side-panel {
   min-width: 0;
   min-height: 0;
