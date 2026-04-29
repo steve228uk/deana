@@ -3,7 +3,6 @@ import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, StoredRepo
 
 export const CHAT_CONTEXT_VERSION = 1;
 export const CHAT_CONSENT_VERSION = 1;
-export const DEFAULT_DEANA_LLM_MODEL = "google/gemini-3-flash";
 export const MAX_CHAT_CONTEXT_FINDINGS = 18;
 export const MAX_CHAT_SEARCH_RESULTS = 8;
 
@@ -59,6 +58,7 @@ export function buildGatewayProviderOptions(model: string, includeThoughts = fal
   const isOpenAiGatewayModel = model.startsWith("openai/");
 
   return {
+    // Gemma routes use only gateway privacy flags; no Gemini/OpenAI provider options.
     ...(isGeminiGatewayModel
       ? {
           google: {
