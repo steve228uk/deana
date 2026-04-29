@@ -4,6 +4,7 @@ import { DeanaWordmark, Icon } from "./ui";
 
 export const DEANA_GITHUB_URL = "https://github.com/steve228uk/deana";
 export const DEANA_LICENSE_URL = `${DEANA_GITHUB_URL}/blob/HEAD/LICENSE.md`;
+export const DEANA_SUBREDDIT_URL = "https://www.reddit.com/r/deanadna";
 
 export interface SavedReportCard {
   id: string;
@@ -570,6 +571,7 @@ function HomepageFooter() {
   return (
     <footer className="dn-home-footer">
       <span>&copy; 2026 Stephen Radford</span>
+      <a href={DEANA_SUBREDDIT_URL} target="_blank" rel="noreferrer">r/deanadna</a>
       <a href={DEANA_LICENSE_URL} target="_blank" rel="noreferrer">Non-commercial license</a>
     </footer>
   );
