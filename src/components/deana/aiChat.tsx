@@ -412,6 +412,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     status,
     error,
     clearError,
+    addToolOutput,
     setMessages,
   } = useChat({
     id: activeThread?.id,
@@ -425,7 +426,11 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (searchCallCountRef.current > 2) {
         const limitMessage = "Search limit reached for this message.";
         setSearchStatus({ status: "error", message: limitMessage });
-        return { error: limitMessage, findings: [], resultCount: 0 };
+        void addToolOutput({
+          toolCallId: toolCall.toolCallId,
+          output: { error: limitMessage, resultCount: 0 },
+        });
+        return;
       }
 
       setSearchStatus({ status: "searching" });
@@ -444,15 +449,21 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         pendingTraceRef.current = retrieval.trace;
         pendingFindingsRef.current = latestFindingsRef.current;
         setSearchStatus({ status: "ready", trace: retrieval.trace });
-        return {
-          findings: retrieval.findings,
-          trace: retrieval.trace,
-          resultCount: retrieval.resultCount,
-        };
+        // Return only a compact acknowledgement — full findings are already injected
+        // into the context JSON via prepareSendMessagesRequest / latestFindingsRef.
+        // Sending full findings here as well would double the payload size and risk
+        // exceeding the server's MAX_CONTEXT_BYTES limit.
+        void addToolOutput({
+          toolCallId: toolCall.toolCallId,
+          output: { resultCount: retrieval.resultCount, rationale: retrieval.plan.rationale },
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : "AI report search is unavailable right now.";
         setSearchStatus({ status: "error", message });
-        return { error: message, findings: [], resultCount: 0 };
+        void addToolOutput({
+          toolCallId: toolCall.toolCallId,
+          output: { error: message, resultCount: 0 },
+        });
       }
     },
     onFinish: async ({ message, messages: finishedMessages }) => {
