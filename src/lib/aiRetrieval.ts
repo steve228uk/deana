@@ -223,17 +223,29 @@ export async function searchReportEntriesForChat({
   const terms = searchTerms(prompt, effectivePlan);
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
-  const candidateIds = await queryCandidateIds(profileId, terms, 50);
+
+  // Use focused terms for the index query so MiniSearch returns specific candidates
+  // rather than entries that happened to match very common words like "risk" or "variant".
+  const indexTerms = uniqueValues([
+    effectivePlan.query,
+    ...effectivePlan.genes,
+    ...effectivePlan.rsids,
+    ...effectivePlan.topics.slice(0, 4),
+    ...effectivePlan.conditions.slice(0, 4),
+  ]).slice(0, 20);
+
+  const candidateIds = indexTerms.length > 0 ? await queryCandidateIds(profileId, indexTerms, 80) : [];
   const indexedEntries = candidateIds.length > 0 ? await loadReportEntriesByIds(profileId, candidateIds) : [];
 
-  if (indexedEntries.length > 0) {
-    for (const entry of indexedEntries) {
-      if (seen.has(entry.id)) continue;
-      seen.add(entry.id);
-      const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
-      if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
-    }
-  } else {
+  for (const entry of indexedEntries) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
+    if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
+  }
+
+  // Always fall back to full scan so a poor MiniSearch query never silently returns nothing.
+  if (ranked.length === 0) {
     for await (const entry of streamReportEntries(profileId)) {
       if (seen.has(entry.id)) continue;
       seen.add(entry.id);
