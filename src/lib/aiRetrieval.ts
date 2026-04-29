@@ -1,6 +1,6 @@
 import { DEFAULT_FILTERS, matchesEntryFilters } from "./explorer";
 import { findingToChatContext, type ChatContextFinding, type ChatSearchPlan } from "./aiChat";
-import { queryCandidateIds } from "./ai/searchIndex";
+import { searchWithFields, waitForIndex, type SearchCandidate } from "./ai/searchIndex";
 import { loadReportEntriesByIds, streamReportEntries } from "./storage";
 import type { ChatRetrievalTrace, InsightCategory, StoredReportEntry } from "../types";
 
@@ -206,6 +206,28 @@ function resolveLimit(plan: ChatSearchPlan): number {
   return 12;
 }
 
+function preScoreCandidate(candidate: SearchCandidate, plan: ChatSearchPlan): number {
+  const normRsids = candidate.rsids.toLowerCase();
+  const normGenes = candidate.genes.toLowerCase();
+  const normTopics = candidate.topics.toLowerCase();
+  const normConditions = candidate.conditions.toLowerCase();
+  const normTitle = candidate.title.toLowerCase();
+  let score = 0;
+
+  if (plan.rsids.some((rsid) => normRsids.includes(rsid))) score += 90;
+
+  const geneTokens = new Set(normGenes.split(/\s+/).filter(Boolean));
+  score += plan.genes.filter((g) => geneTokens.has(g)).length * 70;
+
+  score += plan.topics.filter((t) => normTopics.includes(t)).length * 28;
+  score += plan.conditions.filter((c) => normConditions.includes(c)).length * 28;
+
+  if (plan.evidence.includes(candidate.evidenceTier)) score += 12;
+  if (plan.query && normTitle.includes(plan.query.toLowerCase())) score += 25;
+
+  return score + Math.min(candidate.sortSeverity, 100) / 100 + Math.min(candidate.sortEvidence, 100) / 200;
+}
+
 export async function searchReportEntriesForChat({
   profileId,
   prompt,
@@ -220,11 +242,14 @@ export async function searchReportEntriesForChat({
   const effectivePlan = compactPlan(plan ?? fallbackPlan(prompt));
   const categories = ALL_CATEGORIES;
   const terms = searchTerms(prompt, effectivePlan);
+  const effectiveLimit = limit ?? resolveLimit(effectivePlan);
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
-  const indexCandidateLimit = Math.max(60, (limit ?? resolveLimit(effectivePlan)) * 8);
-  const candidateIds = await queryCandidateIds(profileId, terms, indexCandidateLimit);
-  const indexedEntries = candidateIds.length > 0 ? await loadReportEntriesByIds(profileId, candidateIds.slice(0, indexCandidateLimit)) : [];
+
+  await waitForIndex(profileId);
+
+  const indexCandidateLimit = Math.max(60, effectiveLimit * 8);
+  const candidates = await searchWithFields(profileId, terms, indexCandidateLimit);
 
   const rankEntry = (entry: StoredReportEntry) => {
     if (seen.has(entry.id)) return;
@@ -233,14 +258,22 @@ export async function searchReportEntriesForChat({
     if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
   };
 
-  if (indexedEntries.length > 0) {
-    for (const entry of indexedEntries) {
-      rankEntry(entry);
-    }
+  // Pre-score from stored index fields to identify the most relevant candidates,
+  // then load full entries from IDB only for those — avoiding large batch reads.
+  const topN = Math.max(15, effectiveLimit * 3);
+  const topIds = candidates
+    .map((c, i) => ({ id: c.id, score: preScoreCandidate(c, effectivePlan), order: i }))
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .slice(0, topN)
+    .map((c) => c.id);
+
+  const indexedEntries = await loadReportEntriesByIds(profileId, topIds);
+  for (const entry of indexedEntries) {
+    rankEntry(entry);
   }
 
-  const targetMatches = Math.max(18, (limit ?? resolveLimit(effectivePlan)) * 3);
-  if (indexedEntries.length === 0 || ranked.length < targetMatches) {
+  // Fallback: full scan only when the index returned no candidates at all.
+  if (candidates.length === 0) {
     for await (const entry of streamReportEntries(profileId)) {
       rankEntry(entry);
     }
@@ -252,7 +285,7 @@ export async function searchReportEntriesForChat({
     left.entry.title.localeCompare(right.entry.title),
   );
 
-  const selectedRanked = ranked.slice(0, limit ?? resolveLimit(effectivePlan));
+  const selectedRanked = ranked.slice(0, effectiveLimit);
   const selected = selectedRanked.map(({ entry }) => findingToChatContext(entry));
 
   return {
