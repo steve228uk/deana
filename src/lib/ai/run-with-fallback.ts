@@ -31,17 +31,16 @@ export async function runTextWithFallback({ gateway, models, providerOptionsFor,
   throw new Error(`${taskName} failed across ${models.length} model(s): ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }
 
-export async function runStreamWithFallback({ gateway, models, providerOptionsFor, system, messages, tools, maxOutputTokens, taskName }: CommonOptions & { messages: ModelMessage[]; tools?: ToolSet; }): Promise<{ result: ReturnType<typeof streamText>; modelUsed: string; }> {
-  let lastError: unknown;
-  for (let i = 0; i < models.length; i += 1) {
-    const model = models[i];
-    try {
-      const result = streamText({ model: gateway(model), system, messages, tools, maxOutputTokens, providerOptions: providerOptionsFor?.(model) });
-      return { result, modelUsed: model };
-    } catch (error) {
-      lastError = error;
-      if (i === models.length - 1 || !isRetryableError(error)) break;
-    }
+// streamText is lazy — the network call happens when the stream is consumed, not here.
+// Synchronous errors (e.g. invalid parameters) are caught below; runtime model errors
+// surface later inside toUIMessageStreamResponse and cannot be retried at this level.
+// Use the gateway's own routing / fallback for stream-level resilience.
+export function runStreamWithFallback({ gateway, models, providerOptionsFor, system, messages, tools, maxOutputTokens, taskName }: CommonOptions & { messages: ModelMessage[]; tools?: ToolSet; }): { result: ReturnType<typeof streamText>; modelUsed: string; } {
+  const model = models[0];
+  try {
+    const result = streamText({ model: gateway(model), system, messages, tools, maxOutputTokens, providerOptions: providerOptionsFor?.(model) });
+    return { result, modelUsed: model };
+  } catch (error) {
+    throw new Error(`${taskName} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  throw new Error(`${taskName} failed across ${models.length} model(s): ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }

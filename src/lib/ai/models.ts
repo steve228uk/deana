@@ -6,6 +6,9 @@ export const DEANA_MODELS = {
 
 export type DeanaModelId = typeof DEANA_MODELS[keyof typeof DEANA_MODELS];
 
+// Chat requires reliable tool-call support — never use the cheap model.
+export const CHAT_MODELS: readonly DeanaModelId[] = [DEANA_MODELS.default, DEANA_MODELS.strongFallback];
+
 export const TASK_MODELS = {
   titleGeneration: [DEANA_MODELS.cheap, DEANA_MODELS.default],
   uploadParsingExplanations: [DEANA_MODELS.cheap, DEANA_MODELS.default],

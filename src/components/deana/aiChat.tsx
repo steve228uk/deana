@@ -134,6 +134,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const activeThreadRef = useRef<StoredChatThread | null>(null);
   const isActiveThreadSavedRef = useRef(false);
   const pendingSendRef = useRef<string | null>(null);
+  const searchCallCountRef = useRef(0);
   const [hasConsented, setHasConsented] = useState(false);
   const [threads, setThreads] = useState<StoredChatThread[]>([]);
   const [activeThread, setActiveThread] = useState<StoredChatThread | null>(null);
@@ -414,7 +415,20 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     transport,
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     onToolCall: async ({ toolCall }) => {
-      if (toolCall.dynamic || toolCall.toolName !== "searchReportFindings") return;
+      if (toolCall.toolName !== "searchReportFindings") return;
+
+      searchCallCountRef.current += 1;
+      if (searchCallCountRef.current > 2) {
+        const limitMessage = "Search limit reached for this message.";
+        setSearchStatus({ status: "error", message: limitMessage });
+        await addToolOutput({
+          tool: "searchReportFindings",
+          toolCallId: toolCall.toolCallId,
+          state: "output-error",
+          errorText: limitMessage,
+        });
+        return;
+      }
 
       setSearchStatus({ status: "searching" });
 
@@ -432,7 +446,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         pendingTraceRef.current = retrieval.trace;
         pendingFindingsRef.current = latestFindingsRef.current;
         setSearchStatus({ status: "ready", trace: retrieval.trace });
-        void addToolOutput({
+        await addToolOutput({
           tool: "searchReportFindings",
           toolCallId: toolCall.toolCallId,
           output: {
@@ -444,7 +458,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       } catch (error) {
         const message = error instanceof Error ? error.message : "AI report search is unavailable right now.";
         setSearchStatus({ status: "error", message });
-        void addToolOutput({
+        await addToolOutput({
           tool: "searchReportFindings",
           toolCallId: toolCall.toolCallId,
           state: "output-error",
@@ -455,6 +469,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     onFinish: async ({ message, messages: finishedMessages }) => {
       const thread = activeThreadRef.current;
       if (!thread) return;
+      setSearchStatus((current) => current.status === "checking" ? { status: "idle" } : current);
       if (message.role === "assistant" && hasToolPart(message) && !messageText(message).trim()) return;
       const now = new Date().toISOString();
       const nextThread = {
@@ -466,7 +481,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       await saveChatMessages(thread.id, storedMessagesFromUi(finishedMessages, message));
       pendingTraceRef.current = null;
       pendingFindingsRef.current = null;
-      setSearchStatus((current) => current.status === "checking" ? { status: "idle" } : current);
       setActiveThread(nextThread);
       await refreshThreads(thread.id);
     },
@@ -534,6 +548,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     if (isFirstPrompt) {
       thread = startThreadTitleFromFirstPrompt(thread, text);
     }
+    searchCallCountRef.current = 0;
     setIsThreadListOpen(false);
     await sendMessage({ text });
   }

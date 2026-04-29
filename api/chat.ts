@@ -8,7 +8,7 @@ import {
   CHAT_CONTEXT_VERSION,
   MAX_CHAT_CONTEXT_FINDINGS,
 } from "../src/lib/aiChat.js";
-import { selectChatModels } from "../src/lib/ai/models.js";
+import { CHAT_MODELS } from "../src/lib/ai/models.js";
 import { runStreamWithFallback } from "../src/lib/ai/run-with-fallback.js";
 
 declare const process: {
@@ -250,12 +250,9 @@ export default async function handler(request: Request): Promise<Response> {
       apiKey: getGatewayApiKey(request, process.env),
     });
 
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
-    const selectedModels = process.env.DEANA_LLM_MODEL
-      ? [process.env.DEANA_LLM_MODEL]
-      : selectChatModels(parsed.data.context.findings, lastUserMessage ? textFromMessage(lastUserMessage) : "");
+    const selectedModels = process.env.DEANA_LLM_MODEL ? [process.env.DEANA_LLM_MODEL] : CHAT_MODELS;
 
-    const { result } = await runStreamWithFallback({
+    const { result } = runStreamWithFallback({
       gateway,
       models: selectedModels,
       system: buildSystemPrompt(parsed.data.context),
