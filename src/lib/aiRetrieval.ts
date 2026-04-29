@@ -222,22 +222,27 @@ export async function searchReportEntriesForChat({
   const terms = searchTerms(prompt, effectivePlan);
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
-  const candidateIds = await queryCandidateIds(profileId, terms, 50);
-  const indexedEntries = candidateIds.length > 0 ? await loadReportEntriesByIds(profileId, candidateIds) : [];
+  const indexCandidateLimit = Math.max(60, (limit ?? resolveLimit(effectivePlan)) * 8);
+  const candidateIds = await queryCandidateIds(profileId, terms, indexCandidateLimit);
+  const indexedEntries = candidateIds.length > 0 ? await loadReportEntriesByIds(profileId, candidateIds.slice(0, indexCandidateLimit)) : [];
+
+  const rankEntry = (entry: StoredReportEntry) => {
+    if (seen.has(entry.id)) return;
+    seen.add(entry.id);
+    const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
+    if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
+  };
 
   if (indexedEntries.length > 0) {
     for (const entry of indexedEntries) {
-      if (seen.has(entry.id)) continue;
-      seen.add(entry.id);
-      const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
-      if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
+      rankEntry(entry);
     }
-  } else {
+  }
+
+  const targetMatches = Math.max(18, (limit ?? resolveLimit(effectivePlan)) * 3);
+  if (indexedEntries.length === 0 || ranked.length < targetMatches) {
     for await (const entry of streamReportEntries(profileId)) {
-      if (seen.has(entry.id)) continue;
-      seen.add(entry.id);
-      const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
-      if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
+      rankEntry(entry);
     }
   }
 

@@ -10,12 +10,22 @@ interface LightEntry {
   conditions: string;
   rsids: string;
   evidenceTier: string;
+  summary: string;
+  detail: string;
+  sourceNotes: string;
+  markers: string;
+  searchText: string;
 }
 
 const indexes = new Map<string, MiniSearch<LightEntry>>();
 const inFlight = new Map<string, Promise<void>>();
 
 function toLightEntry(entry: Awaited<ReturnType<typeof streamReportEntries>> extends AsyncGenerator<infer T> ? T : never): LightEntry {
+  const markers = entry.matchedMarkers
+    .flatMap((marker) => [marker.rsid, marker.gene ?? "", marker.genotype ?? "", marker.matchedAllele ?? ""])
+    .filter(Boolean)
+    .join(" ");
+
   return {
     id: entry.id,
     category: entry.category,
@@ -25,6 +35,11 @@ function toLightEntry(entry: Awaited<ReturnType<typeof streamReportEntries>> ext
     conditions: entry.conditions.join(" "),
     rsids: entry.matchedMarkers.map((marker) => marker.rsid).join(" "),
     evidenceTier: entry.evidenceTier,
+    summary: entry.summary.slice(0, 320),
+    detail: entry.detail.slice(0, 640),
+    sourceNotes: entry.sourceNotes.join(" ").slice(0, 320),
+    markers,
+    searchText: (entry.searchText || "").slice(0, 960),
   };
 }
 
@@ -35,9 +50,24 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
   const job = (async () => {
     const miniSearch = new MiniSearch<LightEntry>({
       idField: "id",
-      fields: ["genes", "conditions", "topics", "title", "rsids", "category", "evidenceTier"],
+      fields: ["genes", "conditions", "topics", "title", "rsids", "markers", "summary", "detail", "sourceNotes", "searchText", "category", "evidenceTier"],
       storeFields: ["id"],
-      searchOptions: { fuzzy: 0.2, prefix: true, boost: { genes: 4, conditions: 3, topics: 3, title: 2, rsids: 4 } },
+      searchOptions: {
+        fuzzy: 0.2,
+        prefix: true,
+        boost: {
+          rsids: 8,
+          markers: 7,
+          genes: 6,
+          conditions: 5,
+          title: 4,
+          topics: 3,
+          summary: 3,
+          detail: 2,
+          sourceNotes: 2,
+          searchText: 1,
+        },
+      },
     });
 
     for await (const entry of streamReportEntries(profileId)) {
