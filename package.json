@@ -24,6 +24,7 @@
   "dependencies": {
     "@ai-sdk/gateway": "^3.0.104",
     "@ai-sdk/react": "^3.0.170",
+    "@orama/orama": "^3.1.18",
     "@vercel/analytics": "^2.0.1",
     "ai": "^6.0.168",
     "fflate": "^0.8.2",
