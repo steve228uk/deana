@@ -82,6 +82,13 @@ function messageReasoning(message: UIMessage): string | null {
   return text || null;
 }
 
+function messageModel(message: UIMessage): string | null {
+  const metadata = message.metadata;
+  if (!metadata || typeof metadata !== "object") return null;
+  const candidate = "model" in metadata ? metadata.model : null;
+  return typeof candidate === "string" && candidate.trim() ? candidate : null;
+}
+
 function toUiMessages(messages: StoredChatMessage[]): UIMessage[] {
   return messages.map((message) => ({
     id: message.id,
@@ -691,6 +698,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
                   key={message.id}
                   role={message.role}
                   content={messageText(message)}
+                  modelName={messageModel(message)}
                   trace={traceByMessageRef.current[message.id]}
                   reasoningSummary={messageReasoning(message) ?? reasoningByMessageRef.current[message.id] ?? null}
                   components={markdownComponents}
@@ -1064,6 +1072,7 @@ const rehypePlugins = [[rehypeSanitize, markdownSchema]] as Parameters<typeof Re
 const ChatMessage = memo(function ChatMessage({
   role,
   content,
+  modelName,
   trace,
   reasoningSummary,
   components,
@@ -1072,6 +1081,7 @@ const ChatMessage = memo(function ChatMessage({
 }: {
   role: UIMessage["role"];
   content: string;
+  modelName: string | null;
   trace?: ChatRetrievalTrace;
   reasoningSummary: string | null;
   components: Components;
@@ -1084,6 +1094,7 @@ const ChatMessage = memo(function ChatMessage({
 
   return (
     <article className={`dn-ai-message dn-ai-message--${role}`}>
+      {role === "assistant" && modelName ? <p className="dn-ai-model-name">Model: {modelName}</p> : null}
       {hasReasoning && role === "assistant" ? <ModelReasoning reasoning={reasoningSummary ?? ""} /> : null}
       {content ? (
         <ReactMarkdown
