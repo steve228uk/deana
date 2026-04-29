@@ -17,11 +17,13 @@ export const TASK_MODELS = {
 } as const satisfies Record<string, readonly DeanaModelId[]>;
 
 const ADVISORY_INTENT_PATTERN = /\b(should i|what should|diagnose|treat|medication|recommend|advice)\b/i;
+const GREETING_PATTERN = /^(hi|hello|hey|yo|sup|good (morning|afternoon|evening))(?:[!.?,\s]+|$)/i;
 
 export function selectChatModels(
   findings: Array<{ category: string; evidenceTier: string }>,
   userMessage: string,
 ): readonly DeanaModelId[] {
+  if (GREETING_PATTERN.test(userMessage.trim())) return [DEANA_MODELS.cheap, DEANA_MODELS.default];
   if (findings.length === 0) return [DEANA_MODELS.default, DEANA_MODELS.strongFallback];
   if (findings.some((finding) => finding.category === "medical" || finding.category === "drug")) return [DEANA_MODELS.default, DEANA_MODELS.strongFallback];
   if (findings.some((finding) => finding.evidenceTier === "high" || finding.evidenceTier === "moderate")) return [DEANA_MODELS.default, DEANA_MODELS.strongFallback];
