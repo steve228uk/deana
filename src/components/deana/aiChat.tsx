@@ -427,8 +427,10 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         const limitMessage = "Search limit reached for this message.";
         setSearchStatus({ status: "error", message: limitMessage });
         void addToolOutput({
+          tool: "searchReportFindings",
           toolCallId: toolCall.toolCallId,
-          output: { error: limitMessage, resultCount: 0 },
+          state: "output-error",
+          errorText: limitMessage,
         });
         return;
       }
@@ -454,6 +456,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         // Sending full findings here as well would double the payload size and risk
         // exceeding the server's MAX_CONTEXT_BYTES limit.
         void addToolOutput({
+          tool: "searchReportFindings",
           toolCallId: toolCall.toolCallId,
           output: { resultCount: retrieval.resultCount, rationale: retrieval.plan.rationale },
         });
@@ -461,8 +464,10 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         const message = err instanceof Error ? err.message : "AI report search is unavailable right now.";
         setSearchStatus({ status: "error", message });
         void addToolOutput({
+          tool: "searchReportFindings",
           toolCallId: toolCall.toolCallId,
-          output: { error: message, resultCount: 0 },
+          state: "output-error",
+          errorText: message,
         });
       }
     },
