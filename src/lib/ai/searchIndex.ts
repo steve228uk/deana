@@ -1,5 +1,6 @@
 import MiniSearch from "minisearch";
 import { streamReportEntries } from "../storage";
+import type { EvidenceTier } from "../../types";
 
 interface LightEntry {
   id: string;
@@ -22,7 +23,7 @@ interface LightEntry {
 export interface SearchCandidate {
   id: string;
   category: string;
-  evidenceTier: string;
+  evidenceTier: EvidenceTier;
   genes: string;
   topics: string;
   conditions: string;
@@ -115,7 +116,7 @@ export async function searchWithFields(profileId: string, terms: string[], limit
     .map((result) => ({
       id: result.id as string,
       category: (result["category"] as string) ?? "",
-      evidenceTier: (result["evidenceTier"] as string) ?? "",
+      evidenceTier: (result["evidenceTier"] as EvidenceTier) ?? "supplementary",
       genes: (result["genes"] as string) ?? "",
       topics: (result["topics"] as string) ?? "",
       conditions: (result["conditions"] as string) ?? "",
