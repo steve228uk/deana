@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { trimMessagesToRecentWindow } from "./chat";
+import { trimMessagesToRecentWindow } from "./chat.js";
 
 function buildMessages(count: number) {
   return Array.from({ length: count }, (_, index) => ({

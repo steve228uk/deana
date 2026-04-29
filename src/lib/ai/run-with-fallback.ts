@@ -1,6 +1,6 @@
 import { generateText, streamText, type ModelMessage, type ToolSet } from "ai";
 import type { createGateway } from "@ai-sdk/gateway";
-import { buildGatewayProviderOptions } from "../aiChat";
+import { buildGatewayProviderOptions } from "../aiChat.js";
 
 export function isRetryableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();

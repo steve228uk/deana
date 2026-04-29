@@ -1,15 +1,15 @@
 import { createGateway } from "@ai-sdk/gateway";
 import { convertToModelMessages, type UIMessage } from "ai";
 import { z } from "zod";
-import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth";
+import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth.js";
 import {
   buildGatewayProviderOptions,
   CHAT_CONSENT_VERSION,
   CHAT_CONTEXT_VERSION,
   MAX_CHAT_CONTEXT_FINDINGS,
-} from "../src/lib/aiChat";
-import { selectChatModels } from "../src/lib/ai/models";
-import { runStreamWithFallback } from "../src/lib/ai/run-with-fallback";
+} from "../src/lib/aiChat.js";
+import { selectChatModels } from "../src/lib/ai/models.js";
+import { runStreamWithFallback } from "../src/lib/ai/run-with-fallback.js";
 
 declare const process: {
   env: Record<string, string | undefined>;

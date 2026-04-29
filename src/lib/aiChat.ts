@@ -1,5 +1,5 @@
-import type { ExplorerFilters } from "./explorer";
-import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, StoredReportEntry } from "../types";
+import type { ExplorerFilters } from "./explorer.js";
+import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, StoredReportEntry } from "../types.js";
 
 export const CHAT_CONTEXT_VERSION = 1;
 export const CHAT_CONSENT_VERSION = 1;

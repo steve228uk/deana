@@ -1,4 +1,4 @@
-import { hasGatewayAuth } from "../src/lib/aiGatewayAuth";
+import { hasGatewayAuth } from "../src/lib/aiGatewayAuth.js";
 
 declare const process: {
   env: Record<string, string | undefined>;
