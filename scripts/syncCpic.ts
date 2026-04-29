@@ -36,42 +36,52 @@ interface RawCpicPair {
 const jsonHeaders = { headers: { Accept: "application/json" } };
 
 async function fetchPairs(): Promise<RawCpicPair[]> {
-  // Fetch without select or filter to avoid column-name mismatches; filter A/B client-side.
+  // pair_view joins drug/guideline data onto pair; raw /pair has drugid not drugname.
+  // cpiclevel is the actual column name (not "level").
   const raw = await fetchWithRetry<Record<string, unknown>[]>(
-    `${apiBase}/pair?limit=5000`,
+    `${apiBase}/pair_view?cpiclevel=in.(A,B)&limit=5000`,
     jsonHeaders,
   );
   return raw
     .map((r) => ({
-      genesymbol: String(r.genesymbol ?? r.gene_symbol ?? ""),
-      drugname: String(r.drugname ?? r.drug_name ?? ""),
-      level: String(r.level ?? r.cpic_level ?? ""),
+      genesymbol: String(r.genesymbol ?? ""),
+      drugname: String(r.drugname ?? ""),
+      level: String(r.cpiclevel ?? ""),
     }))
-    .filter((p) => p.genesymbol && p.drugname && (p.level === "A" || p.level === "B"));
+    .filter((p) => p.genesymbol && p.drugname && p.level);
 }
 
 async function fetchVariants(): Promise<RawCpicVariant[]> {
-  // Try /variant first, then /allele as a fallback (the table name has changed across API versions).
-  const endpoints = [
-    `${apiBase}/variant?select=rsid,genesymbol,function&rsid=not.is.null&limit=5000`,
-    `${apiBase}/allele?select=rsid,genesymbol,functionalstatus&rsid=not.is.null&limit=5000`,
-  ];
-  for (const url of endpoints) {
-    try {
-      const raw = await fetchWithRetry<Record<string, unknown>[]>(url, jsonHeaders);
-      const variants = raw
-        .map((r) => ({
-          rsid: String(r.rsid ?? ""),
-          genesymbol: String(r.genesymbol ?? r.gene_symbol ?? ""),
-          function: String(r.function ?? r.functionalstatus ?? r.functional_status ?? "") || null,
-        }))
-        .filter((v) => v.rsid && v.genesymbol);
-      if (variants.length > 0) return variants;
-    } catch {
-      // try next endpoint
+  // CPIC has no /variant endpoint. rsid data lives in allele_definition joined to
+  // allele_location_value and sequence_location via PostgREST embedded resource syntax.
+  try {
+    const raw = await fetchWithRetry<Record<string, unknown>[]>(
+      `${apiBase}/allele_definition?select=genesymbol,name,allele_location_value(sequence_location(rsid))&limit=5000`,
+      jsonHeaders,
+    );
+    const seen = new Set<string>();
+    const variants: RawCpicVariant[] = [];
+    for (const allele of raw) {
+      const gene = String(allele.genesymbol ?? "");
+      if (!gene) continue;
+      const locations = Array.isArray(allele.allele_location_value) ? allele.allele_location_value : [];
+      for (const loc of locations) {
+        if (!loc || typeof loc !== "object") continue;
+        const seqLoc = (loc as Record<string, unknown>).sequence_location;
+        if (!seqLoc || typeof seqLoc !== "object") continue;
+        const rsid = String((seqLoc as Record<string, unknown>).rsid ?? "");
+        if (!rsid.startsWith("rs")) continue;
+        const key = `${rsid}|${gene}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          variants.push({ rsid, genesymbol: gene, function: null });
+        }
+      }
     }
+    return variants;
+  } catch {
+    return [];
   }
-  return [];
 }
 
 async function main(): Promise<void> {
