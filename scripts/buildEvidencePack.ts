@@ -830,8 +830,6 @@ interface CpicVariant {
 interface CpicPair {
   genesymbol: string;
   drugname: string;
-  guidelineName: string | null;
-  url: string | null;
   level: string;
 }
 
@@ -882,7 +880,7 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
       whyItMatters: "CPIC guidelines provide evidence-based recommendations for adjusting drug therapy based on pharmacogenomic results.",
       topics: ["CPIC", "Drug response", "Pharmacogenomics"],
       conditions: drugs.map((d) => `${d} response`),
-      url: topPair.url ?? `https://cpicpgx.org/guidelines/`,
+      url: `https://cpicpgx.org/guidelines/`,
       release: "CPIC API variant and pair data",
       evidenceLevel,
       clinicalSignificance: "drug-response",

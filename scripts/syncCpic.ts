@@ -30,8 +30,6 @@ interface RawCpicVariant {
 interface RawCpicPair {
   genesymbol: string;
   drugname: string;
-  guidelineName: string | null;
-  url: string | null;
   level: string;
 }
 
@@ -57,7 +55,7 @@ async function main(): Promise<void> {
       jsonHeaders,
     ),
     fetchWithRetry<RawCpicPair[]>(
-      `${apiBase}/pair?select=genesymbol,drugname,guidelineName,url,level&level=in.(A,B)&limit=2000`,
+      `${apiBase}/pair?select=genesymbol,drugname,level&level=in.(A,B)&limit=2000`,
       jsonHeaders,
     ),
   ]);
