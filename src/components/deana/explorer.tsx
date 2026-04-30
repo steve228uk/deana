@@ -448,6 +448,7 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
         <div className="dn-finding-card__meta">
           <span>{entry.sources[0]?.name ?? "Source"}</span>
           <span>{entry.evidenceTier} · {entry.coverage}</span>
+          {entry.pharmgkbLevel ? <PharmGkbLevelBadge level={entry.pharmgkbLevel} /> : null}
           <span className="dn-priority-pill">{priorityLabel(entry)}</span>
         </div>
         <h2>{entry.title} {firstMarker ? <small>{firstMarker.rsid} ({firstMarker.genotype ?? "n/a"})</small> : null}</h2>
@@ -542,6 +543,7 @@ export function FindingDetailContent({
       <p className="dn-eyebrow">Inspector</p>
       <Title id={titleId}>{finding.title}</Title>
       <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
+      {finding.pharmgkbLevel ? <PharmGkbLevelBadge level={finding.pharmgkbLevel} /> : null}
       {summary ? <div className="dn-inspector__intro">{renderMarkdown(summary)}</div> : null}
       {finding.detail.trim() ? (
         <section>
@@ -827,6 +829,19 @@ function MultiFilterSelect({
 
 function optionList(values: string[], emptyLabel: string): Array<[string, string]> {
   return [["", emptyLabel], ...values.map((value): [string, string] => [value, value])];
+}
+
+const PHARMGKB_LEVEL_LABELS: Record<string, string> = {
+  "1A": "Level 1A",
+  "1B": "Level 1B",
+  "2A": "Level 2A",
+  "2B": "Level 2B",
+};
+
+function PharmGkbLevelBadge({ level }: { level: string }) {
+  const label = PHARMGKB_LEVEL_LABELS[level] ?? `Level ${level}`;
+  const modifier = level.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return <span className={`dn-pgkb-level-badge dn-pgkb-level-badge--${modifier}`}>{label}</span>;
 }
 
 function summaryUnlessTitle(summary: string, title: string): string | null {

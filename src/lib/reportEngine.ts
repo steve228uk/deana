@@ -295,6 +295,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         },
         confidenceNote: `Matched locally from evidence pack ${supplement.packVersion}.`,
         disclaimer: "Informational only. Do not use this result alone for diagnosis, treatment, or prescribing decisions.",
+        pharmgkbLevel: record.pharmgkbLevel,
       };
     });
 }

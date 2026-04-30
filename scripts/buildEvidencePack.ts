@@ -943,12 +943,13 @@ async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
       subcategory: "pharmacogenomics",
       markerIds: [rsid],
       genes: ann.gene ? [ann.gene] : [],
-      title: `${ann.gene || rsid} / ${drugs[0] ?? "drug response"} (PharmGKB level ${ann.evidenceLevel})`,
+      title: `${ann.gene || rsid} / ${drugs[0] ?? "drug response"}`,
       summary: `PharmGKB level ${ann.evidenceLevel} annotation links ${rsid} to ${ann.phenotypeCategory.toLowerCase()} with ${drugs.slice(0, 2).join(" and ")}.`,
       riskSummary: evidenceLevel === "high" || evidenceLevel === "moderate"
         ? `${ann.gene || rsid} variant associated with ${ann.phenotypeCategory.toLowerCase()} for ${drugs[0] ?? "the reported drug"}`
         : undefined,
       qualityTier: ann.evidenceLevel === "1A" || ann.evidenceLevel === "1B" ? "tier-1" : undefined,
+      pharmgkbLevel: ann.evidenceLevel,
       detail: `PharmGKB clinical annotation level ${ann.evidenceLevel}: ${ann.phenotypeCategory} for ${drugs.join(", ")}.`,
       whyItMatters: "PharmGKB curates pharmacogenomic evidence from the literature, with level 1A–2B annotations backed by expert review and published clinical studies.",
       topics: ["PharmGKB", "Drug response", "Pharmacogenomics"],
