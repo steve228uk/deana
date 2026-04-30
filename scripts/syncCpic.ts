@@ -56,7 +56,7 @@ async function fetchVariants(): Promise<RawCpicVariant[]> {
   // allele_location_value and sequence_location via PostgREST embedded resource syntax.
   try {
     const raw = await fetchWithRetry<Record<string, unknown>[]>(
-      `${apiBase}/allele_definition?select=genesymbol,name,allele_location_value(sequence_location(rsid))&limit=5000`,
+      `${apiBase}/allele_definition?select=genesymbol,name,allele_location_value(*,sequence_location(dbsnpid))&limit=5000`,
       jsonHeaders,
     );
     const seen = new Set<string>();
@@ -69,7 +69,7 @@ async function fetchVariants(): Promise<RawCpicVariant[]> {
         if (!loc || typeof loc !== "object") continue;
         const seqLoc = (loc as Record<string, unknown>).sequence_location;
         if (!seqLoc || typeof seqLoc !== "object") continue;
-        const rsid = String((seqLoc as Record<string, unknown>).rsid ?? "");
+        const rsid = String((seqLoc as Record<string, unknown>).dbsnpid ?? "");
         if (!rsid.startsWith("rs")) continue;
         const key = `${rsid}|${gene}`;
         if (!seen.has(key)) {

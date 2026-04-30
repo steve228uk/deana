@@ -45,15 +45,15 @@ function parseClinGenCsv(text: string): ClinGenClassification[] {
   for (let i = 1; i < lines.length; i++) {
     const values = splitCsv(lines[i]);
     const row: Record<string, string> = {};
-    headers.forEach((h, idx) => { row[h] = values[idx] ?? ""; });
+    headers.forEach((h, idx) => { row[h.toUpperCase()] = values[idx] ?? ""; });
 
-    const classification = row["Classification"] ?? row["classification"] ?? "";
+    const classification = row["CLASSIFICATION"] ?? row["FINAL CLASSIFICATION"] ?? "";
     if (!INCLUDED_CLASSIFICATIONS.has(classification)) continue;
 
-    const gene = row["Gene Symbol"] ?? row["gene_symbol"] ?? row["GENE SYMBOL"] ?? "";
-    const disease = row["Disease Label"] ?? row["disease_label"] ?? row["DISEASE LABEL"] ?? "";
-    const diseaseId = row["Disease ID"] ?? row["disease_id"] ?? row["DISEASE ID"] ?? "";
-    const url = row["Online Report"] ?? row["online_report"] ?? `https://search.clinicalgenome.org/kb/gene-validity`;
+    const gene = row["GENE SYMBOL"] ?? row["GENE"] ?? "";
+    const disease = row["DISEASE LABEL"] ?? row["DISEASE"] ?? "";
+    const diseaseId = row["DISEASE ID"] ?? row["DISEASE MIM NUMBER"] ?? row["DISEASEID"] ?? "";
+    const url = row["ONLINE REPORT"] ?? row["URL"] ?? `https://search.clinicalgenome.org/kb/gene-validity`;
 
     if (!gene || !disease) continue;
     results.push({ gene, disease, diseaseId, classification, url });

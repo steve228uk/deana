@@ -8,8 +8,12 @@ export async function fetchWithRetry<T>(url: string, init?: RequestInit): Promis
       if (response.ok) return response.json() as Promise<T>;
 
       const retryable = response.status === 429 || response.status >= 500;
-      if (!retryable) throw new Error(`Request failed: ${response.status} ${response.statusText} — ${url}`);
-      lastError = new Error(`${response.status} ${response.statusText}`);
+      lastError = new Error(
+        retryable
+          ? `${response.status} ${response.statusText}`
+          : `Request failed: ${response.status} ${response.statusText} — ${url}`,
+      );
+      if (!retryable) break;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
     }
