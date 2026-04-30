@@ -36,11 +36,19 @@ export interface ClinGenClassification {
 }
 
 function parseClinGenCsv(text: string): ClinGenClassification[] {
-  const lines = text.split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) return [];
+  // Strip UTF-8 BOM if present
+  const clean = text.startsWith("﻿") ? text.slice(1) : text;
+  const lines = clean.split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) {
+    console.warn(`ClinGen: response has ${lines.length} line(s) — first 500 chars:\n${text.slice(0, 500)}`);
+    return [];
+  }
 
   const headers = splitCsv(lines[0]);
+  console.log(`ClinGen: CSV headers: ${JSON.stringify(headers)}`);
+
   const results: ClinGenClassification[] = [];
+  const classificationValues = new Set<string>();
 
   for (let i = 1; i < lines.length; i++) {
     const values = splitCsv(lines[i]);
@@ -48,15 +56,21 @@ function parseClinGenCsv(text: string): ClinGenClassification[] {
     headers.forEach((h, idx) => { row[h.toUpperCase()] = values[idx] ?? ""; });
 
     const classification = row["CLASSIFICATION"] ?? row["FINAL CLASSIFICATION"] ?? "";
+    classificationValues.add(classification);
     if (!INCLUDED_CLASSIFICATIONS.has(classification)) continue;
 
     const gene = row["GENE SYMBOL"] ?? row["GENE"] ?? "";
     const disease = row["DISEASE LABEL"] ?? row["DISEASE"] ?? "";
-    const diseaseId = row["DISEASE ID"] ?? row["DISEASE MIM NUMBER"] ?? row["DISEASEID"] ?? "";
+    const diseaseId = row["DISEASE ID (MONDO)"] ?? row["DISEASE ID"] ?? row["DISEASE MIM NUMBER"] ?? "";
     const url = row["ONLINE REPORT"] ?? row["URL"] ?? `https://search.clinicalgenome.org/kb/gene-validity`;
 
     if (!gene || !disease) continue;
     results.push({ gene, disease, diseaseId, classification, url });
+  }
+
+  if (results.length === 0) {
+    const sample = [...classificationValues].slice(0, 20);
+    console.warn(`ClinGen: 0 rows matched included classifications. Values found: ${JSON.stringify(sample)}`);
   }
 
   return results;
