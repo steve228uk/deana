@@ -3,13 +3,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { splitCsv } from "./tsvUtils";
+import { CLINGEN_GENE_DISEASE_VALIDITY_CSV } from "../src/lib/clingen/endpoints";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = path.join(repoRoot, ".evidence-cache", "clingen");
 
-// ClinGen publishes gene-disease validity classifications as a stable CSV download.
-// The endpoint returns all curated pairs with classification level and disease info.
-const downloadUrl = "https://search.clinicalgenome.org/api/curations?type=gene_disease_summary&format=csv&size=all";
+const downloadUrl = CLINGEN_GENE_DISEASE_VALIDITY_CSV;
 
 // Only include classifications with meaningful positive evidence
 const INCLUDED_CLASSIFICATIONS = new Set(["Definitive", "Strong", "Moderate"]);
