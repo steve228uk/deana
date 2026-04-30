@@ -88,12 +88,21 @@ async function main(): Promise<void> {
   await mkdir(cacheDir, { recursive: true });
 
   console.log("Downloading ClinGen gene-disease validity classifications...");
-  const response = await fetch(downloadUrl, { headers: { Accept: "text/csv,application/csv,text/plain" } });
+  const response = await fetch(downloadUrl, {
+    headers: {
+      Accept: "text/csv,application/csv,text/plain,*/*",
+      "User-Agent": "Mozilla/5.0 (compatible; deana-evidence-sync/1.0; +https://github.com/steve228uk/deana)",
+    },
+  });
   if (!response.ok) {
     throw new Error(`ClinGen download failed: ${response.status} ${response.statusText}`);
   }
 
   const text = await response.text();
+  if (text.trimStart().startsWith("<")) {
+    throw new Error(`ClinGen returned HTML instead of CSV — likely bot-blocked. First 200 chars:\n${text.slice(0, 200)}`);
+  }
+
   const classifications = parseClinGenCsv(text);
 
   await writeFile(outputFile, `${JSON.stringify(classifications, null, 2)}\n`);
