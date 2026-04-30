@@ -130,6 +130,7 @@ export interface EvidencePackRecord {
   frequencyNote?: string;
   riskSummary?: string;
   qualityTier?: "tier-1";
+  pharmgkbLevel?: string;
   notes: string[];
 }
 
@@ -188,6 +189,7 @@ export interface ReportEntry {
   };
   confidenceNote: string;
   disclaimer: string;
+  pharmgkbLevel?: string;
 }
 
 export interface TabSummary {
