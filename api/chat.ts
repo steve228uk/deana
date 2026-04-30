@@ -1,5 +1,6 @@
 import { createGateway } from "@ai-sdk/gateway";
 import { convertToModelMessages, type UIMessage } from "ai";
+import { streamText } from "ai";
 import { z } from "zod";
 import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth.js";
 import {
@@ -8,8 +9,7 @@ import {
   CHAT_CONTEXT_VERSION,
   MAX_CHAT_CONTEXT_FINDINGS,
 } from "../src/lib/aiChat.js";
-import { selectChatModels } from "../src/lib/ai/models.js";
-import { runStreamWithFallback } from "../src/lib/ai/run-with-fallback.js";
+import { DEANA_MODELS } from "../src/lib/ai/models.js";
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -250,14 +250,9 @@ export default async function handler(request: Request): Promise<Response> {
       apiKey: getGatewayApiKey(request, process.env),
     });
 
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
-    const selectedModels = process.env.DEANA_LLM_MODEL
-      ? [process.env.DEANA_LLM_MODEL]
-      : selectChatModels(parsed.data.context.findings, lastUserMessage ? textFromMessage(lastUserMessage) : "");
-
-    const { result } = await runStreamWithFallback({
-      gateway,
-      models: selectedModels,
+    const model = process.env.DEANA_LLM_MODEL ?? DEANA_MODELS.default;
+    const result = streamText({
+      model: gateway(model),
       system: buildSystemPrompt(parsed.data.context),
       messages: await convertToModelMessages(messages),
       tools: {
@@ -271,8 +266,7 @@ export default async function handler(request: Request): Promise<Response> {
         },
       },
       maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-      providerOptionsFor: (model) => buildGatewayProviderOptions(model, true),
-      taskName: "chat",
+      providerOptions: buildGatewayProviderOptions(model, true),
     });
 
     return result.toUIMessageStreamResponse({
