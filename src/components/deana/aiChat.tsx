@@ -59,12 +59,6 @@ type ChatPanel =
   | { mode: "findings" }
   | { mode: "inspector"; findingId: string; finding: StoredReportEntry | null; isLoading: boolean; error: string | null };
 
-interface SearchDebugEvent {
-  at: string;
-  label: string;
-  detail: string;
-}
-
 const entryLinkPattern = /deana:\/\/entry\/[A-Za-z0-9._~!$&'()*+,;=:@%-]+/g;
 
 function makeId(prefix: string): string {
@@ -153,7 +147,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
   const [searchStatus, setSearchStatus] = useState<SearchStatus>({ status: "idle" });
-  const [searchDebugEvents, setSearchDebugEvents] = useState<SearchDebugEvent[]>([]);
   const [isThreadListOpen, setIsThreadListOpen] = useState(true);
   const [isThreadPanelCollapsed, setIsThreadPanelCollapsed] = useState(false);
   const [modal, setModal] = useState<"chatPrivacy" | null>(null);
@@ -167,11 +160,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const setMessagesRef = useRef<((messages: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
   latestPropsRef.current = props;
   activeThreadRef.current = activeThread;
-
-  const pushSearchDebug = useCallback((label: string, detail: string) => {
-    const next: SearchDebugEvent = { at: new Date().toISOString(), label, detail };
-    setSearchDebugEvents((current) => [...current.slice(-14), next]);
-  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -402,7 +390,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     api: "/api/chat",
     prepareSendMessagesRequest: async ({ api, messages, body }) => {
       setSearchStatus((current) => current.status === "searching" || current.status === "ready" ? current : { status: "checking" });
-      pushSearchDebug("send", `Submitting ${messages.length} messages with ${latestFindingsRef.current.length} retrieved findings in context.`);
 
       return {
         api,
@@ -437,11 +424,9 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (toolCall.dynamic || toolCall.toolName !== "searchReportFindings") return;
 
       setSearchStatus({ status: "searching" });
-      pushSearchDebug("tool-call", "searchReportFindings tool call received from model.");
 
       try {
         const plan = toolCall.input as ChatSearchPlan;
-        pushSearchDebug("planner", `Query: ${plan.query || "(empty)"}; terms: genes=${plan.genes.length}, rsids=${plan.rsids.length}, conditions=${plan.conditions.length}.`);
         const retrieval = await searchReportEntriesForChat({
           profileId: latestPropsRef.current.profile.id,
           prompt: plan.query,
@@ -454,8 +439,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         pendingTraceRef.current = retrieval.trace;
         pendingFindingsRef.current = latestFindingsRef.current;
         setSearchStatus({ status: "ready", trace: retrieval.trace });
-        pushSearchDebug("results", `Found ${retrieval.resultCount} matching findings. Top searched terms: ${retrieval.trace.searchedTerms.slice(0, 8).join(", ") || "none"}.`);
-        pushSearchDebug("tool-output", "Returning local findings to model.");
         void addToolOutput({
           tool: "searchReportFindings",
           toolCallId: toolCall.toolCallId,
@@ -468,8 +451,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       } catch (error) {
         const message = error instanceof Error ? error.message : "AI report search is unavailable right now.";
         setSearchStatus({ status: "error", message });
-        pushSearchDebug("error", message);
-        pushSearchDebug("tool-output", "Returning local findings to model.");
         void addToolOutput({
           tool: "searchReportFindings",
           toolCallId: toolCall.toolCallId,
@@ -726,7 +707,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
                 />
               ))}
               {isBusy ? <GeneratingStatus status={searchStatus} /> : null}
-              <SearchDebugPanel status={searchStatus} events={searchDebugEvents} />
               {error ? (
                 <div className="dn-ai-error" role="alert">
                   <Icon name="alert" />
@@ -1086,28 +1066,6 @@ function ChatSidePanel({
   );
 }
 
-
-function SearchDebugPanel({ status, events }: { status: SearchStatus; events: SearchDebugEvent[] }) {
-  return (
-    <details className="dn-ai-trace">
-      <summary><Icon name="search" /> Search debug ({events.length})</summary>
-      <div className="dn-ai-trace__body">
-        <p>Status: <strong>{status.status}</strong></p>
-        {status.status === "error" ? <p className="dn-error-text">{status.message}</p> : null}
-        {events.length === 0 ? <p>No search events yet.</p> : (
-          <ol>
-            {events.slice().reverse().map((event) => (
-              <li key={`${event.at}-${event.label}`}>
-                <strong>{event.label}</strong> · {new Date(event.at).toLocaleTimeString()}<br />
-                <span>{event.detail}</span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
-    </details>
-  );
-}
 
 const remarkPlugins = [remarkGfm] as Parameters<typeof ReactMarkdown>[0]["remarkPlugins"] & object;
 const rehypePlugins = [[rehypeSanitize, markdownSchema]] as Parameters<typeof ReactMarkdown>[0]["rehypePlugins"] & object;
