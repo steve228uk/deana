@@ -2,6 +2,12 @@ name: Debug ClinGen sync
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - claude/add-clingen-evidence-w5sm6
+    paths:
+      - scripts/syncClinGen.ts
+      - .github/workflows/debug-clingen-sync.yml
 
 jobs:
   debug-clingen-sync:
