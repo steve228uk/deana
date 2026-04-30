@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildEntrySearchText } from "./explorer";
 import { searchReportEntriesForChat } from "./aiRetrieval";
-import { streamReportEntries } from "./storage";
+import { loadReportEntriesByIds, streamReportEntries } from "./storage";
 import { makeSavedProfile } from "../test/fixtures";
 import type { ChatSearchPlan } from "./aiChat";
 import type { InsightCategory, StoredReportEntry } from "../types";
 
 vi.mock("./storage", () => ({
   streamReportEntries: vi.fn(),
+  loadReportEntriesByIds: vi.fn(),
 }));
 
 function storedEntries(): StoredReportEntry[] {
@@ -20,6 +21,14 @@ function storedEntries(): StoredReportEntry[] {
 }
 
 function installEntries(entries: StoredReportEntry[]) {
+  vi.mocked(loadReportEntriesByIds).mockImplementation(async (profileId: string, ids: string[]) => {
+    const selected = [] as StoredReportEntry[];
+    for await (const entry of streamReportEntries(profileId)) {
+      if (ids.includes(entry.id)) selected.push(entry);
+    }
+    return selected;
+  });
+
   vi.mocked(streamReportEntries).mockImplementation(async function* (_profileId: string, category?: InsightCategory) {
     for (const entry of entries) {
       if (!category || entry.category === category) {

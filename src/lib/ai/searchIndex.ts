@@ -1,4 +1,4 @@
-import MiniSearch from "minisearch";
+import { create, insertMultiple, search, type AnyOrama } from "@orama/orama";
 import { streamReportEntries } from "../storage";
 import type { EvidenceTier } from "../../types";
 
@@ -33,7 +33,7 @@ export interface SearchCandidate {
   sortEvidence: number;
 }
 
-const indexes = new Map<string, MiniSearch<LightEntry>>();
+const indexes = new Map<string, AnyOrama>();
 const inFlight = new Map<string, Promise<void>>();
 
 function toLightEntry(entry: Awaited<ReturnType<typeof streamReportEntries>> extends AsyncGenerator<infer T> ? T : never): LightEntry {
@@ -61,37 +61,57 @@ function toLightEntry(entry: Awaited<ReturnType<typeof streamReportEntries>> ext
   };
 }
 
+async function searchDocs(index: AnyOrama, terms: string[], limit: number): Promise<Array<{ document: LightEntry }>> {
+  if (terms.length === 0) return [];
+  const query = terms.join(" ").trim();
+  if (!query) return [];
+
+  const result = await search(index, {
+    term: query,
+    mode: "fulltext",
+    tolerance: 1,
+    exact: false,
+    limit,
+  });
+
+  return result.hits as unknown as Array<{ document: LightEntry }>;
+}
+
 export async function prewarmSearchIndex(profileId: string): Promise<void> {
   if (indexes.has(profileId)) return;
   if (inFlight.has(profileId)) return inFlight.get(profileId);
 
   const job = (async () => {
-    const miniSearch = new MiniSearch<LightEntry>({
-      idField: "id",
-      fields: ["genes", "conditions", "topics", "title", "rsids", "markers", "summary", "detail", "sourceNotes", "searchText", "category", "evidenceTier"],
-      storeFields: ["id", "category", "evidenceTier", "genes", "topics", "conditions", "rsids", "title", "sortSeverity", "sortEvidence"],
-      searchOptions: {
-        fuzzy: 0.2,
-        prefix: true,
-        boost: {
-          rsids: 8,
-          markers: 7,
-          genes: 6,
-          conditions: 5,
-          title: 4,
-          topics: 3,
-          summary: 3,
-          detail: 2,
-          sourceNotes: 2,
-          searchText: 1,
-        },
+    const index = await create({
+      schema: {
+        id: "string",
+        category: "string",
+        title: "string",
+        genes: "string",
+        topics: "string",
+        conditions: "string",
+        rsids: "string",
+        evidenceTier: "string",
+        summary: "string",
+        detail: "string",
+        sourceNotes: "string",
+        markers: "string",
+        searchText: "string",
+        sortSeverity: "number",
+        sortEvidence: "number",
       },
     });
 
+    const documents: LightEntry[] = [];
     for await (const entry of streamReportEntries(profileId)) {
-      miniSearch.add(toLightEntry(entry));
+      documents.push(toLightEntry(entry));
     }
-    indexes.set(profileId, miniSearch);
+
+    if (documents.length > 0) {
+      await insertMultiple(index, documents, documents.length);
+    }
+
+    indexes.set(profileId, index);
   })().finally(() => inFlight.delete(profileId));
 
   inFlight.set(profileId, job);
@@ -100,31 +120,31 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
 
 export async function queryCandidateIds(profileId: string, terms: string[], limit = 50): Promise<string[]> {
   const index = indexes.get(profileId);
-  if (!index || terms.length === 0) return [];
-  const query = terms.join(" ").trim();
-  if (!query) return [];
-  return index.search(query, { fuzzy: 0.2, prefix: true }).slice(0, limit).map((result) => result.id as string);
+  if (!index) return [];
+  const hits = await searchDocs(index, terms, limit);
+  return hits.map((result) => result.document.id);
 }
 
 export async function searchWithFields(profileId: string, terms: string[], limit: number): Promise<SearchCandidate[]> {
   const index = indexes.get(profileId);
-  if (!index || terms.length === 0) return [];
-  const query = terms.join(" ").trim();
-  if (!query) return [];
-  return index.search(query, { fuzzy: 0.2, prefix: true })
-    .slice(0, limit)
-    .map((result) => ({
-      id: result.id as string,
-      category: (result["category"] as string) ?? "",
-      evidenceTier: (result["evidenceTier"] as EvidenceTier) ?? "supplementary",
-      genes: (result["genes"] as string) ?? "",
-      topics: (result["topics"] as string) ?? "",
-      conditions: (result["conditions"] as string) ?? "",
-      rsids: (result["rsids"] as string) ?? "",
-      title: (result["title"] as string) ?? "",
-      sortSeverity: (result["sortSeverity"] as number) ?? 0,
-      sortEvidence: (result["sortEvidence"] as number) ?? 0,
-    }));
+  if (!index) return [];
+  const hits = await searchDocs(index, terms, limit);
+
+  return hits.map((result) => {
+    const doc = result.document;
+    return {
+      id: doc.id,
+      category: doc.category,
+      evidenceTier: (doc.evidenceTier as EvidenceTier) ?? "supplementary",
+      genes: doc.genes,
+      topics: doc.topics,
+      conditions: doc.conditions,
+      rsids: doc.rsids,
+      title: doc.title,
+      sortSeverity: doc.sortSeverity,
+      sortEvidence: doc.sortEvidence,
+    };
+  });
 }
 
 export async function waitForIndex(profileId: string): Promise<void> {
