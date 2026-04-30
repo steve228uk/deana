@@ -1099,6 +1099,36 @@ a { color: inherit; }
 }
 .dn-ai-findings-panel dt { color: var(--dn-ink); font-weight: 600; }
 .dn-ai-findings-panel dd { margin: 0; color: var(--dn-muted); overflow-wrap: anywhere; }
+.dn-ai-search-debug {
+  border-top: 1px solid var(--dn-line);
+  padding-top: 16px;
+  font-size: 0.85rem;
+}
+.dn-ai-search-debug summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--dn-muted);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.dn-ai-search-debug summary::before { content: "▶"; font-size: 0.7em; }
+.dn-ai-search-debug[open] summary::before { content: "▼"; }
+.dn-ai-search-debug dl {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+.dn-ai-search-debug dl > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+.dn-ai-search-debug dt { color: var(--dn-ink); font-weight: 600; }
+.dn-ai-search-debug dd { margin: 0; color: var(--dn-muted); overflow-wrap: anywhere; }
+.dn-ai-search-debug__fallback { color: var(--dn-clay); font-weight: 600; }
 .dn-ai-finding-list { display: grid; gap: 10px; }
 .dn-ai-finding-list button {
   display: grid;

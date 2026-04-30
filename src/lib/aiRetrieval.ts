@@ -246,10 +246,13 @@ export async function searchReportEntriesForChat({
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
 
+  const t0 = performance.now();
+
   await waitForIndex(profileId);
 
   const indexCandidateLimit = Math.max(60, effectiveLimit * 8);
   const candidates = await searchWithFields(profileId, terms, indexCandidateLimit);
+  const tIndexSearch = performance.now();
 
   const rankEntry = (entry: StoredReportEntry) => {
     if (seen.has(entry.id)) return;
@@ -268,6 +271,8 @@ export async function searchReportEntriesForChat({
     .map((c) => c.id);
 
   const indexedEntries = await loadReportEntriesByIds(profileId, topIds);
+  const tIdbRead = performance.now();
+
   for (const entry of indexedEntries) {
     rankEntry(entry);
   }
@@ -285,6 +290,7 @@ export async function searchReportEntriesForChat({
     left.entry.title.localeCompare(right.entry.title),
   );
 
+  const tScored = performance.now();
   const selectedRanked = ranked.slice(0, effectiveLimit);
   const selected = selectedRanked.map(({ entry }) => findingToChatContext(entry));
 
@@ -307,6 +313,14 @@ export async function searchReportEntriesForChat({
         sourceNames: entry.sources.map((source) => source.name).slice(0, 5),
       })),
       rationale: effectivePlan.rationale,
+      indexCandidateCount: candidates.length,
+      usedFallback: candidates.length === 0,
+      timingMs: {
+        total: Math.round(tScored - t0),
+        indexSearch: Math.round(tIndexSearch - t0),
+        idbRead: Math.round(tIdbRead - tIndexSearch),
+        scoring: Math.round(tScored - tIdbRead),
+      },
     },
   };
 }

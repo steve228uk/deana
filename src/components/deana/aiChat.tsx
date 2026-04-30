@@ -1044,6 +1044,30 @@ function ChatSidePanel({
                   )) : <p>No saved findings were sent for this search.</p>}
                 </div>
               </section>
+              {latestTrace.timingMs ? (
+                <details className="dn-ai-search-debug">
+                  <summary>Search debug</summary>
+                  <dl>
+                    <div>
+                      <dt>Engine</dt>
+                      <dd className={latestTrace.usedFallback ? "dn-ai-search-debug__fallback" : undefined}>
+                        {latestTrace.usedFallback
+                          ? "Full scan (fallback — slow)"
+                          : `Orama index · ${latestTrace.indexCandidateCount ?? 0} candidates`}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Timing</dt>
+                      <dd>
+                        {latestTrace.timingMs.total} ms total
+                        {" · "}index {latestTrace.timingMs.indexSearch} ms
+                        {" · "}IDB {latestTrace.timingMs.idbRead} ms
+                        {" · "}scoring {latestTrace.timingMs.scoring} ms
+                      </dd>
+                    </div>
+                  </dl>
+                </details>
+              ) : null}
             </>
           ) : (
             <p className="dn-ai-panel-empty">No report findings have been searched in this chat yet.</p>

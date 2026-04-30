@@ -17,6 +17,7 @@ import {
   loadProfileMeta,
   loadReportEntry,
 } from "../lib/storage";
+import { prewarmSearchIndex } from "../lib/ai/searchIndex";
 import { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types";
 
 interface ExplorerScreenProps {
@@ -183,6 +184,10 @@ export function ExplorerScreen({
       cancelled = true;
     };
   }, [isLibraryReady, profileId]);
+
+  useEffect(() => {
+    if (profile?.id) void prewarmSearchIndex(profile.id);
+  }, [profile?.id]);
 
   useEffect(() => {
     let cancelled = false;

@@ -72,6 +72,18 @@ async function searchDocs(index: AnyOrama, terms: string[], limit: number): Prom
     tolerance: 1,
     exact: false,
     limit,
+    boost: {
+      rsids: 8,
+      markers: 7,
+      genes: 6,
+      conditions: 5,
+      title: 4,
+      topics: 3,
+      summary: 3,
+      detail: 2,
+      sourceNotes: 2,
+      searchText: 1,
+    },
   });
 
   return result.hits as unknown as Array<{ document: LightEntry }>;
@@ -148,7 +160,8 @@ export async function searchWithFields(profileId: string, terms: string[], limit
 }
 
 export async function waitForIndex(profileId: string): Promise<void> {
-  return inFlight.get(profileId) ?? Promise.resolve();
+  if (indexes.has(profileId)) return;
+  return inFlight.get(profileId) ?? prewarmSearchIndex(profileId);
 }
 
 export function clearSearchIndex(profileId?: string): void {

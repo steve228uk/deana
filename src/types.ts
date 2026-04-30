@@ -361,6 +361,14 @@ export interface ChatRetrievalTrace {
   resultCount: number;
   returnedFindings: ChatTraceFinding[];
   rationale: string;
+  indexCandidateCount?: number;
+  usedFallback?: boolean;
+  timingMs?: {
+    total: number;
+    indexSearch: number;
+    idbRead: number;
+    scoring: number;
+  };
 }
 
 export interface StoredChatContextFinding {
