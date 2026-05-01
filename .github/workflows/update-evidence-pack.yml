@@ -49,6 +49,7 @@ jobs:
             .evidence-cache/gwas
             .evidence-cache/snpedia
             .evidence-cache/pharmgkb
+            .evidence-cache/clingen
           key: evidence-sources-${{ runner.os }}-${{ env.CACHE_MONTH }}
           restore-keys: |
             evidence-sources-${{ runner.os }}-
@@ -74,7 +75,7 @@ jobs:
           bun run scripts/syncSnpedia.ts $FORCE
           bun run scripts/syncDbsnp.ts $FORCE
           bun run scripts/syncPharmgkb.ts $FORCE
-          bun run scripts/syncClinGen.ts $FORCE
+          bun run scripts/importClinGen.ts $FORCE
           bun run scripts/buildEvidencePack.ts
 
       - name: Check evidence pack
