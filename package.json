@@ -21,7 +21,11 @@
     "evidence:snpedia:sync": "bun run scripts/syncSnpedia.ts",
     "evidence:cpic:sync": "bun run scripts/syncCpic.ts",
     "evidence:pharmgkb:sync": "bun run scripts/syncPharmgkb.ts",
-    "evidence:clingen:sync": "bun run scripts/syncClinGen.ts",
+    "evidence:clingen:sync": "bun run scripts/importClinGen.ts",
+    "evidence:clingen:gene-disease:sync": "bun run scripts/importClinGen.ts --source=gene-disease-validity",
+    "evidence:clingen:dosage:sync": "bun run scripts/importClinGen.ts --source=dosage-sensitivity",
+    "evidence:clingen:actionability:sync": "bun run scripts/importClinGen.ts --source=clinical-actionability",
+    "evidence:clingen:variant-pathogenicity:sync": "bun run scripts/importClinGen.ts --source=variant-pathogenicity",
     "evidence:pack:build": "bun run scripts/buildEvidencePack.ts",
     "evidence:seed:bulk": "bun run scripts/seedEvidenceBulk.ts"
   },

@@ -245,10 +245,11 @@ function summaryList(markers: MatchedMarker[]): string {
 function sourceEntries(sourceIds: string[], matches: EvidencePackMatch[] = []): ReportEntry["sources"] {
   const recordSources = matches.map(({ record }) => {
     const source = SOURCE_LIBRARY[record.sourceId];
+    const recordUrl = record.url.trim();
     return {
       id: source?.id ?? record.sourceId,
       name: source?.name ?? record.sourceId,
-      url: record.url,
+      url: recordUrl || source?.url || "",
     };
   });
   if (recordSources.length > 0) {

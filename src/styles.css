@@ -567,7 +567,9 @@ a { color: inherit; }
 .dn-magnitude-bar { display: inline-block; vertical-align: middle; width: min(100%, 180px); height: 9px; border-radius: 999px; overflow: hidden; background: #eee8df; }
 .dn-magnitude-bar i { display: block; height: 100%; border-radius: inherit; background: var(--dn-clay); }
 .dn-source-link-list { display: grid; gap: 8px; }
-.dn-source-link-list a { display: grid; grid-template-columns: 1fr auto 20px; gap: 8px; align-items: center; text-align: left; border: 1px solid var(--dn-line); border-radius: 12px; background: #fff; padding: 12px; color: var(--dn-ink); text-decoration: none; }
+.dn-source-link-list a,
+.dn-source-link-static { display: grid; grid-template-columns: 1fr auto 20px; gap: 8px; align-items: center; text-align: left; border: 1px solid var(--dn-line); border-radius: 12px; background: #fff; padding: 12px; color: var(--dn-ink); text-decoration: none; }
+.dn-source-link-static { grid-template-columns: 1fr auto; color: var(--dn-muted); }
 .dn-source-link-list small { color: var(--dn-muted); }
 .dn-empty-state { padding: 32px; text-align: center; color: var(--dn-muted); }
 .dn-empty-state h2 { color: var(--dn-forest); font-family: var(--dn-font-display); margin: 0 0 8px; }
