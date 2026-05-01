@@ -788,7 +788,8 @@ describe("Deana app", () => {
     expect(screen.queryByText(/Private opt-in/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Deana sends compact report context first/i)).not.toBeInTheDocument();
 
-    await user.click(screen.getAllByRole("button", { name: "Learn more" }).at(-1)!);
+    const learnMoreButtons = screen.getAllByRole("button", { name: "Learn more" });
+    await user.click(learnMoreButtons[learnMoreButtons.length - 1]!);
 
     expect(await screen.findByRole("heading", { name: "How AI chat works" })).toBeInTheDocument();
     expect(screen.getByText(/Raw DNA files, full marker lists, profile names, and file names are not included/i)).toBeInTheDocument();
