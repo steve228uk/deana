@@ -1,4 +1,5 @@
-import { create, insertMultiple, load as loadOrama, save as saveOrama, search, type AnyOrama, type RawData } from "@orama/orama";
+import { create, insertMultiple, search, type AnyOrama } from "@orama/orama";
+import { pluginQPS } from "@orama/plugin-qps";
 import {
   deleteSearchIndexCache,
   loadSearchIndexCache,
@@ -26,6 +27,8 @@ interface LightEntry {
   tagValues: string[];
   markers: string;
   body: string;
+  // Sort fields are stored with the document but kept outside the schema so
+  // Orama does not build inverted index entries for them, reducing memory.
   sortSeverity: number;
   sortEvidence: number;
   sortPublications: number;
@@ -77,8 +80,16 @@ export type WorkerResponse =
 
 const indexes = new Map<string, AnyOrama>();
 const inFlight = new Map<string, Promise<void>>();
-const SEARCH_INDEX_CACHE_VERSION = 3;
-const SEARCH_INDEX_INSERT_BATCH_SIZE = 500;
+
+// Version 4: switched to LightEntry[] cache format (avoids loadOrama/saveOrama
+// 2× memory spike) and added QPS plugin + removed sort fields from schema.
+const SEARCH_INDEX_CACHE_VERSION = 4;
+const SEARCH_INDEX_INSERT_BATCH_SIZE = 100;
+
+// Only searchable and filterable fields go in the schema. Sort-only fields
+// (sortSeverity, sortEvidence, sortPublications, sortAlphabetical) are
+// inserted as extra document properties — Orama stores them but does not
+// build inverted index entries for them, cutting index memory significantly.
 const SEARCH_INDEX_SCHEMA = {
   id: "string",
   category: "string",
@@ -97,10 +108,6 @@ const SEARCH_INDEX_SCHEMA = {
   tagValues: "string[]",
   markers: "string",
   body: "string",
-  sortSeverity: "number",
-  sortEvidence: "number",
-  sortPublications: "number",
-  sortAlphabetical: "string",
 } as const;
 const SEARCH_INDEX_FIELD_BOOSTS = {
   rsids: 8,
@@ -127,6 +134,7 @@ const EXPLORER_ARRAY_FILTER_FIELDS: Array<[
 function createSearchIndex(): AnyOrama {
   return create({
     schema: SEARCH_INDEX_SCHEMA,
+    plugins: [pluginQPS()],
   });
 }
 
@@ -196,6 +204,12 @@ function toSearchCandidate(doc: LightEntry): SearchCandidate {
   };
 }
 
+async function insertBatched(index: AnyOrama, documents: LightEntry[]): Promise<void> {
+  for (let i = 0; i < documents.length; i += SEARCH_INDEX_INSERT_BATCH_SIZE) {
+    await insertMultiple(index, documents.slice(i, i + SEARCH_INDEX_INSERT_BATCH_SIZE));
+  }
+}
+
 async function searchDocs(index: AnyOrama, terms: string[], limit: number): Promise<Array<{ document: LightEntry }>> {
   if (terms.length === 0) return [];
   const query = terms.join(" ").trim();
@@ -243,20 +257,24 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
   if (inFlight.has(profileId)) return inFlight.get(profileId);
 
   const job = (async () => {
-    const cached = await loadSearchIndexCache(profileId, SEARCH_INDEX_CACHE_VERSION);
+    const index = createSearchIndex();
 
+    // Cache (v4+) stores LightEntry[] directly. This avoids the 2× memory
+    // spike that occurred when saveOrama/loadOrama held both the serialised
+    // JSON blob and the live index structure in memory simultaneously.
+    const cached = await loadSearchIndexCache(profileId, SEARCH_INDEX_CACHE_VERSION);
     if (cached) {
       try {
-        const cachedIndex = createSearchIndex();
-        loadOrama(cachedIndex, cached.rawData as RawData);
-        indexes.set(profileId, cachedIndex);
-        return;
+        const documents = cached.rawData as LightEntry[];
+        if (Array.isArray(documents) && documents.length > 0) {
+          await insertBatched(index, documents);
+          indexes.set(profileId, index);
+          return;
+        }
       } catch {
-        // Cached data can be invalidated by Orama internals; rebuild from stored entries.
+        // Invalid cache; fall through to rebuild.
       }
     }
-
-    const index = createSearchIndex();
 
     const source = await loadSearchIndexSource(profileId);
     if (!source) {
@@ -264,24 +282,32 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
       return;
     }
 
-    const documents: LightEntry[] = [];
+    // Convert and insert in batches so we never hold a full parallel LightEntry[]
+    // alongside source.entries — only one small batch lives at a time.
+    const allDocuments: LightEntry[] = [];
     const seenIds = new Set<string>();
+    let batch: LightEntry[] = [];
+
     for (const entry of source.entries) {
-      if (!seenIds.has(entry.id)) {
-        seenIds.add(entry.id);
-        documents.push(toLightEntry(entry));
+      if (seenIds.has(entry.id)) continue;
+      seenIds.add(entry.id);
+      const doc = toLightEntry(entry);
+      allDocuments.push(doc);
+      batch.push(doc);
+      if (batch.length >= SEARCH_INDEX_INSERT_BATCH_SIZE) {
+        await insertMultiple(index, batch);
+        batch = [];
       }
     }
-
-    if (documents.length > 0) {
-      await insertMultiple(index, documents, SEARCH_INDEX_INSERT_BATCH_SIZE);
+    if (batch.length > 0) {
+      await insertMultiple(index, batch);
     }
 
     await saveSearchIndexCache({
       profileId,
       cacheVersion: SEARCH_INDEX_CACHE_VERSION,
-      documentCount: documents.length,
-      rawData: saveOrama(index),
+      documentCount: allDocuments.length,
+      rawData: allDocuments,
     });
 
     indexes.set(profileId, index);
