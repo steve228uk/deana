@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   DEANA_GITHUB_URL,
@@ -7,6 +7,7 @@ import {
   PrivacyModal,
   RemoveReportModal,
   SavedReportCard,
+  SupportDeanaModal,
   UploadReportModal,
 } from "../components/deana/marketing";
 import { DnaParseProgress, ParsedDnaFile, SavedProfileSummary } from "../types";
@@ -55,6 +56,7 @@ export function HomeScreen({
   const [isParsing, setIsParsing] = useState(false);
   const [parseProgress, setParseProgress] = useState<DnaParseProgress | null>(null);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showSupport, setShowSupport] = useState(false);
   const [reportPendingRemoval, setReportPendingRemoval] = useState<SavedReportCard | null>(null);
   const [isRemovingReport, setIsRemovingReport] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -125,7 +127,7 @@ export function HomeScreen({
     }
   }
 
-  const reportCards = profiles.map(toReportCard);
+  const reportCards = useMemo(() => profiles.map(toReportCard), [profiles]);
 
   return (
     <>
@@ -133,6 +135,7 @@ export function HomeScreen({
         <MarketingFirstVisit
           onUpload={openUpload}
           onPrivacy={() => setShowPrivacy(true)}
+          onSupport={() => setShowSupport(true)}
         />
       ) : (
         <MarketingReturning
@@ -147,6 +150,7 @@ export function HomeScreen({
             }
           }}
           onPrivacy={() => setShowPrivacy(true)}
+          onSupport={() => setShowSupport(true)}
         />
       )}
 
@@ -172,6 +176,8 @@ export function HomeScreen({
           onGithub={() => window.open(DEANA_GITHUB_URL, "_blank", "noopener,noreferrer")}
         />
       ) : null}
+
+      {showSupport ? <SupportDeanaModal onClose={() => setShowSupport(false)} /> : null}
 
       {reportPendingRemoval ? (
         <RemoveReportModal
