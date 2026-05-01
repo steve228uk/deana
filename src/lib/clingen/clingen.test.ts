@@ -220,7 +220,7 @@ describe("parseGeneDiseaseValidityText", () => {
       "GENE SYMBOL,GENE ID (HGNC),DISEASE LABEL,DISEASE ID (MONDO),MOI,SOP,CLASSIFICATION,ONLINE REPORT,CLASSIFICATION DATE,GCEP,EXTRA_COLUMN_1,EXTRA_COLUMN_2",
       "BRCA1,HGNC:1100,Test Disease,MONDO:0000001,AD,SOP8,Definitive,https://example.com,2020-01-01,GCEP1,extra1,extra2",
     ].join("\n");
-    expect(() => parseGeneDiseaseValidityText(csv)).not.toThrow();
+
     const records = parseGeneDiseaseValidityText(csv);
     expect(records).toHaveLength(1);
   });

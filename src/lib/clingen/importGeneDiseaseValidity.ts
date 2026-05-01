@@ -23,8 +23,19 @@ const EXPECTED_FIELDS = [
   "GCEP",
 ];
 
+const ALPHANUMERIC_PATTERN = /[a-z0-9]/i;
+
 function hasAlphanumeric(value: string): boolean {
-  return /[a-z0-9]/i.test(value);
+  return ALPHANUMERIC_PATTERN.test(value);
+}
+
+function isUsableGeneDiseaseRow(row: GeneDiseaseValidityRow): boolean {
+  return (
+    Boolean(row.geneSymbol) &&
+    Boolean(row.diseaseLabel) &&
+    hasAlphanumeric(row.geneSymbol) &&
+    hasAlphanumeric(row.diseaseLabel)
+  );
 }
 
 function normaliseRow(raw: Record<string, string>): GeneDiseaseValidityRow {
@@ -91,14 +102,7 @@ export function parseGeneDiseaseValidityText(text: string): ClinGenImportedRecor
 
   for (const raw of result.data) {
     const row = normaliseRow(raw);
-    if (
-      !row.geneSymbol ||
-      !row.diseaseLabel ||
-      !hasAlphanumeric(row.geneSymbol) ||
-      !hasAlphanumeric(row.diseaseLabel)
-    ) {
-      continue;
-    }
+    if (!isUsableGeneDiseaseRow(row)) continue;
     records.push(toImportedRecord(row, raw, fetchedAt));
   }
 

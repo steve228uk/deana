@@ -9,11 +9,10 @@ import {
   makeClinGenRecordId,
   normaliseHgncId,
   normaliseMondoId,
-  nullIfEmpty,
   splitListField,
 } from "./normalise";
 
-function extractRows(json: unknown): Record<string, unknown>[] {
+function extractActionabilityRows(json: unknown): Record<string, unknown>[] {
   if (Array.isArray(json)) return json as Record<string, unknown>[];
   if (json && typeof json === "object") {
     const obj = json as Record<string, unknown>;
@@ -21,13 +20,17 @@ function extractRows(json: unknown): Record<string, unknown>[] {
     if (Array.isArray(obj.results)) return obj.results as Record<string, unknown>[];
     if (Array.isArray(obj.columns) && Array.isArray(obj.rows)) {
       const columns = obj.columns.map((column) => String(column));
-      return obj.rows
-        .filter((row): row is unknown[] => Array.isArray(row))
-        .map((row) =>
-          Object.fromEntries(
-            columns.map((column, index) => [column, row[index]]),
-          ),
-        );
+      const rows: Record<string, unknown>[] = [];
+      for (const row of obj.rows) {
+        if (!Array.isArray(row)) continue;
+
+        const entry: Record<string, unknown> = {};
+        for (let index = 0; index < columns.length; index += 1) {
+          entry[columns[index]] = row[index];
+        }
+        rows.push(entry);
+      }
+      return rows;
     }
   }
   return [];
@@ -116,7 +119,7 @@ export function parseClinicalActionabilityJson(
   json: unknown,
   context: "Adult" | "Pediatric",
 ): ClinGenImportedRecord[] {
-  const rows = extractRows(json);
+  const rows = extractActionabilityRows(json);
 
   if (rows.length === 0) {
     console.warn(`ClinGen [clinical_actionability ${context}]: no rows in JSON response`);
