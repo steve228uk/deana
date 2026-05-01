@@ -874,6 +874,13 @@ a { color: inherit; }
 .dn-ai-message p:last-child,
 .dn-ai-message ul:last-child,
 .dn-ai-message ol:last-child { margin-bottom: 0; }
+.dn-ai-model-name {
+  margin: 0;
+  color: var(--dn-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
 .dn-ai-message code {
   padding: 2px 5px;
   border-radius: 5px;

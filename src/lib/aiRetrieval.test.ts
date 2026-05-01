@@ -1,14 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildEntrySearchText } from "./explorer";
 import { searchReportEntriesForChat } from "./aiRetrieval";
-import { streamReportEntries } from "./storage";
+import { clearSearchIndex } from "./ai/searchIndex";
+import {
+  deleteSearchIndexCache,
+  loadReportEntriesByIds,
+  loadSearchIndexCache,
+  loadSearchIndexSource,
+  saveSearchIndexCache,
+  streamReportEntries,
+} from "./storage";
 import { makeSavedProfile } from "../test/fixtures";
 import type { ChatSearchPlan } from "./aiChat";
 import type { InsightCategory, StoredReportEntry } from "../types";
 
 vi.mock("./storage", () => ({
   streamReportEntries: vi.fn(),
+  loadReportEntriesByIds: vi.fn(),
+  loadSearchIndexSource: vi.fn(),
+  loadSearchIndexCache: vi.fn(),
+  saveSearchIndexCache: vi.fn(),
+  deleteSearchIndexCache: vi.fn(),
 }));
+
+let cachedSearchIndex: unknown = null;
 
 function storedEntries(): StoredReportEntry[] {
   const profile = makeSavedProfile({ id: "profile-ai-search" });
@@ -20,6 +35,39 @@ function storedEntries(): StoredReportEntry[] {
 }
 
 function installEntries(entries: StoredReportEntry[]) {
+  vi.mocked(loadSearchIndexSource).mockImplementation(async (profileId: string) => ({
+    metadata: {
+      reportVersion: 1,
+      evidencePackVersion: "test",
+      reportParsedAt: "2026-04-25T00:00:00.000Z",
+    },
+    entries: entries.filter((entry) => entry.profileId === profileId || profileId === "profile-ai-search"),
+  }));
+  vi.mocked(loadSearchIndexCache).mockImplementation(async () => cachedSearchIndex as Awaited<ReturnType<typeof loadSearchIndexCache>>);
+  vi.mocked(saveSearchIndexCache).mockImplementation(async (cache) => {
+    cachedSearchIndex = {
+      profileId: cache.profileId,
+      cacheVersion: cache.cacheVersion,
+      reportVersion: 1,
+      evidencePackVersion: "test",
+      reportParsedAt: "2026-04-25T00:00:00.000Z",
+      documentCount: cache.documentCount,
+      rawData: cache.rawData,
+      cachedAt: "2026-04-25T00:00:00.000Z",
+    };
+  });
+  vi.mocked(deleteSearchIndexCache).mockImplementation(async () => {
+    cachedSearchIndex = null;
+  });
+
+  vi.mocked(loadReportEntriesByIds).mockImplementation(async (profileId: string, ids: string[]) => {
+    const selected = [] as StoredReportEntry[];
+    for await (const entry of streamReportEntries(profileId)) {
+      if (ids.includes(entry.id)) selected.push(entry);
+    }
+    return selected;
+  });
+
   vi.mocked(streamReportEntries).mockImplementation(async function* (_profileId: string, category?: InsightCategory) {
     for (const entry of entries) {
       if (!category || entry.category === category) {
@@ -39,6 +87,8 @@ function withSearchText(entry: StoredReportEntry): StoredReportEntry {
 describe("searchReportEntriesForChat", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    cachedSearchIndex = null;
+    clearSearchIndex();
   });
 
   it("uses AI-planned genes and rsIDs to retrieve local report findings", async () => {
@@ -64,6 +114,9 @@ describe("searchReportEntriesForChat", () => {
 
     expect(result.findings.length).toBeGreaterThan(0);
     expect(result.findings[0].markers.some((marker) => marker.rsid === "rs6025")).toBe(true);
+    expect(result.trace.usedFallback).toBe(false);
+    expect(result.trace.indexCandidateCount).toBeGreaterThan(0);
+    expect(result.trace.timingMs?.total).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(result)).not.toContain("Stephen");
   });
 
@@ -87,6 +140,7 @@ describe("searchReportEntriesForChat", () => {
     });
 
     expect(result.findings).toHaveLength(6);
+    expect(result.trace.usedFallback).toBe(false);
   });
 
   it("uses AI-planned related terms to search full finding fields", async () => {
@@ -121,6 +175,84 @@ describe("searchReportEntriesForChat", () => {
 
     expect(result.findings[0].id).toBe("source-note-match");
     expect(result.trace.returnedFindings[0].matchedFields).toContain("sourceNotes");
+    expect(result.trace.usedFallback).toBe(false);
+  });
+
+  it("deduplicates repeated streamed report entries before building the Orama index", async () => {
+    const template = storedEntries()[0];
+    const entry = withSearchText({
+      ...template,
+      id: "duplicate-entry",
+      title: "Duplicate searchable Factor V entry",
+      genes: ["F5"],
+      matchedMarkers: [{ rsid: "rs6025", genotype: "CT", chromosome: "1", position: 169519049, gene: "F5" }],
+    });
+    installEntries([entry, entry]);
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "Factor V",
+      plan: {
+        query: "Factor V",
+        categories: ["medical"],
+        genes: ["F5"],
+        rsids: ["rs6025"],
+        topics: [],
+        conditions: [],
+        relatedTerms: [],
+        evidence: [],
+        rationale: "Search duplicate report entries.",
+      },
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].id).toBe("duplicate-entry");
+    expect(result.trace.usedFallback).toBe(false);
+  });
+
+  it("restores a cached Orama index without reloading all report entries", async () => {
+    const entries = storedEntries();
+    installEntries(entries);
+
+    await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "Factor V",
+      plan: {
+        query: "Factor V",
+        categories: ["medical"],
+        genes: ["F5"],
+        rsids: ["rs6025"],
+        topics: [],
+        conditions: [],
+        relatedTerms: [],
+        evidence: [],
+        rationale: "Prime the cached search index.",
+      },
+    });
+
+    expect(saveSearchIndexCache).toHaveBeenCalledTimes(1);
+    vi.mocked(loadSearchIndexSource).mockClear();
+    clearSearchIndex(undefined, { preservePersistentCache: true });
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "Factor V",
+      plan: {
+        query: "Factor V",
+        categories: ["medical"],
+        genes: ["F5"],
+        rsids: ["rs6025"],
+        topics: [],
+        conditions: [],
+        relatedTerms: [],
+        evidence: [],
+        rationale: "Use the cached search index.",
+      },
+    });
+
+    expect(loadSearchIndexSource).not.toHaveBeenCalled();
+    expect(result.trace.usedFallback).toBe(false);
+    expect(result.trace.indexCandidateCount).toBeGreaterThan(0);
   });
 
   it("retrieves the rs9939609 diabetes and ghrelin finding through planner terms", async () => {
@@ -253,6 +385,9 @@ describe("searchReportEntriesForChat", () => {
     expect(result.findings).toEqual([]);
     expect(result.resultCount).toBe(0);
     expect(result.trace.returnedFindings).toEqual([]);
+    expect(result.trace.usedFallback).toBe(true);
+    expect(result.trace.indexCandidateCount).toBe(0);
+    expect(result.trace.timingMs?.fallbackScan).toBeGreaterThanOrEqual(0);
   });
 });
 

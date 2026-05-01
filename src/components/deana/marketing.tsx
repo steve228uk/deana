@@ -329,6 +329,13 @@ export function MarketingProcessing({
       ? Math.round((snapshot.processedRsids / snapshot.totalRsids) * 100)
       : 0;
   const isSavingReport = snapshot.packStage === "saving";
+  const isIndexingReport = snapshot.packStage === "indexing";
+  let blockingReportMessage: string | null = null;
+  if (isIndexingReport) {
+    blockingReportMessage = "Building search index…";
+  } else if (isSavingReport) {
+    blockingReportMessage = "Saving your report…";
+  }
   const progressSummary = isPreparingPack
     ? <span>Loading fixed evidence pack <strong>{snapshot.packVersion ?? "locally"}</strong></span>
     : (
@@ -356,10 +363,10 @@ export function MarketingProcessing({
 
       <section className="dn-simple-card dn-processing-card" aria-label="Processing progress">
         <h2>Processing your data</h2>
-        {isSavingReport ? (
+        {blockingReportMessage ? (
           <div className="dn-processing-saving" role="status" aria-live="polite">
             <div className="dn-loading-indicator" aria-hidden="true" />
-            <p>Saving your report…</p>
+            <p>{blockingReportMessage}</p>
           </div>
         ) : (
           <>

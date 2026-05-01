@@ -1,6 +1,7 @@
 import { DEFAULT_FILTERS, matchesEntryFilters } from "./explorer";
-import { findingToChatContext, MAX_CHAT_SEARCH_RESULTS, type ChatContextFinding, type ChatSearchPlan } from "./aiChat";
-import { streamReportEntries } from "./storage";
+import { findingToChatContext, type ChatContextFinding, type ChatSearchPlan } from "./aiChat";
+import { searchWithFields, waitForIndex, type SearchCandidate } from "./ai/searchIndex";
+import { loadReportEntriesByIds, streamReportEntries } from "./storage";
 import type { ChatRetrievalTrace, InsightCategory, StoredReportEntry } from "../types";
 
 const ALL_CATEGORIES: InsightCategory[] = ["medical", "traits", "drug"];
@@ -198,11 +199,40 @@ function fallbackPlan(prompt: string): ChatSearchPlan {
   };
 }
 
+function resolveLimit(plan: ChatSearchPlan): number {
+  if (plan.rsids.length > 0) return 5;
+  if (plan.genes.length > 0) return 10;
+  if (plan.conditions.length + plan.topics.length > 3) return 15;
+  return 12;
+}
+
+function preScoreCandidate(candidate: SearchCandidate, plan: ChatSearchPlan): number {
+  const normRsids = candidate.rsids.toLowerCase();
+  const normGenes = candidate.genes.toLowerCase();
+  const normTopics = candidate.topics.toLowerCase();
+  const normConditions = candidate.conditions.toLowerCase();
+  const normTitle = candidate.title.toLowerCase();
+  let score = 0;
+
+  if (plan.rsids.some((rsid) => normRsids.includes(rsid))) score += 90;
+
+  const geneTokens = new Set(normGenes.split(/\s+/).filter(Boolean));
+  score += plan.genes.filter((g) => geneTokens.has(g)).length * 70;
+
+  score += plan.topics.filter((t) => normTopics.includes(t)).length * 28;
+  score += plan.conditions.filter((c) => normConditions.includes(c)).length * 28;
+
+  if (plan.evidence.includes(candidate.evidenceTier)) score += 12;
+  if (plan.query && normTitle.includes(plan.query.toLowerCase())) score += 25;
+
+  return score + Math.min(candidate.sortSeverity, 100) / 100 + Math.min(candidate.sortEvidence, 100) / 200;
+}
+
 export async function searchReportEntriesForChat({
   profileId,
   prompt,
   plan,
-  limit = MAX_CHAT_SEARCH_RESULTS,
+  limit,
 }: {
   profileId: string;
   prompt: string;
@@ -212,18 +242,49 @@ export async function searchReportEntriesForChat({
   const effectivePlan = compactPlan(plan ?? fallbackPlan(prompt));
   const categories = ALL_CATEGORIES;
   const terms = searchTerms(prompt, effectivePlan);
+  const effectiveLimit = limit ?? resolveLimit(effectivePlan);
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
 
-  for (const category of categories) {
-    for await (const entry of streamReportEntries(profileId, category)) {
-      if (seen.has(entry.id)) continue;
-      seen.add(entry.id);
-      const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
-      if (matchedFields.length > 0) {
-        ranked.push({ entry, score, matchedFields });
-      }
+  const startedAt = performance.now();
+  await waitForIndex(profileId);
+  const indexReadyAt = performance.now();
+
+  const indexCandidateLimit = Math.max(60, effectiveLimit * 8);
+  const candidates = await searchWithFields(profileId, terms, indexCandidateLimit);
+  const indexSearchedAt = performance.now();
+
+  const rankEntry = (entry: StoredReportEntry) => {
+    if (seen.has(entry.id)) return;
+    seen.add(entry.id);
+    const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
+    if (matchedFields.length > 0) ranked.push({ entry, score, matchedFields });
+  };
+
+  // Pre-score from stored index fields to identify the most relevant candidates,
+  // then load full entries from IDB only for those — avoiding large batch reads.
+  const topN = Math.max(15, effectiveLimit * 3);
+  const topIds = candidates
+    .map((c, i) => ({ id: c.id, score: preScoreCandidate(c, effectivePlan), order: i }))
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .slice(0, topN)
+    .map((c) => c.id);
+
+  const indexedEntries = await loadReportEntriesByIds(profileId, topIds);
+  const idbReadAt = performance.now();
+  for (const entry of indexedEntries) {
+    rankEntry(entry);
+  }
+  const indexedScoredAt = performance.now();
+
+  // Fallback: full scan only when the index returned no candidates at all.
+  const usedFallback = candidates.length === 0;
+  let fallbackScannedAt = indexedScoredAt;
+  if (usedFallback) {
+    for await (const entry of streamReportEntries(profileId)) {
+      rankEntry(entry);
     }
+    fallbackScannedAt = performance.now();
   }
 
   ranked.sort((left, right) =>
@@ -232,8 +293,17 @@ export async function searchReportEntriesForChat({
     left.entry.title.localeCompare(right.entry.title),
   );
 
-  const selectedRanked = ranked.slice(0, limit);
+  const selectedRanked = ranked.slice(0, effectiveLimit);
   const selected = selectedRanked.map(({ entry }) => findingToChatContext(entry));
+  const completedAt = performance.now();
+  const timingMs = {
+    total: Math.round(completedAt - startedAt),
+    indexWait: Math.round(indexReadyAt - startedAt),
+    indexSearch: Math.round(indexSearchedAt - indexReadyAt),
+    idbRead: Math.round(idbReadAt - indexSearchedAt),
+    fallbackScan: Math.round(fallbackScannedAt - indexedScoredAt),
+    scoring: Math.round((indexedScoredAt - idbReadAt) + (completedAt - fallbackScannedAt)),
+  };
 
   return {
     plan: effectivePlan,
@@ -254,6 +324,9 @@ export async function searchReportEntriesForChat({
         sourceNames: entry.sources.map((source) => source.name).slice(0, 5),
       })),
       rationale: effectivePlan.rationale,
+      indexCandidateCount: candidates.length,
+      usedFallback,
+      timingMs,
     },
   };
 }

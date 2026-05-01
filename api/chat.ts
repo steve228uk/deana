@@ -1,14 +1,15 @@
 import { createGateway } from "@ai-sdk/gateway";
-import { convertToModelMessages, streamText, type UIMessage } from "ai";
+import { convertToModelMessages, type UIMessage } from "ai";
+import { streamText } from "ai";
 import { z } from "zod";
-import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth";
+import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth.js";
 import {
   buildGatewayProviderOptions,
   CHAT_CONSENT_VERSION,
   CHAT_CONTEXT_VERSION,
-  DEFAULT_DEANA_LLM_MODEL,
   MAX_CHAT_CONTEXT_FINDINGS,
-} from "../src/lib/aiChat";
+} from "../src/lib/aiChat.js";
+import { DEANA_MODELS } from "../src/lib/ai/models.js";
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -26,7 +27,6 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
 
 const requestCounts = new Map<string, { count: number; resetAt: number }>();
-const selectedModel = process.env.DEANA_LLM_MODEL ?? DEFAULT_DEANA_LLM_MODEL;
 
 const messagePartSchema = z.object({
   type: z.string(),
@@ -250,8 +250,9 @@ export default async function handler(request: Request): Promise<Response> {
       apiKey: getGatewayApiKey(request, process.env),
     });
 
+    const model = process.env.DEANA_LLM_MODEL ?? DEANA_MODELS.default;
     const result = streamText({
-      model: gateway(selectedModel),
+      model: gateway(model),
       system: buildSystemPrompt(parsed.data.context),
       messages: await convertToModelMessages(messages),
       tools: {
@@ -265,7 +266,7 @@ export default async function handler(request: Request): Promise<Response> {
         },
       },
       maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-      providerOptions: buildGatewayProviderOptions(selectedModel, true),
+      providerOptions: buildGatewayProviderOptions(model, true),
     });
 
     return result.toUIMessageStreamResponse({

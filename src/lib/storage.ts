@@ -25,7 +25,8 @@ const REPORT_ENTRY_STORE = "report_entries";
 const AI_CONSENT_STORE = "ai_consent";
 const AI_CHAT_THREAD_STORE = "ai_chat_threads";
 const AI_CHAT_MESSAGE_STORE = "ai_chat_messages";
-const DB_VERSION = 5;
+const SEARCH_INDEX_CACHE_STORE = "search_index_cache";
+const DB_VERSION = 6;
 const PAGE_SIZE = 50;
 
 const ENTRY_PROFILE_INDEX = "profileId";
@@ -53,6 +54,7 @@ const REQUIRED_OBJECT_STORES = [
   AI_CONSENT_STORE,
   AI_CHAT_THREAD_STORE,
   AI_CHAT_MESSAGE_STORE,
+  SEARCH_INDEX_CACHE_STORE,
 ] as const;
 
 interface StoredProfileMetaRecord extends Omit<ProfileMeta, "dna" | "supplements"> {
@@ -63,6 +65,28 @@ interface StoredProfileMetaRecord extends Omit<ProfileMeta, "dna" | "supplements
 interface StoredProfileDnaRecord {
   id: string;
   dna: ParsedDnaFile;
+}
+
+export interface SearchIndexProfileMetadata {
+  reportVersion: number;
+  evidencePackVersion: string;
+  reportParsedAt: string;
+}
+
+export interface StoredSearchIndexCache {
+  profileId: string;
+  cacheVersion: number;
+  reportVersion: number;
+  evidencePackVersion: string;
+  reportParsedAt: string;
+  documentCount: number;
+  rawData: unknown;
+  cachedAt: string;
+}
+
+export interface SearchIndexSource {
+  metadata: SearchIndexProfileMetadata;
+  entries: StoredReportEntry[];
 }
 
 interface PageCursorPayload {
@@ -146,6 +170,10 @@ function openDb(version = DB_VERSION, canRepairMissingStores = true): Promise<ID
         messageStore.createIndex(CHAT_MESSAGE_PROFILE_INDEX, "profileId", { unique: false });
         messageStore.createIndex(CHAT_MESSAGE_THREAD_INDEX, "threadId", { unique: false });
         messageStore.createIndex(CHAT_MESSAGE_THREAD_CREATED_INDEX, ["threadId", "createdAt"], { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(SEARCH_INDEX_CACHE_STORE)) {
+        db.createObjectStore(SEARCH_INDEX_CACHE_STORE, { keyPath: "profileId" });
       }
 
       if (event.oldVersion > 0 && db.objectStoreNames.contains(LEGACY_STORE)) {
@@ -299,6 +327,14 @@ function toStoredProfileDna(profile: SavedProfile): StoredProfileDnaRecord {
   };
 }
 
+function toSearchIndexProfileMetadata(meta: StoredProfileMetaRecord): SearchIndexProfileMetadata {
+  return {
+    reportVersion: meta.reportVersion,
+    evidencePackVersion: meta.evidencePackVersion,
+    reportParsedAt: meta.report.overview.parsedAt,
+  };
+}
+
 function toStoredReportEntries(profile: SavedProfile): StoredReportEntry[] {
   return profile.report.entries.map((entry) => ({
     ...entry,
@@ -438,12 +474,15 @@ function writeNormalizedProfile(transaction: IDBTransaction, profile: SavedProfi
   const metaStore = transaction.objectStore(PROFILE_META_STORE);
   const dnaStore = transaction.objectStore(PROFILE_DNA_STORE);
   const entryStore = transaction.objectStore(REPORT_ENTRY_STORE);
+  const meta = toStoredProfileMeta(profile);
+  const dna = toStoredProfileDna(profile);
+  const entries = toStoredReportEntries(profile);
 
-  metaStore.put(toStoredProfileMeta(profile));
-  dnaStore.put(toStoredProfileDna(profile));
+  metaStore.put(meta);
+  dnaStore.put(dna);
 
   return deleteEntriesForProfile(entryStore, profile.id).then(() => {
-    for (const entry of toStoredReportEntries(profile)) {
+    for (const entry of entries) {
       entryStore.put(entry);
     }
   });
@@ -592,6 +631,126 @@ export async function loadReportEntry(profileId: string, entryId: string): Promi
   return entry ?? null;
 }
 
+export async function loadReportEntriesByIds(
+  profileId: string,
+  ids: string[],
+): Promise<StoredReportEntry[]> {
+  if (ids.length === 0) return [];
+  const db = await openDb();
+  const transaction = db.transaction(REPORT_ENTRY_STORE, "readonly");
+  const store = transaction.objectStore(REPORT_ENTRY_STORE);
+  const entries = await Promise.all(
+    ids.map((id) => requestToPromise(store.get([profileId, id]) as IDBRequest<StoredReportEntry | undefined>)),
+  );
+  return entries.filter((entry): entry is StoredReportEntry => Boolean(entry));
+}
+
+function loadReportEntriesForProfile(store: IDBObjectStore, profileId: string): Promise<StoredReportEntry[]> {
+  return new Promise((resolve, reject) => {
+    const entries: StoredReportEntry[] = [];
+    const request = store.index(ENTRY_PROFILE_INDEX).openCursor(IDBKeyRange.only(profileId));
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve(entries);
+        return;
+      }
+
+      entries.push(cursor.value as StoredReportEntry);
+      cursor.continue();
+    };
+
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function loadSearchIndexSource(profileId: string): Promise<SearchIndexSource | null> {
+  const db = await openDb();
+  const transaction = db.transaction([PROFILE_META_STORE, REPORT_ENTRY_STORE], "readonly");
+  const metaPromise = requestToPromise(
+    transaction.objectStore(PROFILE_META_STORE).get(profileId) as IDBRequest<StoredProfileMetaRecord | undefined>,
+  );
+  const entriesPromise = loadReportEntriesForProfile(transaction.objectStore(REPORT_ENTRY_STORE), profileId);
+  const [meta, entries] = await Promise.all([metaPromise, entriesPromise]);
+
+  if (!meta) return null;
+
+  return {
+    metadata: toSearchIndexProfileMetadata(meta),
+    entries,
+  };
+}
+
+export async function loadSearchIndexCache(
+  profileId: string,
+  cacheVersion: number,
+): Promise<StoredSearchIndexCache | null> {
+  const db = await openDb();
+  const transaction = db.transaction([PROFILE_META_STORE, SEARCH_INDEX_CACHE_STORE], "readonly");
+  const [meta, cache] = await Promise.all([
+    requestToPromise(transaction.objectStore(PROFILE_META_STORE).get(profileId) as IDBRequest<StoredProfileMetaRecord | undefined>),
+    requestToPromise(transaction.objectStore(SEARCH_INDEX_CACHE_STORE).get(profileId) as IDBRequest<StoredSearchIndexCache | undefined>),
+  ]);
+
+  if (!meta || !cache || cache.cacheVersion !== cacheVersion) return null;
+
+  const metadata = toSearchIndexProfileMetadata(meta);
+  if (
+    cache.reportVersion !== metadata.reportVersion ||
+    cache.evidencePackVersion !== metadata.evidencePackVersion ||
+    cache.reportParsedAt !== metadata.reportParsedAt
+  ) {
+    return null;
+  }
+
+  return cache;
+}
+
+export async function saveSearchIndexCache({
+  profileId,
+  cacheVersion,
+  documentCount,
+  rawData,
+}: {
+  profileId: string;
+  cacheVersion: number;
+  documentCount: number;
+  rawData: unknown;
+}): Promise<void> {
+  const db = await openDb();
+  const transaction = db.transaction([PROFILE_META_STORE, SEARCH_INDEX_CACHE_STORE], "readwrite");
+  const done = transactionToPromise(transaction);
+  const meta = await requestToPromise(
+    transaction.objectStore(PROFILE_META_STORE).get(profileId) as IDBRequest<StoredProfileMetaRecord | undefined>,
+  );
+
+  if (meta) {
+    transaction.objectStore(SEARCH_INDEX_CACHE_STORE).put({
+      profileId,
+      cacheVersion,
+      ...toSearchIndexProfileMetadata(meta),
+      documentCount,
+      rawData,
+      cachedAt: new Date().toISOString(),
+    } satisfies StoredSearchIndexCache);
+  }
+
+  await done;
+}
+
+export async function deleteSearchIndexCache(profileId?: string): Promise<void> {
+  const db = await openDb();
+  const transaction = db.transaction(SEARCH_INDEX_CACHE_STORE, "readwrite");
+  const done = transactionToPromise(transaction);
+  if (profileId) {
+    transaction.objectStore(SEARCH_INDEX_CACHE_STORE).delete(profileId);
+  } else {
+    transaction.objectStore(SEARCH_INDEX_CACHE_STORE).clear();
+  }
+  await done;
+}
+
 async function loadAllEntriesForCategory(
   profileId: string,
   category: StoredReportEntry["category"],
@@ -631,7 +790,8 @@ export async function saveProfile(profile: SavedProfile): Promise<void> {
   const db = await openDb();
   const transaction = db.transaction([PROFILE_META_STORE, PROFILE_DNA_STORE, REPORT_ENTRY_STORE], "readwrite");
   const done = transactionToPromise(transaction);
-  await writeNormalizedProfile(transaction, ensureCurrentProfile(profile));
+  const currentProfile = ensureCurrentProfile(profile);
+  await writeNormalizedProfile(transaction, currentProfile);
   await done;
 }
 
@@ -740,7 +900,15 @@ export async function saveChatMessages(threadId: string, messages: StoredChatMes
 export async function deleteProfile(id: string): Promise<void> {
   const db = await openDb();
   const transaction = db.transaction(
-    [PROFILE_META_STORE, PROFILE_DNA_STORE, REPORT_ENTRY_STORE, AI_CONSENT_STORE, AI_CHAT_THREAD_STORE, AI_CHAT_MESSAGE_STORE],
+    [
+      PROFILE_META_STORE,
+      PROFILE_DNA_STORE,
+      REPORT_ENTRY_STORE,
+      AI_CONSENT_STORE,
+      AI_CHAT_THREAD_STORE,
+      AI_CHAT_MESSAGE_STORE,
+      SEARCH_INDEX_CACHE_STORE,
+    ],
     "readwrite",
   );
   const done = transactionToPromise(transaction);
@@ -750,10 +918,12 @@ export async function deleteProfile(id: string): Promise<void> {
   const consentStore = transaction.objectStore(AI_CONSENT_STORE);
   const threadStore = transaction.objectStore(AI_CHAT_THREAD_STORE);
   const messageStore = transaction.objectStore(AI_CHAT_MESSAGE_STORE);
+  const searchIndexCacheStore = transaction.objectStore(SEARCH_INDEX_CACHE_STORE);
 
   metaStore.delete(id);
   dnaStore.delete(id);
   consentStore.delete(id);
+  searchIndexCacheStore.delete(id);
   await Promise.all([
     deleteEntriesForProfile(entryStore, id),
     deleteByIndex(threadStore, CHAT_THREAD_PROFILE_INDEX, id),

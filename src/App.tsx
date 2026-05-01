@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { deleteProfile, loadProfileMeta, loadProfileSummaries, saveProfile } from "./lib/storage";
 import { createProfile as buildProfile } from "./lib/profiles";
+import { clearSearchIndex, prewarmSearchIndex } from "./lib/ai/searchIndex";
 import {
   DnaParseProgress,
   EvidenceProgressSnapshot,
@@ -41,6 +42,26 @@ function summaryFromProfile(profile: SavedProfile): SavedProfileSummary {
     report: {
       overview: profile.report.overview,
     },
+  };
+}
+
+function completedEvidenceProgressSnapshot(
+  evidenceSupplement: EvidenceSupplement,
+  matchedFindings: number,
+  currentRsid: string,
+  packStage: NonNullable<EvidenceProgressSnapshot["packStage"]>,
+): EvidenceProgressSnapshot {
+  return {
+    status: "complete",
+    totalRsids: evidenceSupplement.totalRsids,
+    processedRsids: evidenceSupplement.processedRsids,
+    matchedFindings,
+    unmatchedRsids: evidenceSupplement.unmatchedRsids,
+    failedRsids: evidenceSupplement.failedItems.length,
+    retries: evidenceSupplement.retries,
+    currentRsid,
+    packStage,
+    packVersion: evidenceSupplement.packVersion,
   };
 }
 
@@ -143,19 +164,12 @@ export default function App() {
   ): Promise<SavedProfileSummary> {
     const evidenceSupplement = await enrichWithEvidence(parsed, onProgress);
     const nextProfile = buildProfile(name, parsed, { evidence: evidenceSupplement });
-    onProgress?.({
-      status: "complete",
-      totalRsids: evidenceSupplement.totalRsids,
-      processedRsids: evidenceSupplement.processedRsids,
-      matchedFindings: new Set(evidenceSupplement.matchedRecords.map((match) => match.record.entryId)).size,
-      unmatchedRsids: evidenceSupplement.unmatchedRsids,
-      failedRsids: evidenceSupplement.failedItems.length,
-      retries: evidenceSupplement.retries,
-      currentRsid: "Saving your report…",
-      packStage: "saving",
-      packVersion: evidenceSupplement.packVersion,
-    });
+    const matchedFindings = new Set(evidenceSupplement.matchedRecords.map((match) => match.record.entryId)).size;
+    onProgress?.(completedEvidenceProgressSnapshot(evidenceSupplement, matchedFindings, "Saving your report…", "saving"));
     await saveProfile(nextProfile);
+    clearSearchIndex(nextProfile.id, { preservePersistentCache: true });
+    onProgress?.(completedEvidenceProgressSnapshot(evidenceSupplement, matchedFindings, "Building search index…", "indexing"));
+    await prewarmSearchIndex(nextProfile.id);
     const summary = summaryFromProfile(nextProfile);
     setProfiles((current) => [summary, ...current.filter((candidate) => candidate.id !== summary.id)]);
     void loadProfileSummaries().then(setProfiles).catch(() => {});
@@ -188,6 +202,7 @@ export default function App() {
       report: generateReport(existing.dna, { ...existing.supplements, evidence: runningSupplement }),
     };
     await saveProfile(runningProfile);
+    clearSearchIndex(runningProfile.id);
     setProfiles(await loadProfileSummaries());
 
     const supplement = await enrichWithEvidence(existing.dna);
@@ -197,6 +212,7 @@ export default function App() {
       report: generateReport(existing.dna, { ...runningProfile.supplements, evidence: supplement }),
     };
     await saveProfile(refreshed);
+    clearSearchIndex(refreshed.id);
     setProfiles(await loadProfileSummaries());
   }
 

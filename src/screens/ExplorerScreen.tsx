@@ -17,6 +17,7 @@ import {
   loadProfileMeta,
   loadReportEntry,
 } from "../lib/storage";
+import { prewarmSearchIndex } from "../lib/ai/searchIndex";
 import { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types";
 
 interface ExplorerScreenProps {
@@ -112,6 +113,28 @@ function toReportCard(profile: ProfileMeta): ExplorerReportCard {
   };
 }
 
+function scheduleSearchIndexPrewarm(profileId: string): () => void {
+  let cancelled = false;
+  const run = () => {
+    if (cancelled) return;
+    void prewarmSearchIndex(profileId).catch(() => {});
+  };
+
+  if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+    const handle = window.requestIdleCallback(run, { timeout: 1500 });
+    return () => {
+      cancelled = true;
+      window.cancelIdleCallback(handle);
+    };
+  }
+
+  const handle = setTimeout(run, 250);
+  return () => {
+    cancelled = true;
+    clearTimeout(handle);
+  };
+}
+
 export function ExplorerScreen({
   isLibraryReady,
   refreshProfileEvidence: _refreshProfileEvidence,
@@ -183,6 +206,11 @@ export function ExplorerScreen({
       cancelled = true;
     };
   }, [isLibraryReady, profileId]);
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    return scheduleSearchIndexPrewarm(profile.id);
+  }, [profile?.id]);
 
   useEffect(() => {
     let cancelled = false;

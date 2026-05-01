@@ -13,6 +13,7 @@ import {
   loadChatThreads,
   loadProfileMeta,
   loadProfileSummaries,
+  loadReportEntriesByIds,
   loadReportEntry,
   saveAiConsent,
   saveAiChatNoticeDismissal,
@@ -21,6 +22,7 @@ import {
   saveProfile,
   streamReportEntries,
 } from "./lib/storage";
+import { prewarmSearchIndex } from "./lib/ai/searchIndex";
 import { ExplorerFilters, buildEntrySearchText, compareEntries, matchesEntryFilters } from "./lib/explorer";
 import {
   makeParsedDnaFile,
@@ -51,10 +53,16 @@ vi.mock("./lib/storage", () => ({
   loadChatMessages: vi.fn(),
   saveChatMessages: vi.fn(),
   loadCategoryPage: vi.fn(),
+  loadReportEntriesByIds: vi.fn(),
   loadReportEntry: vi.fn(),
   streamReportEntries: vi.fn(),
   saveProfile: vi.fn(),
   deleteProfile: vi.fn(),
+}));
+
+vi.mock("./lib/ai/searchIndex", () => ({
+  clearSearchIndex: vi.fn(),
+  prewarmSearchIndex: vi.fn(async () => undefined),
 }));
 
 const parsed = makeParsedDnaFile();
@@ -280,6 +288,12 @@ function installStorageMocks() {
     if (!profile) return null;
     return storedEntriesFromProfile(profile).find((entry) => entry.id === entryId) ?? null;
   });
+  vi.mocked(loadReportEntriesByIds).mockImplementation(async (profileId: string, ids: string[]) => {
+    const profile = storedProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) return [];
+    const idSet = new Set(ids);
+    return storedEntriesFromProfile(profile).filter((entry) => idSet.has(entry.id));
+  });
   vi.mocked(streamReportEntries).mockImplementation(async function* (profileId: string) {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) return;
@@ -345,6 +359,26 @@ function renderApp(initialEntry = "/") {
       <App />
     </MemoryRouter>,
   );
+}
+
+async function uploadAndStartReport(
+  user: ReturnType<typeof userEvent.setup>,
+  container: HTMLElement,
+  name?: string,
+) {
+  await screen.findByText(/Private DNA reports/i);
+  await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
+
+  const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+  const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
+  await user.upload(input, file);
+
+  await screen.findByDisplayValue("stephen-kit");
+  if (name) {
+    await user.clear(screen.getByLabelText("Profile name"));
+    await user.type(screen.getByLabelText("Profile name"), name);
+  }
+  await user.click(screen.getByRole("button", { name: /Save and build report/i }));
 }
 
 function fetchCallsFor(path: string): unknown[][] {
@@ -442,17 +476,7 @@ describe("Deana app", () => {
     const user = userEvent.setup();
     const { container } = renderApp("/");
 
-    await screen.findByText(/Private DNA reports/i);
-    await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
-
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
-    await user.upload(input, file);
-
-    await screen.findByDisplayValue("stephen-kit");
-    await user.clear(screen.getByLabelText("Profile name"));
-    await user.type(screen.getByLabelText("Profile name"), "Stephen");
-    await user.click(screen.getByRole("button", { name: /Save and build report/i }));
+    await uploadAndStartReport(user, container, "Stephen");
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(1));
     expect(workerPostCounts.evidence).toBe(1);
@@ -470,20 +494,33 @@ describe("Deana app", () => {
     });
     const { container } = renderApp("/");
 
-    await screen.findByText(/Private DNA reports/i);
-    await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
-
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
-    await user.upload(input, file);
-
-    await screen.findByDisplayValue("stephen-kit");
-    await user.click(screen.getByRole("button", { name: /Save and build report/i }));
+    await uploadAndStartReport(user, container);
 
     expect(await screen.findByText("Saving your report…")).toBeInTheDocument();
     expect(screen.queryByLabelText(/complete/i)).not.toBeInTheDocument();
 
     resolveSave?.();
+    await waitFor(() => {
+      expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
+    });
+  });
+
+  it("shows a search index state before opening the explorer", async () => {
+    const user = userEvent.setup();
+    let resolveIndex: (() => void) | undefined;
+    vi.mocked(prewarmSearchIndex).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resolveIndex = resolve;
+      });
+    });
+    const { container } = renderApp("/");
+
+    await uploadAndStartReport(user, container);
+
+    expect(await screen.findByText("Building search index…")).toBeInTheDocument();
+    expect(screen.getByTestId("location").textContent).toBe("/processing");
+
+    resolveIndex?.();
     await waitFor(() => {
       expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
     });
@@ -502,6 +539,7 @@ describe("Deana app", () => {
       expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-2?tab=overview"),
     );
     expect(screen.getByText("Current report")).toBeInTheDocument();
+    await waitFor(() => expect(prewarmSearchIndex).toHaveBeenCalledWith("profile-2"));
   });
 
   it("removes a saved profile from the home library", async () => {
@@ -742,14 +780,18 @@ describe("Deana app", () => {
       threadId: "thread-chip",
       profileId: "profile-ai",
       role: "assistant",
-      content: "Review [Medical finding 01](deana://entry/medical-1).",
+      content: "Review <deana://entry/medical-1>.",
       createdAt: "2026-04-26T09:01:00.000Z",
     }];
 
     renderApp("/explorer/profile-ai?tab=ai");
 
     const message = await screen.findByText(/Review/i);
-    await user.click(within(message.closest(".dn-ai-message") as HTMLElement).getByRole("button", { name: "Medical finding 01" }));
+    const messageNode = message.closest(".dn-ai-message");
+    expect(messageNode).not.toBeNull();
+    const messageQueries = within(messageNode as HTMLElement);
+    expect(messageQueries.queryByRole("button", { name: "deana://entry/medical-1" })).not.toBeInTheDocument();
+    await user.click(messageQueries.getByRole("button", { name: "Medical finding 01" }));
     await waitFor(() => expect(loadReportEntry).toHaveBeenCalledWith("profile-ai", "medical-1"));
 
     const inspector = await screen.findByLabelText("Chat inspector");

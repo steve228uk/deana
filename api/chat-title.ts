@@ -1,8 +1,9 @@
 import { createGateway } from "@ai-sdk/gateway";
-import { generateText } from "ai";
 import { z } from "zod";
-import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth";
-import { buildGatewayProviderOptions, DEFAULT_DEANA_LLM_MODEL, formatChatTitle } from "../src/lib/aiChat";
+import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth.js";
+import { buildGatewayProviderOptions, formatChatTitle } from "../src/lib/aiChat.js";
+import { TITLE_GENERATION_MODELS } from "../src/lib/ai/models.js";
+import { runTextWithFallback } from "../src/lib/ai/run-with-fallback.js";
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -13,7 +14,6 @@ export const config = {
 };
 
 const MAX_BODY_BYTES = 3_000;
-const selectedModel = process.env.DEANA_LLM_MODEL ?? DEFAULT_DEANA_LLM_MODEL;
 
 const titleRequestSchema = z.object({
   prompt: z.string().min(1).max(2_000),
@@ -54,8 +54,9 @@ export default async function handler(request: Request): Promise<Response> {
       apiKey: getGatewayApiKey(request, process.env),
     });
 
-    const result = await generateText({
-      model: gateway(selectedModel),
+    const result = await runTextWithFallback({
+      gateway,
+      models: TITLE_GENERATION_MODELS,
       system: [
         "Create a short, specific Deana chat title from the user's first message only.",
         "Use two to six words.",
@@ -69,7 +70,8 @@ export default async function handler(request: Request): Promise<Response> {
       ].join("\n"),
       prompt: parsed.data.prompt,
       maxOutputTokens: 200,
-      providerOptions: buildGatewayProviderOptions(selectedModel),
+      providerOptionsFor: (model) => buildGatewayProviderOptions(model),
+      taskName: "chat-title",
     });
 
     const title = formatChatTitle(result.text);
