@@ -13,10 +13,10 @@ import {
   matchesEntryFilters,
 } from "../lib/explorer";
 import {
-  loadCategoryPage,
   loadProfileMeta,
   loadReportEntry,
 } from "../lib/storage";
+import { loadExplorerPage } from "../lib/explorerSearch";
 import { prewarmSearchIndex } from "../lib/ai/searchIndex";
 import { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types";
 
@@ -26,9 +26,12 @@ interface ExplorerScreenProps {
 }
 
 const PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 300;
+const MULTI_FILTER_KEYS = ["evidence", "significance", "repute", "coverage", "publications", "gene", "tag"] as const;
+const RESET_FILTER_KEYS = ["q", "source", "sort", ...MULTI_FILTER_KEYS] as const;
 
 function formatFilters(searchParams: URLSearchParams): ExplorerFilters {
-  const multiValue = (key: string): string[] => {
+  const multiValue = (key: (typeof MULTI_FILTER_KEYS)[number]): string[] => {
     const values = searchParams.getAll(key);
     const legacyValue = searchParams.get(key);
     return values.length > 0
@@ -113,6 +116,10 @@ function toReportCard(profile: ProfileMeta): ExplorerReportCard {
   };
 }
 
+function resetFilterPatch(): Partial<Record<string, null>> {
+  return Object.fromEntries([...RESET_FILTER_KEYS, "selected"].map((key) => [key, null]));
+}
+
 function scheduleSearchIndexPrewarm(profileId: string): () => void {
   let cancelled = false;
   const run = () => {
@@ -156,6 +163,7 @@ export function ExplorerScreen({
   const searchKey = searchParams.toString();
   const tab = useMemo(() => normalizeTab(searchParams.get("tab")), [searchKey]);
   const filters = useMemo(() => formatFilters(searchParams), [searchKey]);
+  const [searchInput, setSearchInput] = useState(filters.q);
   const category = categoryForTab(tab);
   const selectedEntryId = searchParams.get("selected") ?? "";
 
@@ -213,6 +221,20 @@ export function ExplorerScreen({
   }, [profile?.id]);
 
   useEffect(() => {
+    setSearchInput(filters.q);
+  }, [filters.q, profile?.id, tab]);
+
+  useEffect(() => {
+    if (searchInput === filters.q) return;
+
+    const handle = setTimeout(() => {
+      commitSearchInput(searchInput);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(handle);
+  }, [filters.q, searchInput, searchParams, setSearchParams]);
+
+  useEffect(() => {
     let cancelled = false;
 
     if (!profile || !category) {
@@ -226,7 +248,7 @@ export function ExplorerScreen({
 
     setIsPageLoading(true);
 
-    void loadCategoryPage({
+    void loadExplorerPage({
       profileId: profile.id,
       category,
       filters,
@@ -324,25 +346,19 @@ export function ExplorerScreen({
     updateSearchParams(searchParams, { [key]: value || null, selected: null }, setSearchParams);
   }
 
+  function setSearchFilter(value: string) {
+    setIsMobileSheetOpen(false);
+    setSearchInput(value);
+  }
+
+  function commitSearchInput(value: string) {
+    updateSearchParams(searchParams, { q: value || null, selected: null }, setSearchParams);
+  }
+
   function resetFilters() {
     setIsMobileSheetOpen(false);
-    updateSearchParams(
-      searchParams,
-      {
-        q: null,
-        source: null,
-        evidence: null,
-        significance: null,
-        repute: null,
-        coverage: null,
-        publications: null,
-        gene: null,
-        tag: null,
-        sort: null,
-        selected: null,
-      },
-      setSearchParams,
-    );
+    setSearchInput("");
+    updateSearchParams(searchParams, resetFilterPatch(), setSearchParams);
   }
 
   function selectCategoryEntry(id: string) {
@@ -355,7 +371,7 @@ export function ExplorerScreen({
 
     setIsLoadingMore(true);
     try {
-      const page = await loadCategoryPage({
+      const page = await loadExplorerPage({
         profileId: profile.id,
         category,
         filters,
@@ -404,7 +420,9 @@ export function ExplorerScreen({
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
           isMobileSheetOpen={isMobileSheetOpen}
+          searchValue={searchInput}
           onFilterChange={setFilter}
+          onSearchChange={setSearchFilter}
           onResetFilters={resetFilters}
           onSelectEntry={selectCategoryEntry}
           onCloseMobileSheet={() => setIsMobileSheetOpen(false)}

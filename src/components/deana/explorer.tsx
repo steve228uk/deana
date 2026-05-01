@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ExplorerFilters } from "../../lib/explorer";
 import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, StoredReportEntry } from "../../types";
 import { DEANA_GITHUB_URL, PrivacyModal } from "./marketing";
@@ -27,6 +27,12 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = [
   { id: "traits", label: "Traits", icon: "leaf" },
   { id: "drug", label: "Drug response", icon: "pill" },
   { id: "ai", label: "AI", icon: "spark" },
+];
+const SORT_FILTER_OPTIONS: Array<[string, string]> = [
+  ["severity", "Severity / priority"],
+  ["evidence", "Evidence strength"],
+  ["publications", "Publication count"],
+  ["alphabetical", "Alphabetical"],
 ];
 
 export function ExplorerShell({
@@ -269,7 +275,9 @@ export function CategoryExplorerContent({
   hasMore,
   isLoadingMore,
   isMobileSheetOpen,
+  searchValue,
   onFilterChange,
+  onSearchChange,
   onResetFilters,
   onSelectEntry,
   onCloseMobileSheet,
@@ -284,7 +292,9 @@ export function CategoryExplorerContent({
   hasMore: boolean;
   isLoadingMore: boolean;
   isMobileSheetOpen: boolean;
+  searchValue: string;
   onFilterChange: <K extends keyof ExplorerFilters>(key: K, value: ExplorerFilters[K]) => void;
+  onSearchChange: (value: string) => void;
   onResetFilters: () => void;
   onSelectEntry: (id: string) => void;
   onCloseMobileSheet: () => void;
@@ -292,6 +302,13 @@ export function CategoryExplorerContent({
 }) {
   const [areFiltersCollapsed, setAreFiltersCollapsed] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const filterFormProps = {
+    profile,
+    filters,
+    searchValue,
+    onFilterChange,
+    onSearchChange,
+  };
 
   return (
     <main className={`dn-category-screen ${areFiltersCollapsed ? "is-filter-collapsed" : ""}`}>
@@ -323,7 +340,7 @@ export function CategoryExplorerContent({
                 </button>
               </div>
             </div>
-            <ExplorerFiltersForm profile={profile} filters={filters} onFilterChange={onFilterChange} />
+            <ExplorerFiltersForm {...filterFormProps} />
           </>
         )}
       </aside>
@@ -387,7 +404,7 @@ export function CategoryExplorerContent({
                 </button>
               </div>
             </div>
-            <ExplorerFiltersForm profile={profile} filters={filters} onFilterChange={onFilterChange} />
+            <ExplorerFiltersForm {...filterFormProps} />
             <div className="dn-modal-actions">
               <button className="dn-button dn-button--primary" onClick={() => setIsMobileFiltersOpen(false)}>Done</button>
             </div>
@@ -401,36 +418,58 @@ export function CategoryExplorerContent({
 function ExplorerFiltersForm({
   profile,
   filters,
+  searchValue,
   onFilterChange,
+  onSearchChange,
 }: {
   profile: ProfileMeta;
   filters: ExplorerFilters;
+  searchValue: string;
   onFilterChange: <K extends keyof ExplorerFilters>(key: K, value: ExplorerFilters[K]) => void;
+  onSearchChange: (value: string) => void;
 }) {
+  const sourceOptions = useMemo(() => optionList(profile.report.facets.sources, "All sources"), [profile.report.facets.sources]);
+  const evidenceOptions = useMemo(() => profile.report.facets.evidenceTiers.map((value) => [value, value] as [string, string]), [profile.report.facets.evidenceTiers]);
+  const significanceOptions = useMemo(
+    () => profile.report.facets.clinicalSignificances.map((value) => [value, profile.report.facets.clinicalSignificanceLabels[value] ?? value] as [string, string]),
+    [profile.report.facets.clinicalSignificanceLabels, profile.report.facets.clinicalSignificances],
+  );
+  const reputeOptions = useMemo(() => profile.report.facets.reputes.map((value) => [value, value] as [string, string]), [profile.report.facets.reputes]);
+  const coverageOptions = useMemo(() => profile.report.facets.coverages.map((value) => [value, value] as [string, string]), [profile.report.facets.coverages]);
+  const publicationOptions = useMemo(() => profile.report.facets.publicationBuckets.map((value) => [value, value] as [string, string]), [profile.report.facets.publicationBuckets]);
+  const geneOptions = useMemo(() => profile.report.facets.genes.map((value) => [value, value] as [string, string]), [profile.report.facets.genes]);
+  const tagOptions = useMemo(
+    () => [...profile.report.facets.tags, ...profile.report.facets.conditions]
+      .filter((value, index, array) => array.indexOf(value) === index)
+      .sort()
+      .map((value) => [value, value] as [string, string]),
+    [profile.report.facets.conditions, profile.report.facets.tags],
+  );
+
   return (
     <div className="dn-filter-form">
       <label className="dn-field dn-field--search">
         <span>Search</span>
-        <div><Icon name="search" /><input value={filters.q} onChange={(event) => onFilterChange("q", event.target.value)} placeholder="Search findings..." /></div>
+        <div><Icon name="search" /><input value={searchValue} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search findings..." /></div>
       </label>
-      <FilterSelect label="Sort" value={filters.sort} onChange={(value) => onFilterChange("sort", value)} options={[["severity", "Severity / priority"], ["evidence", "Evidence strength"], ["publications", "Publication count"], ["alphabetical", "Alphabetical"]]} />
-      <FilterSelect label="Source" value={filters.source} onChange={(value) => onFilterChange("source", value)} options={optionList(profile.report.facets.sources, "All sources")} />
-      <MultiFilterSelect label="Evidence level" values={filters.evidence} onChange={(value) => onFilterChange("evidence", value)} options={profile.report.facets.evidenceTiers.map((value) => [value, value])} />
+      <FilterSelect label="Sort" value={filters.sort} onChange={(value) => onFilterChange("sort", value)} options={SORT_FILTER_OPTIONS} />
+      <FilterSelect label="Source" value={filters.source} onChange={(value) => onFilterChange("source", value)} options={sourceOptions} />
+      <MultiFilterSelect label="Evidence level" values={filters.evidence} onChange={(value) => onFilterChange("evidence", value)} options={evidenceOptions} />
       <MultiFilterSelect
         label="Clinical significance"
         values={filters.significance}
         onChange={(value) => onFilterChange("significance", value)}
-        options={profile.report.facets.clinicalSignificances.map((value) => [value, profile.report.facets.clinicalSignificanceLabels[value] ?? value])}
+        options={significanceOptions}
       />
-      <MultiFilterSelect label="Repute" values={filters.repute} onChange={(value) => onFilterChange("repute", value)} options={profile.report.facets.reputes.map((value) => [value, value])} />
-      <MultiFilterSelect label="Coverage" values={filters.coverage} onChange={(value) => onFilterChange("coverage", value)} options={profile.report.facets.coverages.map((value) => [value, value])} />
-      <MultiFilterSelect label="Publication bucket" values={filters.publications} onChange={(value) => onFilterChange("publications", value)} options={profile.report.facets.publicationBuckets.map((value) => [value, value])} />
-      <MultiFilterSelect label="Gene" values={filters.gene} onChange={(value) => onFilterChange("gene", value)} options={profile.report.facets.genes.map((value) => [value, value])} />
+      <MultiFilterSelect label="Repute" values={filters.repute} onChange={(value) => onFilterChange("repute", value)} options={reputeOptions} />
+      <MultiFilterSelect label="Coverage" values={filters.coverage} onChange={(value) => onFilterChange("coverage", value)} options={coverageOptions} />
+      <MultiFilterSelect label="Publication bucket" values={filters.publications} onChange={(value) => onFilterChange("publications", value)} options={publicationOptions} />
+      <MultiFilterSelect label="Gene" values={filters.gene} onChange={(value) => onFilterChange("gene", value)} options={geneOptions} />
       <MultiFilterSelect
         label="Topic / condition"
         values={filters.tag}
         onChange={(value) => onFilterChange("tag", value)}
-        options={[...profile.report.facets.tags, ...profile.report.facets.conditions].filter((value, index, array) => array.indexOf(value) === index).sort().map((value) => [value, value])}
+        options={tagOptions}
       />
     </div>
   );
@@ -781,13 +820,14 @@ function MultiFilterSelect({
 }) {
   const fieldId = useId();
   const [query, setQuery] = useState("");
+  const selectedValues = useMemo(() => new Set(values), [values]);
   const normalizedQuery = query.trim().toLowerCase();
   const visibleOptions = normalizedQuery
     ? options.filter(([, optionLabel]) => optionLabel.toLowerCase().includes(normalizedQuery))
     : options;
 
   function toggle(value: string) {
-    onChange(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
+    onChange(selectedValues.has(value) ? values.filter((item) => item !== value) : [...values, value]);
   }
 
   return (
@@ -811,7 +851,7 @@ function MultiFilterSelect({
                   id={optionId}
                   className="dn-filter-check__input"
                   type="checkbox"
-                  checked={values.includes(optionValue)}
+                  checked={selectedValues.has(optionValue)}
                   onChange={() => toggle(optionValue)}
                 />
                 <span className="dn-filter-check__label">{optionLabel}</span>
