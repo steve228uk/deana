@@ -6,7 +6,7 @@ import {
   MatchedMarker,
 } from "../types";
 
-export const LOCAL_EVIDENCE_PACK_VERSION = "2026-04-core";
+export const LOCAL_EVIDENCE_PACK_VERSION = "2026-05-core";
 export const LOCAL_EVIDENCE_PACK_BASE = `/evidence-packs/${LOCAL_EVIDENCE_PACK_VERSION}`;
 
 const DEFAULT_SHARD_MODULO = 256;
@@ -160,13 +160,17 @@ export function matchEvidenceRecords(
   const matches: EvidencePackMatch[] = [];
 
   for (const record of records) {
-    const matchedMarkers = record.markerIds
-      .filter((rsid) => markerMatchesRecord(markerMap.get(rsid.toLowerCase()), record))
-      .map((rsid, index) => {
-        const marker = markerMap.get(rsid.toLowerCase());
-        return markerToMatchedMarker(marker, rsid, record.genes[index] ?? record.genes[0], record);
-      })
-      .filter((marker) => marker.genotype);
+    const matchedMarkers: MatchedMarker[] = [];
+
+    record.markerIds.forEach((rsid, index) => {
+      const marker = markerMap.get(rsid.toLowerCase());
+      if (!markerMatchesRecord(marker, record)) return;
+
+      const matchedMarker = markerToMatchedMarker(marker, rsid, record.genes[index] ?? record.genes[0], record);
+      if (matchedMarker.genotype) {
+        matchedMarkers.push(matchedMarker);
+      }
+    });
 
     if (matchedMarkers.length > 0) {
       matches.push({ record, matchedMarkers });

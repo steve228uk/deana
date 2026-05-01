@@ -212,16 +212,13 @@ function hasCurrentReportShape(profile: SavedProfile): boolean {
   );
 }
 
-function profileNeedsRegeneration(profile: {
+function profileNeedsReportShapeRegeneration(profile: {
   reportVersion: number;
-  evidencePackVersion: string;
-  report: Pick<ReportDataMeta, "reportVersion" | "evidencePackVersion">;
+  report: Pick<ReportDataMeta, "reportVersion">;
 }): boolean {
   return (
     profile.reportVersion !== REPORT_VERSION ||
-    profile.evidencePackVersion !== EVIDENCE_PACK_VERSION ||
-    profile.report.reportVersion !== REPORT_VERSION ||
-    profile.report.evidencePackVersion !== EVIDENCE_PACK_VERSION
+    profile.report.reportVersion !== REPORT_VERSION
   );
 }
 
@@ -256,7 +253,7 @@ function supplementsForRegeneration(profile: SavedProfile): ProfileSupplements |
 
 export function ensureCurrentProfile(profile: SavedProfile): SavedProfile {
   if (
-    !profileNeedsRegeneration(profile) &&
+    !profileNeedsReportShapeRegeneration(profile) &&
     profile.report?.entries &&
     profile.report?.tabs &&
     hasCurrentReportShape(profile)
@@ -542,7 +539,7 @@ export async function loadProfileMeta(profileId: string): Promise<ProfileMeta | 
     dna: dnaRecord.dna,
   };
 
-  if (profileNeedsRegeneration(profile)) {
+  if (profileNeedsReportShapeRegeneration(profile)) {
     const refreshed = ensureCurrentProfile(profile as SavedProfile);
     await saveProfile(refreshed);
     return {

@@ -1,10 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { compareStoredChatMessages, stripProfileSupplementsForMetaStorage } from "./storage";
+import { compareStoredChatMessages, ensureCurrentProfile, stripProfileSupplementsForMetaStorage } from "./storage";
 import { EVIDENCE_PACK_VERSION } from "./evidencePack";
-import { makeParsedDnaFile } from "../test/fixtures";
+import { makeParsedDnaFile, makeSavedProfile } from "../test/fixtures";
 import type { EvidenceSupplement, StoredChatMessage } from "../types";
 
 describe("profile storage normalization", () => {
+  it("preserves reports generated against an older evidence pack", () => {
+    const staleProfile = makeSavedProfile({
+      evidencePackVersion: "legacy-pack",
+    });
+    staleProfile.report = {
+      ...staleProfile.report,
+      evidencePackVersion: "legacy-pack",
+      overview: {
+        ...staleProfile.report.overview,
+        evidencePackVersion: "legacy-pack",
+      },
+    };
+
+    const normalized = ensureCurrentProfile(staleProfile);
+
+    expect(normalized.evidencePackVersion).toBe("legacy-pack");
+    expect(normalized.report.evidencePackVersion).toBe("legacy-pack");
+    expect(normalized.report.overview.evidencePackVersion).toBe("legacy-pack");
+  });
+
   it("strips heavyweight evidence match records from profile metadata supplements", () => {
     const dna = makeParsedDnaFile();
     const supplement: EvidenceSupplement = {
