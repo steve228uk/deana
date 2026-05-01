@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +22,7 @@ import {
   saveProfile,
   streamReportEntries,
 } from "./lib/storage";
-import { prewarmSearchIndex } from "./lib/ai/searchIndex";
+import { prewarmSearchIndex, searchExplorerEntryIds, waitForIndex } from "./lib/ai/searchIndex";
 import { ExplorerFilters, buildEntrySearchText, compareEntries, matchesEntryFilters } from "./lib/explorer";
 import {
   makeParsedDnaFile,
@@ -63,6 +63,8 @@ vi.mock("./lib/storage", () => ({
 vi.mock("./lib/ai/searchIndex", () => ({
   clearSearchIndex: vi.fn(),
   prewarmSearchIndex: vi.fn(async () => undefined),
+  searchExplorerEntryIds: vi.fn(),
+  waitForIndex: vi.fn(async () => undefined),
 }));
 
 const parsed = makeParsedDnaFile();
@@ -220,6 +222,10 @@ function queryEntries(
     .sort((left, right) => compareEntries(left, right, filters.sort));
 }
 
+function sliceEntries<T>(entries: T[], offset: number, limit: number): T[] {
+  return entries.slice(offset, offset + limit);
+}
+
 function installStorageMocks() {
   vi.mocked(loadProfileSummaries).mockImplementation(async () =>
     storedProfiles.map(profileSummaryFromProfile).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -273,7 +279,7 @@ function installStorageMocks() {
 
     const entries = queryEntries(profile, category, filters);
     const start = cursor ? Number(cursor) : 0;
-    const pageEntries = entries.slice(start, start + pageSize);
+    const pageEntries = sliceEntries(entries, start, pageSize);
     const nextCursor = start + pageSize < entries.length ? String(start + pageSize) : null;
 
     return {
@@ -281,6 +287,17 @@ function installStorageMocks() {
       nextCursor,
       totalLoaded: start + pageEntries.length,
       hasMore: nextCursor !== null,
+    };
+  });
+  vi.mocked(waitForIndex).mockImplementation(async () => undefined);
+  vi.mocked(searchExplorerEntryIds).mockImplementation(async ({ profileId, category, filters, offset, limit }) => {
+    const profile = storedProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) return { ids: [], count: 0 };
+
+    const entries = queryEntries(profile, category, filters);
+    return {
+      ids: sliceEntries(entries, offset, limit).map((entry) => entry.id),
+      count: entries.length,
     };
   });
   vi.mocked(loadReportEntry).mockImplementation(async (profileId: string, entryId: string) => {
@@ -291,8 +308,8 @@ function installStorageMocks() {
   vi.mocked(loadReportEntriesByIds).mockImplementation(async (profileId: string, ids: string[]) => {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) return [];
-    const idSet = new Set(ids);
-    return storedEntriesFromProfile(profile).filter((entry) => idSet.has(entry.id));
+    const entryById = new Map(storedEntriesFromProfile(profile).map((entry) => [entry.id, entry]));
+    return ids.map((id) => entryById.get(id)).filter((entry): entry is StoredReportEntry => Boolean(entry));
   });
   vi.mocked(streamReportEntries).mockImplementation(async function* (profileId: string) {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
@@ -588,6 +605,57 @@ describe("Deana app", () => {
     expect(within(inspector).getByText("Details")).toBeInTheDocument();
     expect(within(inspector).getByText(/This is one of the clearer consumer-array medical markers/i)).toBeInTheDocument();
     expect(screen.getAllByText("Why it matters").length).toBeGreaterThan(0);
+  });
+
+  it("debounces explorer search before committing it to the URL and result loader", async () => {
+    const user = userEvent.setup();
+    const debounceMs = 300;
+    storedProfiles = [makeSavedProfile({ id: "profile-debounced-search" })];
+
+    renderApp("/explorer/profile-debounced-search");
+
+    await screen.findByText("Current report");
+    await user.click(screen.getByRole("button", { name: "Medical" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toContain("tab=medical"),
+    );
+
+    const search = screen.getByLabelText("Search");
+    vi.mocked(searchExplorerEntryIds).mockClear();
+    vi.useFakeTimers();
+
+    try {
+      fireEvent.change(search, { target: { value: "Factor" } });
+
+      expect(search).toHaveValue("Factor");
+      expect(screen.getByTestId("location").textContent).not.toContain("q=Factor");
+      expect(searchExplorerEntryIds).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(debounceMs - 1);
+      });
+
+      expect(screen.getByTestId("location").textContent).not.toContain("q=Factor");
+      expect(searchExplorerEntryIds).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toContain("q=Factor"),
+    );
+    await waitFor(() => expect(searchExplorerEntryIds).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+
+    expect(search).toHaveValue("");
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).not.toContain("q=Factor"),
+    );
   });
 
   it("gates AI chat behind explicit consent without making a request on tab open", async () => {

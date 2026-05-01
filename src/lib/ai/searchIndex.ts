@@ -6,6 +6,7 @@ import {
   saveSearchIndexCache,
 } from "../storage";
 import type { EvidenceTier, StoredReportEntry } from "../../types";
+import type { ExplorerFilters } from "../explorer";
 
 interface LightEntry {
   id: string;
@@ -16,10 +17,19 @@ interface LightEntry {
   conditions: string;
   rsids: string;
   evidenceTier: string;
+  sourceNames: string[];
+  significance: string;
+  repute: string;
+  coverage: string;
+  publicationBucket: string;
+  geneValues: string[];
+  tagValues: string[];
   markers: string;
   body: string;
   sortSeverity: number;
   sortEvidence: number;
+  sortPublications: number;
+  sortAlphabetical: string;
 }
 
 export interface SearchCandidate {
@@ -35,9 +45,22 @@ export interface SearchCandidate {
   sortEvidence: number;
 }
 
+interface SearchExplorerEntryIdsRequest {
+  profileId: string;
+  category: StoredReportEntry["category"];
+  filters: ExplorerFilters;
+  offset: number;
+  limit: number;
+}
+
+interface SearchExplorerEntryIdsResult {
+  ids: string[];
+  count: number;
+}
+
 const indexes = new Map<string, AnyOrama>();
 const inFlight = new Map<string, Promise<void>>();
-const SEARCH_INDEX_CACHE_VERSION = 2;
+const SEARCH_INDEX_CACHE_VERSION = 3;
 const SEARCH_INDEX_INSERT_BATCH_SIZE = 500;
 const SEARCH_INDEX_SCHEMA = {
   id: "string",
@@ -48,10 +71,19 @@ const SEARCH_INDEX_SCHEMA = {
   conditions: "string",
   rsids: "string",
   evidenceTier: "string",
+  sourceNames: "string[]",
+  significance: "string",
+  repute: "string",
+  coverage: "string",
+  publicationBucket: "string",
+  geneValues: "string[]",
+  tagValues: "string[]",
   markers: "string",
   body: "string",
   sortSeverity: "number",
   sortEvidence: "number",
+  sortPublications: "number",
+  sortAlphabetical: "string",
 } as const;
 const SEARCH_INDEX_FIELD_BOOSTS = {
   rsids: 8,
@@ -62,6 +94,18 @@ const SEARCH_INDEX_FIELD_BOOSTS = {
   topics: 3,
   body: 2,
 } as const;
+const EXPLORER_ARRAY_FILTER_FIELDS: Array<[
+  "evidence" | "significance" | "repute" | "coverage" | "publications" | "gene" | "tag",
+  keyof LightEntry,
+]> = [
+  ["evidence", "evidenceTier"],
+  ["significance", "significance"],
+  ["repute", "repute"],
+  ["coverage", "coverage"],
+  ["publications", "publicationBucket"],
+  ["gene", "geneValues"],
+  ["tag", "tagValues"],
+];
 
 function createSearchIndex(): AnyOrama {
   return create({
@@ -69,11 +113,25 @@ function createSearchIndex(): AnyOrama {
   });
 }
 
+function fullTextSearchParams(term: string) {
+  return {
+    term,
+    mode: "fulltext" as const,
+    exact: false,
+    boost: SEARCH_INDEX_FIELD_BOOSTS,
+  };
+}
+
 function toLightEntry(entry: StoredReportEntry): LightEntry {
-  const markers = entry.matchedMarkers
-    .flatMap((marker) => [marker.rsid, marker.gene ?? "", marker.genotype ?? "", marker.matchedAllele ?? ""])
-    .filter(Boolean)
-    .join(" ");
+  const markerParts: string[] = [];
+  const rsids: string[] = [];
+  for (const marker of entry.matchedMarkers) {
+    rsids.push(marker.rsid);
+    markerParts.push(marker.rsid);
+    if (marker.gene) markerParts.push(marker.gene);
+    if (marker.genotype) markerParts.push(marker.genotype);
+    if (marker.matchedAllele) markerParts.push(marker.matchedAllele);
+  }
   const body = [
     entry.summary.slice(0, 240),
     entry.detail.slice(0, 360),
@@ -88,12 +146,21 @@ function toLightEntry(entry: StoredReportEntry): LightEntry {
     genes: entry.genes.join(" "),
     topics: entry.topics.join(" "),
     conditions: entry.conditions.join(" "),
-    rsids: entry.matchedMarkers.map((marker) => marker.rsid).join(" "),
+    rsids: rsids.join(" "),
     evidenceTier: entry.evidenceTier,
-    markers,
+    sourceNames: entry.sources.map((source) => source.name),
+    significance: entry.normalizedClinicalSignificance ?? "",
+    repute: entry.repute,
+    coverage: entry.coverage,
+    publicationBucket: entry.publicationBucket,
+    geneValues: entry.genes,
+    tagValues: [...entry.topics, ...entry.conditions],
+    markers: markerParts.join(" "),
     body,
     sortSeverity: entry.sort.severity,
     sortEvidence: entry.sort.evidence,
+    sortPublications: entry.sort.publications,
+    sortAlphabetical: entry.sort.alphabetical,
   };
 }
 
@@ -118,15 +185,40 @@ async function searchDocs(index: AnyOrama, terms: string[], limit: number): Prom
   if (!query) return [];
 
   const result = await search(index, {
-    term: query,
-    mode: "fulltext",
+    ...fullTextSearchParams(query),
     tolerance: 1,
-    exact: false,
     limit,
-    boost: SEARCH_INDEX_FIELD_BOOSTS,
   });
 
   return result.hits as unknown as Array<{ document: LightEntry }>;
+}
+
+function explorerWhere(category: StoredReportEntry["category"], filters: ExplorerFilters): Record<string, unknown> {
+  const where: Record<string, unknown> = {
+    category,
+  };
+
+  if (filters.source) where.sourceNames = filters.source;
+  for (const [filterKey, documentField] of EXPLORER_ARRAY_FILTER_FIELDS) {
+    const values = filters[filterKey];
+    if (values.length > 0) where[documentField] = values;
+  }
+
+  return where;
+}
+
+function compareExplorerDocuments(left: LightEntry, right: LightEntry, sort: ExplorerFilters["sort"]): number {
+  switch (sort) {
+    case "alphabetical":
+      return left.sortAlphabetical.localeCompare(right.sortAlphabetical);
+    case "publications":
+      return right.sortPublications - left.sortPublications || left.title.localeCompare(right.title);
+    case "evidence":
+      return right.sortEvidence - left.sortEvidence || right.sortSeverity - left.sortSeverity || left.title.localeCompare(right.title);
+    case "severity":
+    default:
+      return right.sortSeverity - left.sortSeverity || right.sortEvidence - left.sortEvidence || left.title.localeCompare(right.title);
+  }
 }
 
 export async function prewarmSearchIndex(profileId: string): Promise<void> {
@@ -195,6 +287,50 @@ export async function searchWithFields(profileId: string, terms: string[], limit
   const hits = await searchDocs(index, terms, limit);
 
   return hits.map((result) => toSearchCandidate(result.document));
+}
+
+export async function searchExplorerEntryIds({
+  profileId,
+  category,
+  filters,
+  offset,
+  limit,
+}: SearchExplorerEntryIdsRequest): Promise<SearchExplorerEntryIdsResult> {
+  const index = indexes.get(profileId);
+  const query = filters.q.trim();
+  if (!index || !query) return { ids: [], count: 0 };
+
+  const searchParams = {
+    ...fullTextSearchParams(query),
+    tolerance: 2,
+    threshold: 0,
+    where: explorerWhere(category, filters),
+  } as const;
+
+  // Orama narrows the text match set; Explorer's selected sort remains authoritative for visible ordering.
+  const preflight = await search(index, {
+    ...searchParams,
+    preflight: true,
+  });
+
+  if (preflight.count === 0) return { ids: [], count: 0 };
+
+  const result = await search(index, {
+    ...searchParams,
+    limit: preflight.count,
+  });
+
+  const hits = (result.hits as unknown as Array<{ document: LightEntry; score: number }>)
+    .filter((hit) => hit.score > 0)
+    .sort((left, right) =>
+      compareExplorerDocuments(left.document, right.document, filters.sort) ||
+      right.score - left.score,
+    );
+
+  return {
+    ids: hits.slice(offset, offset + limit).map((hit) => hit.document.id),
+    count: hits.length,
+  };
 }
 
 export async function waitForIndex(profileId: string): Promise<void> {
