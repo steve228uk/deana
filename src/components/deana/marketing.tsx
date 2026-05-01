@@ -5,6 +5,7 @@ import { DeanaWordmark, Icon } from "./ui";
 export const DEANA_GITHUB_URL = "https://github.com/steve228uk/deana";
 export const DEANA_LICENSE_URL = `${DEANA_GITHUB_URL}/blob/HEAD/LICENSE.md`;
 export const DEANA_SUBREDDIT_URL = "https://www.reddit.com/r/deanadna";
+export const DEANA_SUPPORT_URL = "https://buymeacoffee.com/steve228uk";
 
 export interface SavedReportCard {
   id: string;
@@ -29,17 +30,17 @@ function formatDate(value: string) {
 export function MarketingFirstVisit({
   onUpload,
   onPrivacy,
+  onSupport,
 }: {
   onUpload?: () => void;
   onPrivacy?: () => void;
+  onSupport?: () => void;
 }) {
   return (
     <main className="dn-marketing-shell dn-marketing-shell--first">
       <header className="dn-marketing-header">
         <DeanaWordmark />
-        <nav className="dn-header-actions" aria-label="Homepage actions">
-          <button className="dn-button dn-button--ghost" onClick={onPrivacy}><Icon name="lock" /> About privacy</button>
-        </nav>
+        <MarketingHeaderActions onPrivacy={onPrivacy} onSupport={onSupport} />
       </header>
 
       <section className="dn-hero dn-botanical-card">
@@ -78,21 +79,20 @@ export function MarketingReturning({
   onOpenReport,
   onRemoveReport,
   onPrivacy,
+  onSupport,
 }: {
   reports: SavedReportCard[];
   onCreateNew?: () => void;
   onOpenReport?: (id: string) => void;
   onRemoveReport?: (id: string) => void;
   onPrivacy?: () => void;
+  onSupport?: () => void;
 }) {
   return (
     <main className="dn-marketing-shell dn-marketing-shell--returning">
       <header className="dn-marketing-header">
         <DeanaWordmark />
-        <nav className="dn-header-actions" aria-label="Homepage actions">
-          <button className="dn-button dn-button--ghost" onClick={onPrivacy}><Icon name="lock" /> About privacy</button>
-          <button className="dn-button dn-button--primary dn-hide-mobile" onClick={onCreateNew}><Icon name="plus" /> Create new report</button>
-        </nav>
+        <MarketingHeaderActions onCreateNew={onCreateNew} onPrivacy={onPrivacy} onSupport={onSupport} />
       </header>
 
       <section className="dn-hero dn-botanical-card">
@@ -135,6 +135,26 @@ export function MarketingReturning({
       <AssuranceGrid />
       <HomepageFooter />
     </main>
+  );
+}
+
+function MarketingHeaderActions({
+  onCreateNew,
+  onPrivacy,
+  onSupport,
+}: {
+  onCreateNew?: () => void;
+  onPrivacy?: () => void;
+  onSupport?: () => void;
+}) {
+  return (
+    <nav className="dn-header-actions" aria-label="Homepage actions">
+      <button className="dn-button dn-button--ghost dn-header-action-icon" aria-label="Support Deana" onClick={onSupport}><Icon name="heart" /> Support Deana</button>
+      <button className="dn-button dn-button--ghost dn-header-action-icon" aria-label="About privacy" onClick={onPrivacy}><Icon name="lock" /> About privacy</button>
+      {onCreateNew ? (
+        <button className="dn-button dn-button--primary dn-hide-mobile" onClick={onCreateNew}><Icon name="plus" /> Create new report</button>
+      ) : null}
+    </nav>
   );
 }
 
@@ -452,6 +472,37 @@ export function PrivacyModal({ onClose, onGithub }: { onClose?: () => void; onGi
         <div className="dn-modal-actions">
           <button className="dn-button dn-button--secondary" onClick={onGithub}><Icon name="external" /> Learn more on GitHub</button>
           <button className="dn-button dn-button--primary" onClick={onClose}>Close</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function SupportDeanaModal({ onClose }: { onClose?: () => void }) {
+  return (
+    <div className="dn-modal-backdrop" role="presentation">
+      <section className="dn-modal dn-support-modal" role="dialog" aria-modal="true" aria-labelledby="support-title">
+        <button className="dn-icon-button dn-modal-close" onClick={onClose} aria-label="Close"><Icon name="x" /></button>
+        <span className="dn-round-icon"><Icon name="heart" /></span>
+        <h1 id="support-title">Support Deana</h1>
+        <p className="dn-modal-intro">
+          Deana is a small project I build and run myself. I made it because I have always cared about people
+          owning their own data, keeping private things private, and using tech for preventative medicine.
+        </p>
+        <div className="dn-support-copy">
+          <p>
+            If Deana has been useful to you, buying me a coffee helps pay for the less glamorous bits: hosting,
+            ongoing development, and the AI tokens used by the optional chat features.
+          </p>
+          <p>
+            There is no account or subscription. A coffee just helps me keep improving Deana and keep it online.
+          </p>
+        </div>
+        <div className="dn-modal-actions">
+          <a className="dn-button dn-button--primary" href={DEANA_SUPPORT_URL} target="_blank" rel="noreferrer">
+            <Icon name="external" /> Buy Me a Coffee
+          </a>
+          <button className="dn-button dn-button--secondary" onClick={onClose}>Close</button>
         </div>
       </section>
     </div>

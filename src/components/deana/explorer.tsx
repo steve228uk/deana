@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ExplorerFilters } from "../../lib/explorer";
 import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, StoredReportEntry } from "../../types";
-import { DEANA_GITHUB_URL, PrivacyModal } from "./marketing";
+import { DEANA_GITHUB_URL, PrivacyModal, SupportDeanaModal } from "./marketing";
 import { DeanaWordmark, Icon, IconName } from "./ui";
 
 export interface ExplorerReportCard {
@@ -28,6 +28,8 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = [
   { id: "drug", label: "Drug response", icon: "pill" },
   { id: "ai", label: "AI", icon: "spark" },
 ];
+const visibleTabsWithoutAi = tabs.filter((item) => item.id !== "ai");
+const visibleNavWithoutAi = nav.filter((item) => item.id !== "ai");
 const SORT_FILTER_OPTIONS: Array<[string, string]> = [
   ["severity", "Severity / priority"],
   ["evidence", "Evidence strength"],
@@ -53,9 +55,9 @@ export function ExplorerShell({
   onBackHome?: () => void;
 }) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [modal, setModal] = useState<"privacy" | "help" | null>(null);
-  const visibleNav = isAiEnabled ? nav : nav.filter((item) => item.id !== "ai");
-  const visibleTabs = isAiEnabled ? tabs : tabs.filter((item) => item.id !== "ai");
+  const [modal, setModal] = useState<"privacy" | "help" | "support" | null>(null);
+  const visibleNav = isAiEnabled ? nav : visibleNavWithoutAi;
+  const visibleTabs = isAiEnabled ? tabs : visibleTabsWithoutAi;
 
   return (
     <>
@@ -88,6 +90,7 @@ export function ExplorerShell({
           <button onClick={onBackHome}><Icon name="file" /> <span>Reports</span></button>
           <hr />
           <button onClick={() => setModal("help")}><Icon name="help" /> <span>Help</span></button>
+          <button onClick={() => setModal("support")}><Icon name="heart" /> <span>Support Deana</span></button>
         </nav>
         <div className="dn-sidebar-privacy"><Icon name="lock" /> Your data stays on this device. <button onClick={() => setModal("privacy")}>Learn more</button></div>
         </aside>
@@ -107,6 +110,7 @@ export function ExplorerShell({
             </span>
           </button>
           <button className="dn-local-status" onClick={() => setModal("privacy")}><Icon name="shield" /> All analysis is local <i /></button>
+          <button className="dn-icon-button dn-show-mobile" aria-label="Support Deana" onClick={() => setModal("support")}><Icon name="heart" /></button>
           <button className="dn-icon-button dn-hide-mobile" aria-label="Help" onClick={() => setModal("help")}><Icon name="help" /></button>
         </header>
 
@@ -129,6 +133,7 @@ export function ExplorerShell({
         />
       ) : null}
       {modal === "help" ? <HelpModal onClose={() => setModal(null)} /> : null}
+      {modal === "support" ? <SupportDeanaModal onClose={() => setModal(null)} /> : null}
     </>
   );
 }
