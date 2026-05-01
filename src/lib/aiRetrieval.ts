@@ -246,10 +246,13 @@ export async function searchReportEntriesForChat({
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
 
+  const startedAt = performance.now();
   await waitForIndex(profileId);
+  const indexReadyAt = performance.now();
 
   const indexCandidateLimit = Math.max(60, effectiveLimit * 8);
   const candidates = await searchWithFields(profileId, terms, indexCandidateLimit);
+  const indexSearchedAt = performance.now();
 
   const rankEntry = (entry: StoredReportEntry) => {
     if (seen.has(entry.id)) return;
@@ -268,15 +271,20 @@ export async function searchReportEntriesForChat({
     .map((c) => c.id);
 
   const indexedEntries = await loadReportEntriesByIds(profileId, topIds);
+  const idbReadAt = performance.now();
   for (const entry of indexedEntries) {
     rankEntry(entry);
   }
+  const indexedScoredAt = performance.now();
 
   // Fallback: full scan only when the index returned no candidates at all.
-  if (candidates.length === 0) {
+  const usedFallback = candidates.length === 0;
+  let fallbackScannedAt = indexedScoredAt;
+  if (usedFallback) {
     for await (const entry of streamReportEntries(profileId)) {
       rankEntry(entry);
     }
+    fallbackScannedAt = performance.now();
   }
 
   ranked.sort((left, right) =>
@@ -287,6 +295,15 @@ export async function searchReportEntriesForChat({
 
   const selectedRanked = ranked.slice(0, effectiveLimit);
   const selected = selectedRanked.map(({ entry }) => findingToChatContext(entry));
+  const completedAt = performance.now();
+  const timingMs = {
+    total: Math.round(completedAt - startedAt),
+    indexWait: Math.round(indexReadyAt - startedAt),
+    indexSearch: Math.round(indexSearchedAt - indexReadyAt),
+    idbRead: Math.round(idbReadAt - indexSearchedAt),
+    fallbackScan: Math.round(fallbackScannedAt - indexedScoredAt),
+    scoring: Math.round((indexedScoredAt - idbReadAt) + (completedAt - fallbackScannedAt)),
+  };
 
   return {
     plan: effectivePlan,
@@ -307,6 +324,9 @@ export async function searchReportEntriesForChat({
         sourceNames: entry.sources.map((source) => source.name).slice(0, 5),
       })),
       rationale: effectivePlan.rationale,
+      indexCandidateCount: candidates.length,
+      usedFallback,
+      timingMs,
     },
   };
 }

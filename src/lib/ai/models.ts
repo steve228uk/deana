@@ -4,29 +4,4 @@ export const DEANA_MODELS = {
   strongFallback: "openai/gpt-5.4-mini",
 } as const;
 
-export type DeanaModelId = typeof DEANA_MODELS[keyof typeof DEANA_MODELS];
-
-export const TASK_MODELS = {
-  titleGeneration: [DEANA_MODELS.cheap, DEANA_MODELS.default],
-  uploadParsingExplanations: [DEANA_MODELS.cheap, DEANA_MODELS.default],
-  traitSummaries: [DEANA_MODELS.cheap, DEANA_MODELS.default],
-  medicalFindingSummaries: [DEANA_MODELS.default, DEANA_MODELS.strongFallback],
-  drugResponseSummaries: [DEANA_MODELS.default, DEANA_MODELS.strongFallback],
-  jsonExtraction: [DEANA_MODELS.cheap, DEANA_MODELS.default],
-  safetyReview: [DEANA_MODELS.default, DEANA_MODELS.strongFallback],
-} as const satisfies Record<string, readonly DeanaModelId[]>;
-
-const ADVISORY_INTENT_PATTERN = /\b(should i|what should|diagnose|treat|medication|recommend|advice)\b/i;
-const GREETING_PATTERN = /^(hi|hello|hey|yo|sup|good (morning|afternoon|evening))(?:[!.?,\s]+|$)/i;
-
-export function selectChatModels(
-  findings: Array<{ category: string; evidenceTier: string }>,
-  userMessage: string,
-): readonly DeanaModelId[] {
-  if (GREETING_PATTERN.test(userMessage.trim())) return [DEANA_MODELS.cheap, DEANA_MODELS.default];
-  if (findings.length === 0) return [DEANA_MODELS.default, DEANA_MODELS.strongFallback];
-  if (findings.some((finding) => finding.category === "medical" || finding.category === "drug")) return [DEANA_MODELS.default, DEANA_MODELS.strongFallback];
-  if (findings.some((finding) => finding.evidenceTier === "high" || finding.evidenceTier === "moderate")) return [DEANA_MODELS.default, DEANA_MODELS.strongFallback];
-  if (ADVISORY_INTENT_PATTERN.test(userMessage)) return [DEANA_MODELS.default, DEANA_MODELS.strongFallback];
-  return [DEANA_MODELS.cheap, DEANA_MODELS.default];
-}
+export const TITLE_GENERATION_MODELS = [DEANA_MODELS.cheap] as const;

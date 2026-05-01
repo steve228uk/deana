@@ -2,7 +2,7 @@ import { createGateway } from "@ai-sdk/gateway";
 import { z } from "zod";
 import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth.js";
 import { buildGatewayProviderOptions, formatChatTitle } from "../src/lib/aiChat.js";
-import { TASK_MODELS } from "../src/lib/ai/models.js";
+import { TITLE_GENERATION_MODELS } from "../src/lib/ai/models.js";
 import { runTextWithFallback } from "../src/lib/ai/run-with-fallback.js";
 
 declare const process: {
@@ -54,10 +54,9 @@ export default async function handler(request: Request): Promise<Response> {
       apiKey: getGatewayApiKey(request, process.env),
     });
 
-    const models = process.env.DEANA_LLM_MODEL ? [process.env.DEANA_LLM_MODEL] : TASK_MODELS.titleGeneration;
     const result = await runTextWithFallback({
       gateway,
-      models,
+      models: TITLE_GENERATION_MODELS,
       system: [
         "Create a short, specific Deana chat title from the user's first message only.",
         "Use two to six words.",

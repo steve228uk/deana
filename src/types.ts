@@ -269,7 +269,7 @@ export interface EvidenceProgressSnapshot {
   failedRsids: number;
   retries: number;
   currentRsid: string | null;
-  packStage?: "manifest" | "records" | "checksum" | "matching" | "saving";
+  packStage?: "manifest" | "records" | "checksum" | "matching" | "saving" | "indexing";
   packVersion?: string;
 }
 
@@ -361,6 +361,16 @@ export interface ChatRetrievalTrace {
   resultCount: number;
   returnedFindings: ChatTraceFinding[];
   rationale: string;
+  indexCandidateCount?: number;
+  usedFallback?: boolean;
+  timingMs?: {
+    total: number;
+    indexWait: number;
+    indexSearch: number;
+    idbRead: number;
+    fallbackScan: number;
+    scoring: number;
+  };
 }
 
 export interface StoredChatContextFinding {

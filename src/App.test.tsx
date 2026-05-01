@@ -21,6 +21,7 @@ import {
   saveProfile,
   streamReportEntries,
 } from "./lib/storage";
+import { prewarmSearchIndex } from "./lib/ai/searchIndex";
 import { ExplorerFilters, buildEntrySearchText, compareEntries, matchesEntryFilters } from "./lib/explorer";
 import {
   makeParsedDnaFile,
@@ -55,6 +56,11 @@ vi.mock("./lib/storage", () => ({
   streamReportEntries: vi.fn(),
   saveProfile: vi.fn(),
   deleteProfile: vi.fn(),
+}));
+
+vi.mock("./lib/ai/searchIndex", () => ({
+  clearSearchIndex: vi.fn(),
+  prewarmSearchIndex: vi.fn(async () => undefined),
 }));
 
 const parsed = makeParsedDnaFile();
@@ -347,6 +353,26 @@ function renderApp(initialEntry = "/") {
   );
 }
 
+async function uploadAndStartReport(
+  user: ReturnType<typeof userEvent.setup>,
+  container: HTMLElement,
+  name?: string,
+) {
+  await screen.findByText(/Private DNA reports/i);
+  await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
+
+  const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+  const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
+  await user.upload(input, file);
+
+  await screen.findByDisplayValue("stephen-kit");
+  if (name) {
+    await user.clear(screen.getByLabelText("Profile name"));
+    await user.type(screen.getByLabelText("Profile name"), name);
+  }
+  await user.click(screen.getByRole("button", { name: /Save and build report/i }));
+}
+
 function fetchCallsFor(path: string): unknown[][] {
   return vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes(path));
 }
@@ -442,17 +468,7 @@ describe("Deana app", () => {
     const user = userEvent.setup();
     const { container } = renderApp("/");
 
-    await screen.findByText(/Private DNA reports/i);
-    await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
-
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
-    await user.upload(input, file);
-
-    await screen.findByDisplayValue("stephen-kit");
-    await user.clear(screen.getByLabelText("Profile name"));
-    await user.type(screen.getByLabelText("Profile name"), "Stephen");
-    await user.click(screen.getByRole("button", { name: /Save and build report/i }));
+    await uploadAndStartReport(user, container, "Stephen");
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(1));
     expect(workerPostCounts.evidence).toBe(1);
@@ -470,20 +486,33 @@ describe("Deana app", () => {
     });
     const { container } = renderApp("/");
 
-    await screen.findByText(/Private DNA reports/i);
-    await user.click(screen.getByRole("button", { name: /Upload your DNA export/i }));
-
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    const file = new File(["dna"], "stephen-kit.txt", { type: "text/plain" });
-    await user.upload(input, file);
-
-    await screen.findByDisplayValue("stephen-kit");
-    await user.click(screen.getByRole("button", { name: /Save and build report/i }));
+    await uploadAndStartReport(user, container);
 
     expect(await screen.findByText("Saving your report…")).toBeInTheDocument();
     expect(screen.queryByLabelText(/complete/i)).not.toBeInTheDocument();
 
     resolveSave?.();
+    await waitFor(() => {
+      expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
+    });
+  });
+
+  it("shows a search index state before opening the explorer", async () => {
+    const user = userEvent.setup();
+    let resolveIndex: (() => void) | undefined;
+    vi.mocked(prewarmSearchIndex).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resolveIndex = resolve;
+      });
+    });
+    const { container } = renderApp("/");
+
+    await uploadAndStartReport(user, container);
+
+    expect(await screen.findByText("Building search index…")).toBeInTheDocument();
+    expect(screen.getByTestId("location").textContent).toBe("/processing");
+
+    resolveIndex?.();
     await waitFor(() => {
       expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-1?tab=overview");
     });
@@ -502,6 +531,7 @@ describe("Deana app", () => {
       expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-2?tab=overview"),
     );
     expect(screen.getByText("Current report")).toBeInTheDocument();
+    await waitFor(() => expect(prewarmSearchIndex).toHaveBeenCalledWith("profile-2"));
   });
 
   it("removes a saved profile from the home library", async () => {

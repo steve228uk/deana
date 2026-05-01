@@ -45,6 +45,26 @@ function summaryFromProfile(profile: SavedProfile): SavedProfileSummary {
   };
 }
 
+function completedEvidenceProgressSnapshot(
+  evidenceSupplement: EvidenceSupplement,
+  matchedFindings: number,
+  currentRsid: string,
+  packStage: NonNullable<EvidenceProgressSnapshot["packStage"]>,
+): EvidenceProgressSnapshot {
+  return {
+    status: "complete",
+    totalRsids: evidenceSupplement.totalRsids,
+    processedRsids: evidenceSupplement.processedRsids,
+    matchedFindings,
+    unmatchedRsids: evidenceSupplement.unmatchedRsids,
+    failedRsids: evidenceSupplement.failedItems.length,
+    retries: evidenceSupplement.retries,
+    currentRsid,
+    packStage,
+    packVersion: evidenceSupplement.packVersion,
+  };
+}
+
 export default function App() {
   const parserWorkerRef = useRef<Worker | null>(null);
   const evidenceWorkerRef = useRef<Worker | null>(null);
@@ -144,21 +164,12 @@ export default function App() {
   ): Promise<SavedProfileSummary> {
     const evidenceSupplement = await enrichWithEvidence(parsed, onProgress);
     const nextProfile = buildProfile(name, parsed, { evidence: evidenceSupplement });
-    onProgress?.({
-      status: "complete",
-      totalRsids: evidenceSupplement.totalRsids,
-      processedRsids: evidenceSupplement.processedRsids,
-      matchedFindings: new Set(evidenceSupplement.matchedRecords.map((match) => match.record.entryId)).size,
-      unmatchedRsids: evidenceSupplement.unmatchedRsids,
-      failedRsids: evidenceSupplement.failedItems.length,
-      retries: evidenceSupplement.retries,
-      currentRsid: "Saving your report…",
-      packStage: "saving",
-      packVersion: evidenceSupplement.packVersion,
-    });
+    const matchedFindings = new Set(evidenceSupplement.matchedRecords.map((match) => match.record.entryId)).size;
+    onProgress?.(completedEvidenceProgressSnapshot(evidenceSupplement, matchedFindings, "Saving your report…", "saving"));
     await saveProfile(nextProfile);
-    clearSearchIndex(nextProfile.id);
-    void prewarmSearchIndex(nextProfile.id);
+    clearSearchIndex(nextProfile.id, { preservePersistentCache: true });
+    onProgress?.(completedEvidenceProgressSnapshot(evidenceSupplement, matchedFindings, "Building search index…", "indexing"));
+    await prewarmSearchIndex(nextProfile.id);
     const summary = summaryFromProfile(nextProfile);
     setProfiles((current) => [summary, ...current.filter((candidate) => candidate.id !== summary.id)]);
     void loadProfileSummaries().then(setProfiles).catch(() => {});
@@ -202,7 +213,6 @@ export default function App() {
     };
     await saveProfile(refreshed);
     clearSearchIndex(refreshed.id);
-    void prewarmSearchIndex(refreshed.id);
     setProfiles(await loadProfileSummaries());
   }
 
