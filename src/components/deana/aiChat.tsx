@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Children, memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls, type UIMessage } from "ai";
 import { useChat } from "@ai-sdk/react";
 import ReactMarkdown from "react-markdown";
@@ -21,6 +21,7 @@ import {
   loadChatMessages,
   loadChatThreads,
   deleteChatThread,
+  loadReportEntriesByIds,
   loadReportEntry,
   loadAiChatNoticeDismissal,
   saveAiConsent,
@@ -48,9 +49,8 @@ const markdownSchema = {
   },
 };
 
-type SearchStatus =
+export type SearchStatus =
   | { status: "idle" }
-  | { status: "checking" }
   | { status: "searching" }
   | { status: "ready"; trace: ChatRetrievalTrace }
   | { status: "error"; message: string };
@@ -59,7 +59,8 @@ type ChatPanel =
   | { mode: "findings" }
   | { mode: "inspector"; findingId: string; finding: StoredReportEntry | null; isLoading: boolean; error: string | null };
 
-const entryLinkPattern = /deana:\/\/entry\/[A-Za-z0-9._~!$&'()*+,;=:@%-]+/g;
+const entryLinkPrefix = "deana://entry/";
+const entryLinkPattern = new RegExp(`${entryLinkPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[A-Za-z0-9_%~-]+`, "g");
 
 function makeId(prefix: string): string {
   return `${prefix}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -120,6 +121,79 @@ function hasToolPart(message: UIMessage): boolean {
   return message.parts.some((part) => part.type.startsWith("tool-"));
 }
 
+function entryIdFromHref(href: string | undefined): string | null {
+  if (!href?.startsWith(entryLinkPrefix)) return null;
+  return decodeURIComponent(href.slice(entryLinkPrefix.length));
+}
+
+function textFromChildren(children: ReactNode): string {
+  let text = "";
+  Children.forEach(children, (child) => {
+    if (typeof child === "string" || typeof child === "number") text += child;
+  });
+  return text;
+}
+
+function entryChipLabel(href: string, children: ReactNode, entryTitleById: Map<string, string>): ReactNode {
+  const entryId = entryIdFromHref(href);
+  const title = entryId ? entryTitleById.get(entryId) : null;
+  const childText = textFromChildren(children).trim();
+  if (title && (!childText || childText === href)) return title;
+  if (childText === href) return "Finding";
+  return children;
+}
+
+function EntryChip({
+  href,
+  children,
+  entryTitleById,
+  onOpenEntry,
+}: {
+  href: string;
+  children: ReactNode;
+  entryTitleById: Map<string, string>;
+  onOpenEntry: (href: string) => void;
+}) {
+  return (
+    <button className="dn-ai-entry-chip" type="button" onClick={() => onOpenEntry(href)}>
+      {entryChipLabel(href, children, entryTitleById)}
+    </button>
+  );
+}
+
+function buildEntryTitleById({
+  resolvedEntryTitles,
+  selectedEntry,
+  visibleEntries,
+  retrievedFindings,
+  messageFindings,
+  traces,
+  activeTrace,
+}: {
+  resolvedEntryTitles: Record<string, string>;
+  selectedEntry: StoredReportEntry | null;
+  visibleEntries: StoredReportEntry[];
+  retrievedFindings: ChatContextFinding[];
+  messageFindings: ChatContextFinding[][];
+  traces: ChatRetrievalTrace[];
+  activeTrace?: ChatRetrievalTrace;
+}): Map<string, string> {
+  const titles = new Map<string, string>();
+  const addTitle = (id: string, title: string) => {
+    if (!titles.has(id) && title.trim()) titles.set(id, title);
+  };
+
+  Object.entries(resolvedEntryTitles).forEach(([id, title]) => addTitle(id, title));
+  if (selectedEntry) addTitle(selectedEntry.id, selectedEntry.title);
+  visibleEntries.forEach((entry) => addTitle(entry.id, entry.title));
+  retrievedFindings.forEach((finding) => addTitle(finding.id, finding.title));
+  messageFindings.flat().forEach((finding) => addTitle(finding.id, finding.title));
+  traces.flatMap((trace) => trace.returnedFindings).forEach((finding) => addTitle(finding.id, finding.title));
+  activeTrace?.returnedFindings.forEach((finding) => addTitle(finding.id, finding.title));
+
+  return titles;
+}
+
 function restoredContextFindings(messages: StoredChatMessage[]): ChatContextFinding[] {
   return mergeChatFindings(
     messages
@@ -155,11 +229,18 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const [isDeletingThread, setIsDeletingThread] = useState(false);
   const [deleteThreadError, setDeleteThreadError] = useState<string | null>(null);
   const [panel, setPanel] = useState<ChatPanel | null>(null);
+  const [resolvedEntryTitles, setResolvedEntryTitles] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const setMessagesRef = useRef<((messages: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
+  const attemptedEntryTitleIdsRef = useRef<Set<string>>(new Set());
   latestPropsRef.current = props;
   activeThreadRef.current = activeThread;
+
+  useEffect(() => {
+    attemptedEntryTitleIdsRef.current.clear();
+    setResolvedEntryTitles({});
+  }, [props.profile.id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -389,8 +470,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const transport = useMemo(() => new DefaultChatTransport({
     api: "/api/chat",
     prepareSendMessagesRequest: async ({ api, messages, body }) => {
-      setSearchStatus((current) => current.status === "searching" || current.status === "ready" ? current : { status: "checking" });
-
       return {
         api,
         body: {
@@ -473,7 +552,6 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       await saveChatMessages(thread.id, storedMessagesFromUi(finishedMessages, message));
       pendingTraceRef.current = null;
       pendingFindingsRef.current = null;
-      setSearchStatus((current) => current.status === "checking" ? { status: "idle" } : current);
       setActiveThread(nextThread);
       await refreshThreads(thread.id);
     },
@@ -577,11 +655,31 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     }
   }
 
+  const cacheResolvedEntryTitles = useCallback((entries: StoredReportEntry[]) => {
+    setResolvedEntryTitles((current) => {
+      let changed = false;
+      const next = { ...current };
+      entries.forEach((entry) => {
+        if (entry.title && !next[entry.id]) {
+          next[entry.id] = entry.title;
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+  }, []);
+
+  const loadChatEntry = useCallback(async (entryId: string): Promise<StoredReportEntry | null> => {
+    const entry = await loadReportEntry(latestPropsRef.current.profile.id, entryId);
+    if (entry) cacheResolvedEntryTitles([entry]);
+    return entry;
+  }, [cacheResolvedEntryTitles]);
+
   const openEntryPanel = useCallback(async (href: string | undefined) => {
-    if (!href?.startsWith("deana://entry/")) return;
-    const entryId = decodeURIComponent(href.slice("deana://entry/".length));
+    const entryId = entryIdFromHref(href);
+    if (!entryId) return;
     setPanel({ mode: "inspector", findingId: entryId, finding: null, isLoading: true, error: null });
-    const finding = await loadReportEntry(latestPropsRef.current.profile.id, entryId);
+    const finding = await loadChatEntry(entryId);
     setPanel({
       mode: "inspector",
       findingId: entryId,
@@ -589,19 +687,61 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       isLoading: false,
       error: finding ? null : "This finding is no longer available in the saved report.",
     });
-  }, []);
+  }, [loadChatEntry]);
 
   const openFindingsPanel = useCallback(() => {
     setPanel({ mode: "findings" });
   }, []);
 
+  const linkedEntryIds = useMemo(() => {
+    const ids = new Set<string>();
+    messages.forEach((message) => {
+      for (const match of messageText(message).matchAll(entryLinkPattern)) {
+        const entryId = entryIdFromHref(match[0]);
+        if (entryId) ids.add(entryId);
+      }
+    });
+    return Array.from(ids).sort();
+  }, [messages]);
+
+  const entryTitleById = useMemo(() => {
+    return buildEntryTitleById({
+      resolvedEntryTitles,
+      selectedEntry: props.selectedEntry,
+      visibleEntries: props.visibleEntries,
+      retrievedFindings: latestFindingsRef.current,
+      messageFindings: Object.values(contextFindingsByMessageRef.current),
+      traces: Object.values(traceByMessageRef.current),
+      activeTrace: searchStatus.status === "ready" ? searchStatus.trace : undefined,
+    });
+  }, [messages, props.selectedEntry, props.visibleEntries, resolvedEntryTitles, searchStatus]);
+
+  useEffect(() => {
+    const missingEntryIds = linkedEntryIds.filter((entryId) => !entryTitleById.has(entryId) && !attemptedEntryTitleIdsRef.current.has(entryId));
+    if (missingEntryIds.length === 0) return;
+
+    missingEntryIds.forEach((entryId) => attemptedEntryTitleIdsRef.current.add(entryId));
+    let isMounted = true;
+
+    async function loadLinkedEntryTitles() {
+      const entries = await loadReportEntriesByIds(latestPropsRef.current.profile.id, missingEntryIds);
+      if (!isMounted) return;
+      cacheResolvedEntryTitles(entries);
+    }
+
+    void loadLinkedEntryTitles();
+    return () => {
+      isMounted = false;
+    };
+  }, [cacheResolvedEntryTitles, entryTitleById, linkedEntryIds]);
+
   const markdownComponents: Components = useMemo(() => ({
     a({ href, children }) {
-      if (href?.startsWith("deana://entry/")) {
+      if (entryIdFromHref(href)) {
         return (
-          <button className="dn-ai-entry-chip" type="button" onClick={() => void openEntryPanel(href)}>
+          <EntryChip href={href ?? ""} entryTitleById={entryTitleById} onOpenEntry={(entryHref) => void openEntryPanel(entryHref)}>
             {children}
-          </button>
+          </EntryChip>
         );
       }
 
@@ -625,9 +765,9 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         const index = match.index ?? 0;
         if (index > lastIndex) nodes.push(value.slice(lastIndex, index));
         nodes.push(
-          <button className="dn-ai-entry-chip" key={`${href}-${index}`} type="button" onClick={() => void openEntryPanel(href)}>
-            Finding
-          </button>,
+          <EntryChip key={`${href}-${index}`} href={href} entryTitleById={entryTitleById} onOpenEntry={(entryHref) => void openEntryPanel(entryHref)}>
+            {href}
+          </EntryChip>,
         );
         lastIndex = index + href.length;
       }
@@ -635,7 +775,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (lastIndex < value.length) nodes.push(value.slice(lastIndex));
       return nodes.length > 0 ? <>{nodes}</> : <>{children}</>;
     },
-  }), []);
+  }), [entryTitleById, openEntryPanel]);
 
   const handleOpenEntry = useCallback(
     (entryId: string) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`),
@@ -862,19 +1002,15 @@ function ThreadList({
   );
 }
 
+export function generatingStatusDetail(status: SearchStatus): string {
+  if (status.status === "searching") return "Searching saved report findings...";
+  if (status.status === "ready") return `Interpreting ${status.trace.resultCount} matched findings...`;
+  if (status.status === "error") return status.message;
+  return "Thinking…";
+}
+
 function GeneratingStatus({ status }: { status: SearchStatus }) {
-  let detail: string;
-  if (status.status === "checking") {
-    detail = "Checking available context...";
-  } else if (status.status === "searching") {
-    detail = "Searching saved report findings...";
-  } else if (status.status === "ready") {
-    detail = `Interpreting ${status.trace.resultCount} matched findings...`;
-  } else if (status.status === "error") {
-    detail = status.message;
-  } else {
-    detail = "Writing response...";
-  }
+  const detail = generatingStatusDetail(status);
 
   return (
     <div className="dn-ai-status">

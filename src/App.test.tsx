@@ -13,6 +13,7 @@ import {
   loadChatThreads,
   loadProfileMeta,
   loadProfileSummaries,
+  loadReportEntriesByIds,
   loadReportEntry,
   saveAiConsent,
   saveAiChatNoticeDismissal,
@@ -52,6 +53,7 @@ vi.mock("./lib/storage", () => ({
   loadChatMessages: vi.fn(),
   saveChatMessages: vi.fn(),
   loadCategoryPage: vi.fn(),
+  loadReportEntriesByIds: vi.fn(),
   loadReportEntry: vi.fn(),
   streamReportEntries: vi.fn(),
   saveProfile: vi.fn(),
@@ -285,6 +287,12 @@ function installStorageMocks() {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) return null;
     return storedEntriesFromProfile(profile).find((entry) => entry.id === entryId) ?? null;
+  });
+  vi.mocked(loadReportEntriesByIds).mockImplementation(async (profileId: string, ids: string[]) => {
+    const profile = storedProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) return [];
+    const idSet = new Set(ids);
+    return storedEntriesFromProfile(profile).filter((entry) => idSet.has(entry.id));
   });
   vi.mocked(streamReportEntries).mockImplementation(async function* (profileId: string) {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
@@ -772,14 +780,18 @@ describe("Deana app", () => {
       threadId: "thread-chip",
       profileId: "profile-ai",
       role: "assistant",
-      content: "Review [Medical finding 01](deana://entry/medical-1).",
+      content: "Review <deana://entry/medical-1>.",
       createdAt: "2026-04-26T09:01:00.000Z",
     }];
 
     renderApp("/explorer/profile-ai?tab=ai");
 
     const message = await screen.findByText(/Review/i);
-    await user.click(within(message.closest(".dn-ai-message") as HTMLElement).getByRole("button", { name: "Medical finding 01" }));
+    const messageNode = message.closest(".dn-ai-message");
+    expect(messageNode).not.toBeNull();
+    const messageQueries = within(messageNode as HTMLElement);
+    expect(messageQueries.queryByRole("button", { name: "deana://entry/medical-1" })).not.toBeInTheDocument();
+    await user.click(messageQueries.getByRole("button", { name: "Medical finding 01" }));
     await waitFor(() => expect(loadReportEntry).toHaveBeenCalledWith("profile-ai", "medical-1"));
 
     const inspector = await screen.findByLabelText("Chat inspector");
