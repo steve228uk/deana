@@ -65,6 +65,14 @@ function completedEvidenceProgressSnapshot(
   };
 }
 
+function countMatchedFindings(evidenceSupplement: EvidenceSupplement): number {
+  const entryIds = new Set<string>();
+  for (const match of evidenceSupplement.matchedRecords) {
+    entryIds.add(match.record.entryId);
+  }
+  return entryIds.size;
+}
+
 export default function App() {
   const parserWorkerRef = useRef<Worker | null>(null);
   const evidenceWorkerRef = useRef<Worker | null>(null);
@@ -164,56 +172,57 @@ export default function App() {
   ): Promise<SavedProfileSummary> {
     const evidenceSupplement = await enrichWithEvidence(parsed, onProgress);
     const nextProfile = buildProfile(name, parsed, { evidence: evidenceSupplement });
-    const matchedFindings = new Set(evidenceSupplement.matchedRecords.map((match) => match.record.entryId)).size;
-    onProgress?.(completedEvidenceProgressSnapshot(evidenceSupplement, matchedFindings, "Saving your report…", "saving"));
-    await saveProfile(nextProfile);
-    clearSearchIndex(nextProfile.id, { preservePersistentCache: true });
-    onProgress?.(completedEvidenceProgressSnapshot(evidenceSupplement, matchedFindings, "Building search index…", "indexing"));
-    await prewarmSearchIndex(nextProfile.id);
-    const summary = summaryFromProfile(nextProfile);
-    setProfiles((current) => [summary, ...current.filter((candidate) => candidate.id !== summary.id)]);
-    void loadProfileSummaries().then(setProfiles).catch(() => {});
-    return summary;
+    return finalizeProfileEvidence(nextProfile, evidenceSupplement, onProgress, { preservePersistentCache: true });
   }
 
-  async function refreshProfileEvidence(profileId: string): Promise<void> {
+  async function refreshProfileEvidence(
+    profileId: string,
+    onProgress?: (snapshot: EvidenceProgressSnapshot) => void,
+  ): Promise<SavedProfileSummary> {
     const existing = await loadProfileMeta(profileId);
     if (!existing) {
       throw new Error("Profile not found.");
     }
 
-    const runningSupplement: EvidenceSupplement = {
+    onProgress?.({
       status: "running",
-      fetchedAt: existing.supplements?.evidence?.fetchedAt ?? null,
-      attribution: existing.supplements?.evidence?.attribution ?? "Local evidence pack is being loaded in this browser.",
-      packVersion: existing.supplements?.evidence?.packVersion ?? "pending",
-      manifest: existing.supplements?.evidence?.manifest ?? null,
       totalRsids: existing.dna.markerCount,
       processedRsids: 0,
-      matchedRecords: [],
+      matchedFindings: 0,
       unmatchedRsids: 0,
-      failedItems: existing.supplements?.evidence?.failedItems ?? [],
-      retries: existing.supplements?.evidence?.retries ?? 0,
-    };
+      failedRsids: 0,
+      retries: 0,
+      currentRsid: "Preparing bundled evidence sources",
+    });
 
-    const runningProfile = {
-      ...existing,
-      supplements: { ...existing.supplements, evidence: runningSupplement },
-      report: generateReport(existing.dna, { ...existing.supplements, evidence: runningSupplement }),
-    };
-    await saveProfile(runningProfile);
-    clearSearchIndex(runningProfile.id);
-    setProfiles(await loadProfileSummaries());
-
-    const supplement = await enrichWithEvidence(existing.dna);
+    const supplement = await enrichWithEvidence(existing.dna, onProgress);
+    const report = generateReport(existing.dna, { ...existing.supplements, evidence: supplement });
     const refreshed = {
-      ...runningProfile,
-      supplements: { ...runningProfile.supplements, evidence: supplement },
-      report: generateReport(existing.dna, { ...runningProfile.supplements, evidence: supplement }),
+      ...existing,
+      supplements: { ...existing.supplements, evidence: supplement },
+      reportVersion: report.reportVersion,
+      evidencePackVersion: report.evidencePackVersion,
+      report,
     };
-    await saveProfile(refreshed);
-    clearSearchIndex(refreshed.id);
-    setProfiles(await loadProfileSummaries());
+    return finalizeProfileEvidence(refreshed, supplement, onProgress);
+  }
+
+  async function finalizeProfileEvidence(
+    profile: SavedProfile,
+    supplement: EvidenceSupplement,
+    onProgress?: (snapshot: EvidenceProgressSnapshot) => void,
+    clearIndexOptions?: Parameters<typeof clearSearchIndex>[1],
+  ): Promise<SavedProfileSummary> {
+    const matchedFindings = countMatchedFindings(supplement);
+    onProgress?.(completedEvidenceProgressSnapshot(supplement, matchedFindings, "Saving your report…", "saving"));
+    await saveProfile(profile);
+    clearSearchIndex(profile.id, clearIndexOptions);
+    onProgress?.(completedEvidenceProgressSnapshot(supplement, matchedFindings, "Building search index…", "indexing"));
+    await prewarmSearchIndex(profile.id);
+    const summary = summaryFromProfile(profile);
+    setProfiles((current) => [summary, ...current.filter((candidate) => candidate.id !== summary.id)]);
+    void loadProfileSummaries().then(setProfiles).catch(() => {});
+    return summary;
   }
 
   async function removeProfile(id: string): Promise<void> {
@@ -241,6 +250,18 @@ export default function App() {
           <ProcessingScreen
             pendingBuild={pendingBuild}
             createProfile={createProfile}
+            refreshProfileEvidence={refreshProfileEvidence}
+            clearPendingBuild={() => setPendingBuild(null)}
+          />
+        }
+      />
+      <Route
+        path="/processing/refresh/:profileId"
+        element={
+          <ProcessingScreen
+            pendingBuild={null}
+            createProfile={createProfile}
+            refreshProfileEvidence={refreshProfileEvidence}
             clearPendingBuild={() => setPendingBuild(null)}
           />
         }
@@ -250,7 +271,6 @@ export default function App() {
         element={
           <ExplorerScreen
             isLibraryReady={isLibraryReady}
-            refreshProfileEvidence={refreshProfileEvidence}
           />
         }
       />

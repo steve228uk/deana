@@ -2,6 +2,7 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CategoryExplorerContent,
+  EvidenceUpdateNotice,
   ExplorerReportCard,
   ExplorerShell,
   OverviewContent,
@@ -17,12 +18,12 @@ import {
   loadReportEntry,
 } from "../lib/storage";
 import { loadExplorerPage } from "../lib/explorerSearch";
+import { EVIDENCE_PACK_VERSION } from "../lib/evidencePack";
 import { prewarmSearchIndex } from "../lib/ai/searchIndex";
 import { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types";
 
 interface ExplorerScreenProps {
   isLibraryReady: boolean;
-  refreshProfileEvidence: (profileId: string) => Promise<void>;
 }
 
 const PAGE_SIZE = 50;
@@ -142,9 +143,33 @@ function scheduleSearchIndexPrewarm(profileId: string): () => void {
   };
 }
 
+function getEvidencePackStatus(profile: ProfileMeta | null): {
+  currentPackVersion: string;
+  isStale: boolean;
+} {
+  if (!profile) {
+    return {
+      currentPackVersion: EVIDENCE_PACK_VERSION,
+      isStale: false,
+    };
+  }
+
+  const currentPackVersion =
+    profile.report.overview.evidencePackVersion ??
+    profile.report.evidencePackVersion ??
+    profile.evidencePackVersion;
+
+  return {
+    currentPackVersion,
+    isStale:
+      profile.evidencePackVersion !== EVIDENCE_PACK_VERSION ||
+      profile.report.evidencePackVersion !== EVIDENCE_PACK_VERSION ||
+      profile.report.overview.evidencePackVersion !== EVIDENCE_PACK_VERSION,
+  };
+}
+
 export function ExplorerScreen({
   isLibraryReady,
-  refreshProfileEvidence: _refreshProfileEvidence,
 }: ExplorerScreenProps) {
   const { profileId } = useParams<{ profileId: string }>();
   const navigate = useNavigate();
@@ -166,6 +191,7 @@ export function ExplorerScreen({
   const [searchInput, setSearchInput] = useState(filters.q);
   const category = categoryForTab(tab);
   const selectedEntryId = searchParams.get("selected") ?? "";
+  const evidencePackStatus = getEvidencePackStatus(profile);
 
   useEffect(() => {
     let cancelled = false;
@@ -305,7 +331,7 @@ export function ExplorerScreen({
     return () => {
       cancelled = true;
     };
-  }, [category, filters, profile, selectedEntryId, tab, visibleEntries]);
+  }, [category, filters, profile, selectedEntryId, visibleEntries]);
 
   const selectedEntry = useMemo(() => {
     return visibleEntries.find((entry) => entry.id === selectedEntryId) ?? selectedEntryFallback;
@@ -394,6 +420,15 @@ export function ExplorerScreen({
       report={toReportCard(profile)}
       activeTab={tab}
       isAiEnabled={isAiEnabled === true}
+      notice={
+        evidencePackStatus.isStale ? (
+          <EvidenceUpdateNotice
+            currentPackVersion={evidencePackStatus.currentPackVersion}
+            latestVersion={EVIDENCE_PACK_VERSION}
+            onRefresh={() => navigate(`/processing/refresh/${profile.id}`)}
+          />
+        ) : null
+      }
       onTabChange={setTab}
       onBackHome={() => navigate("/")}
     >

@@ -22,6 +22,7 @@ import {
   saveProfile,
   streamReportEntries,
 } from "./lib/storage";
+import { EVIDENCE_PACK_VERSION } from "./lib/evidencePack";
 import { prewarmSearchIndex, searchExplorerEntryIds, waitForIndex } from "./lib/ai/searchIndex";
 import { ExplorerFilters, buildEntrySearchText, compareEntries, matchesEntryFilters } from "./lib/explorer";
 import {
@@ -72,7 +73,7 @@ const mockSupplement: EvidenceSupplement = {
   status: "complete",
   fetchedAt: new Date().toISOString(),
   attribution: "Local evidence attribution",
-  packVersion: "2026-04-core",
+  packVersion: EVIDENCE_PACK_VERSION,
   manifest: null,
   totalRsids: parsed.markerCount,
   processedRsids: parsed.markerCount,
@@ -152,7 +153,7 @@ class MockWorker {
             retries: 0,
             currentRsid: "Matched bundled evidence records",
             packStage: "matching",
-            packVersion: "2026-04-core",
+            packVersion: EVIDENCE_PACK_VERSION,
           },
         },
       } as MessageEvent);
@@ -364,6 +365,22 @@ function makePaginatedProfile(id: string, count: number): SavedProfile {
   };
 }
 
+function makeStaleEvidenceProfile(id: string): SavedProfile {
+  const profile = makeSavedProfile({ id, evidencePackVersion: "legacy-pack" });
+
+  return {
+    ...profile,
+    report: {
+      ...profile.report,
+      evidencePackVersion: "legacy-pack",
+      overview: {
+        ...profile.report.overview,
+        evidencePackVersion: "legacy-pack",
+      },
+    },
+  };
+}
+
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
@@ -557,6 +574,58 @@ describe("Deana app", () => {
     );
     expect(screen.getByText("Current report")).toBeInTheDocument();
     await waitFor(() => expect(prewarmSearchIndex).toHaveBeenCalledWith("profile-2"));
+  });
+
+  it("shows a local evidence update notice for stale reports and refreshes on request", async () => {
+    const user = userEvent.setup();
+    let resolveIndex: (() => void) | undefined;
+    vi.mocked(prewarmSearchIndex).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resolveIndex = resolve;
+      });
+    });
+    storedProfiles = [makeStaleEvidenceProfile("profile-stale")];
+
+    renderApp("/explorer/profile-stale?tab=overview");
+
+    expect(await screen.findByText("New evidence is available")).toBeInTheDocument();
+    expect(screen.getAllByText(/legacy-pack/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(new RegExp(EVIDENCE_PACK_VERSION)).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: /Refresh evidence/i }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("/processing/refresh/profile-stale"),
+    );
+    expect(await screen.findByRole("heading", { name: /Refreshing evidence/i })).toBeInTheDocument();
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(1));
+    expect(workerPostCounts.evidence).toBe(1);
+    expect(screen.getByText("Building search index…")).toBeInTheDocument();
+    resolveIndex?.();
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-stale?tab=overview"),
+    );
+    await waitFor(() => expect(screen.queryByText("New evidence is available")).not.toBeInTheDocument());
+    expect(storedProfiles[0].evidencePackVersion).toBe(EVIDENCE_PACK_VERSION);
+    expect(storedProfiles[0].report.overview.evidencePackVersion).toBe(EVIDENCE_PACK_VERSION);
+  });
+
+  it("leaves a stale report unchanged when evidence refresh fails", async () => {
+    const user = userEvent.setup();
+    nextEvidenceResponse = { type: "error", error: "Evidence worker failed" };
+    storedProfiles = [makeStaleEvidenceProfile("profile-stale-failure")];
+
+    renderApp("/explorer/profile-stale-failure?tab=overview");
+
+    expect(await screen.findByText("New evidence is available")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Refresh evidence/i }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("/processing/refresh/profile-stale-failure"),
+    );
+    expect(await screen.findByText(/Evidence refresh failed/i)).toBeInTheDocument();
+    expect(saveProfile).not.toHaveBeenCalled();
+    expect(storedProfiles[0].evidencePackVersion).toBe("legacy-pack");
   });
 
   it("removes a saved profile from the home library", async () => {

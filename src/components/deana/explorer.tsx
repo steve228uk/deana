@@ -39,6 +39,7 @@ export function ExplorerShell({
   report,
   activeTab,
   isAiEnabled = false,
+  notice,
   children,
   onTabChange,
   onBackHome,
@@ -46,6 +47,7 @@ export function ExplorerShell({
   report: ExplorerReportCard;
   activeTab: ExplorerTab;
   isAiEnabled?: boolean;
+  notice?: ReactNode;
   children: ReactNode;
   onTabChange?: (tab: ExplorerTab) => void;
   onBackHome?: () => void;
@@ -116,6 +118,7 @@ export function ExplorerShell({
           </nav>
         </div>
 
+        {notice}
         {children}
         </div>
       </div>
@@ -127,6 +130,35 @@ export function ExplorerShell({
       ) : null}
       {modal === "help" ? <HelpModal onClose={() => setModal(null)} /> : null}
     </>
+  );
+}
+
+export function EvidenceUpdateNotice({
+  currentPackVersion,
+  latestVersion,
+  onRefresh,
+}: {
+  currentPackVersion: string;
+  latestVersion: string;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="dn-evidence-update-notice" aria-labelledby="evidence-update-title">
+      <span className="dn-round-icon"><Icon name="refresh" /></span>
+      <div>
+        <h2 id="evidence-update-title">New evidence is available</h2>
+        <p>
+          This report uses evidence pack <strong>{currentPackVersion}</strong>. The bundled local pack is now{" "}
+          <strong>{latestVersion}</strong>.
+        </p>
+        <p className="dn-evidence-update-notice__privacy">
+          Refreshing rematches your saved DNA data in this browser. No DNA is uploaded.
+        </p>
+      </div>
+      <button className="dn-button dn-button--primary" onClick={onRefresh}>
+        <Icon name="refresh" /> Refresh evidence
+      </button>
+    </section>
   );
 }
 
@@ -428,21 +460,44 @@ function ExplorerFiltersForm({
   onFilterChange: <K extends keyof ExplorerFilters>(key: K, value: ExplorerFilters[K]) => void;
   onSearchChange: (value: string) => void;
 }) {
-  const sourceOptions = useMemo(() => optionList(profile.report.facets.sources, "All sources"), [profile.report.facets.sources]);
-  const evidenceOptions = useMemo(() => profile.report.facets.evidenceTiers.map((value) => [value, value] as [string, string]), [profile.report.facets.evidenceTiers]);
-  const significanceOptions = useMemo(
-    () => profile.report.facets.clinicalSignificances.map((value) => [value, profile.report.facets.clinicalSignificanceLabels[value] ?? value] as [string, string]),
+  const sourceOptions = useMemo(
+    () => optionList(profile.report.facets.sources, "All sources"),
+    [profile.report.facets.sources],
+  );
+  const evidenceOptions = useMemo(
+    () => profile.report.facets.evidenceTiers.map((value): [string, string] => [value, value]),
+    [profile.report.facets.evidenceTiers],
+  );
+  const clinicalSignificanceOptions = useMemo(
+    () =>
+      profile.report.facets.clinicalSignificances.map((value): [string, string] => [
+        value,
+        profile.report.facets.clinicalSignificanceLabels[value] ?? value,
+      ]),
     [profile.report.facets.clinicalSignificanceLabels, profile.report.facets.clinicalSignificances],
   );
-  const reputeOptions = useMemo(() => profile.report.facets.reputes.map((value) => [value, value] as [string, string]), [profile.report.facets.reputes]);
-  const coverageOptions = useMemo(() => profile.report.facets.coverages.map((value) => [value, value] as [string, string]), [profile.report.facets.coverages]);
-  const publicationOptions = useMemo(() => profile.report.facets.publicationBuckets.map((value) => [value, value] as [string, string]), [profile.report.facets.publicationBuckets]);
-  const geneOptions = useMemo(() => profile.report.facets.genes.map((value) => [value, value] as [string, string]), [profile.report.facets.genes]);
+  const reputeOptions = useMemo(
+    () => profile.report.facets.reputes.map((value): [string, string] => [value, value]),
+    [profile.report.facets.reputes],
+  );
+  const coverageOptions = useMemo(
+    () => profile.report.facets.coverages.map((value): [string, string] => [value, value]),
+    [profile.report.facets.coverages],
+  );
+  const publicationOptions = useMemo(
+    () => profile.report.facets.publicationBuckets.map((value): [string, string] => [value, value]),
+    [profile.report.facets.publicationBuckets],
+  );
+  const geneOptions = useMemo(
+    () => profile.report.facets.genes.map((value): [string, string] => [value, value]),
+    [profile.report.facets.genes],
+  );
   const tagOptions = useMemo(
-    () => [...profile.report.facets.tags, ...profile.report.facets.conditions]
-      .filter((value, index, array) => array.indexOf(value) === index)
-      .sort()
-      .map((value) => [value, value] as [string, string]),
+    () =>
+      [...profile.report.facets.tags, ...profile.report.facets.conditions]
+        .filter((value, index, array) => array.indexOf(value) === index)
+        .sort()
+        .map((value): [string, string] => [value, value]),
     [profile.report.facets.conditions, profile.report.facets.tags],
   );
 
@@ -459,7 +514,7 @@ function ExplorerFiltersForm({
         label="Clinical significance"
         values={filters.significance}
         onChange={(value) => onFilterChange("significance", value)}
-        options={significanceOptions}
+        options={clinicalSignificanceOptions}
       />
       <MultiFilterSelect label="Repute" values={filters.repute} onChange={(value) => onFilterChange("repute", value)} options={reputeOptions} />
       <MultiFilterSelect label="Coverage" values={filters.coverage} onChange={(value) => onFilterChange("coverage", value)} options={coverageOptions} />

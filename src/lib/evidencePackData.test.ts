@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchLocalEvidencePack, matchEvidenceRecords } from "./evidencePackData";
+import { LOCAL_EVIDENCE_PACK_VERSION, fetchLocalEvidencePack, matchEvidenceRecords } from "./evidencePackData";
 import type { EvidencePackManifest, EvidencePackRecord } from "../types";
 
 async function sha256(value: string): Promise<string> {
@@ -39,7 +39,7 @@ describe("fetchLocalEvidencePack", () => {
     const neededText = text(neededRecords);
     const skippedText = text(skippedRecords);
     const manifest: EvidencePackManifest = {
-      version: "2026-04-core",
+      version: LOCAL_EVIDENCE_PACK_VERSION,
       schemaVersion: 1,
       generatedAt: "2026-04-25T00:00:00.000Z",
       shardStrategy: "rsid-modulo",

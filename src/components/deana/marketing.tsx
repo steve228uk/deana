@@ -314,14 +314,20 @@ export function UploadReportModal({
 export function MarketingProcessing({
   snapshot,
   error,
+  mode = "create",
   onPrivacy,
   onBackHome,
 }: {
   snapshot: EvidenceProgressSnapshot;
   error?: string | null;
+  mode?: "create" | "refresh";
   onPrivacy?: () => void;
   onBackHome?: () => void;
 }) {
+  const isRefreshMode = mode === "refresh";
+  const heroVerb = isRefreshMode ? "Refreshing" : "Building";
+  const bodyVerb = isRefreshMode ? "rematches" : "processes";
+  const progressTitle = isRefreshMode ? "Refreshing evidence" : "Processing your data";
   const isPreparingPack = snapshot.packStage && snapshot.packStage !== "matching";
   const percent = isPreparingPack
     ? 20
@@ -356,13 +362,15 @@ export function MarketingProcessing({
       <section className="dn-processing-hero dn-botanical-card">
         <div className="dn-leaf dn-leaf--left" aria-hidden="true" />
         <div className="dn-leaf dn-leaf--right" aria-hidden="true" />
-        <h1>Building <em>your</em> private report</h1>
-        <p>Keep this tab open while Deana processes bundled evidence sources and saves your report in this browser.</p>
+        <h1>{heroVerb} <em>your</em> private report</h1>
+        <p>
+          Keep this tab open while Deana {bodyVerb} bundled evidence sources and saves your report in this browser.
+        </p>
         <div className="dn-warning"><Icon name="alert" /> Do not close your browser while processing.</div>
       </section>
 
       <section className="dn-simple-card dn-processing-card" aria-label="Processing progress">
-        <h2>Processing your data</h2>
+        <h2>{progressTitle}</h2>
         {blockingReportMessage ? (
           <div className="dn-processing-saving" role="status" aria-live="polite">
             <div className="dn-loading-indicator" aria-hidden="true" />
