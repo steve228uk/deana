@@ -1,0 +1,53 @@
+import {
+  clearSearchIndex,
+  prewarmSearchIndex,
+  queryCandidateIds,
+  searchExplorerEntryIds,
+  searchWithFields,
+  waitForIndex,
+} from "../lib/ai/searchIndexCore";
+import type { WorkerRequest, WorkerResponse } from "../lib/ai/searchIndexCore";
+
+self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+  const { type, requestId } = event.data;
+  try {
+    switch (type) {
+      case "prewarm": {
+        await prewarmSearchIndex(event.data.profileId);
+        self.postMessage({ type: "prewarm", requestId } satisfies WorkerResponse);
+        break;
+      }
+      case "waitForIndex": {
+        await waitForIndex(event.data.profileId);
+        self.postMessage({ type: "waitForIndex", requestId } satisfies WorkerResponse);
+        break;
+      }
+      case "searchExplorer": {
+        const result = await searchExplorerEntryIds(event.data.payload);
+        self.postMessage({ type: "searchExplorer", requestId, result } satisfies WorkerResponse);
+        break;
+      }
+      case "searchWithFields": {
+        const result = await searchWithFields(event.data.profileId, event.data.terms, event.data.limit);
+        self.postMessage({ type: "searchWithFields", requestId, result } satisfies WorkerResponse);
+        break;
+      }
+      case "queryCandidates": {
+        const result = await queryCandidateIds(event.data.profileId, event.data.terms, event.data.limit);
+        self.postMessage({ type: "queryCandidates", requestId, result } satisfies WorkerResponse);
+        break;
+      }
+      case "clearIndex": {
+        clearSearchIndex(event.data.profileId, event.data.options);
+        self.postMessage({ type: "clearIndex", requestId } satisfies WorkerResponse);
+        break;
+      }
+    }
+  } catch (err) {
+    self.postMessage({
+      type: "error",
+      requestId,
+      error: err instanceof Error ? err.message : String(err),
+    } satisfies WorkerResponse);
+  }
+};
