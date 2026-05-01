@@ -133,7 +133,10 @@ That runs:
 
 ```bash
 bun run evidence:sources:sync
+bun run evidence:cpic:sync
 bun run evidence:snpedia:sync
+bun run evidence:pharmgkb:sync
+bun run evidence:clingen:sync
 bun run evidence:pack:build
 ```
 

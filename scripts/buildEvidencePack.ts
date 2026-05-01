@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -12,16 +11,27 @@ import type {
   EvidenceTier,
   GenomeBuild,
   InsightCategory,
+  InsightTone,
   ReputeStatus,
 } from "../src/types";
 import { normalizeConditions } from "../src/lib/normalization";
 import { normalizeChromosome } from "../src/lib/dbsnpAnnotation";
 import { column, extractPmids, extractRsids, normalizeRsid, riskSummaryForClinvar, riskSummaryForGwas, singleBaseAllele, splitTsv, tsvRows } from "./tsvUtils";
 import { DEFINITION_MARKERS, DEFINITION_TITLES } from "./definitionMarkers";
+import { fileSha256, runCli, sha256 } from "./scriptUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
 const packRoot = path.join(repoRoot, "public", "evidence-packs");
+const sourceCacheFiles = {
+  clinvar: path.join(cacheRoot, "clinvar", "variant_summary.txt.gz"),
+  gwas: path.join(cacheRoot, "gwas", "associations.tsv"),
+  snpedia: path.join(cacheRoot, "snpedia", "pages.json"),
+  cpicVariants: path.join(cacheRoot, "cpic", "variants.json"),
+  cpicPairs: path.join(cacheRoot, "cpic", "pairs.json"),
+  pharmgkb: path.join(cacheRoot, "pharmgkb", "annotations.json"),
+  clingen: path.join(cacheRoot, "clingen", "gene_validity.json"),
+} as const;
 const schemaVersion = 1;
 const shardModulo = 256;
 const dbsnpSources: Record<GenomeBuild, { path: string; url: string }> = {
@@ -149,22 +159,6 @@ function parseOptions(argv: string[]): Options {
 }
 
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-async function fileSha256(filePath: string): Promise<string> {
-  const file = Bun.file(filePath);
-  const digest = createHash("sha256");
-  const reader = file.stream().getReader();
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    digest.update(value);
-  }
-  return digest.digest("hex");
-}
-
 function recordText(records: EvidencePackRecord[]): string {
   return `${JSON.stringify(records.sort((left, right) => left.id.localeCompare(right.id)))}\n`;
 }
@@ -197,10 +191,24 @@ function sourceRole(sourceId: string): EvidenceSourceRole {
 
 type DbsnpAnnotationRow = [chromosome: string, position: number, ref: string, alt: string, rsids: string[]];
 
+function pushMapValue<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const values = map.get(key);
+  if (values) {
+    values.push(value);
+  } else {
+    map.set(key, [value]);
+  }
+}
 
 function evidenceRsids(records: EvidencePackRecord[]): string[] {
-  return Array.from(new Set(records.flatMap((record) => record.markerIds).map(normalizeRsid).filter(Boolean) as string[]))
-    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  const rsids = new Set<string>();
+  for (const record of records) {
+    for (const markerId of record.markerIds) {
+      const rsid = normalizeRsid(markerId);
+      if (rsid) rsids.add(rsid);
+    }
+  }
+  return Array.from(rsids).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
 }
 
 async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids: Set<string>): Promise<DbsnpAnnotationRow[]> {
@@ -216,7 +224,7 @@ async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids:
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  const rows = new Map<string, DbsnpAnnotationRow>();
+  const rows = new Map<string, { chromosome: string; position: number; ref: string; alt: string; rsids: Set<string> }>();
   let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
@@ -243,9 +251,9 @@ async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids:
       const key = [chromosome, position, ref, alt].join(":");
       const existing = rows.get(key);
       if (existing) {
-        existing[4] = Array.from(new Set([...existing[4], ...rsids])).sort();
+        for (const rsid of rsids) existing.rsids.add(rsid);
       } else {
-        rows.set(key, [chromosome, position, ref, alt, Array.from(new Set(rsids)).sort()]);
+        rows.set(key, { chromosome, position, ref, alt, rsids: new Set(rsids) });
       }
     }
   }
@@ -258,7 +266,13 @@ async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids:
     throw new Error(`bcftools dbSNP query failed for ${build}: ${stderr.trim() || `exit ${exitCode}`}`);
   }
 
-  return Array.from(rows.values());
+  return Array.from(rows.values(), (row): DbsnpAnnotationRow => [
+    row.chromosome,
+    row.position,
+    row.ref,
+    row.alt,
+    Array.from(row.rsids).sort(),
+  ]);
 }
 
 async function buildAnnotationIndexes(
@@ -639,7 +653,7 @@ function snpediaTitle(summary: string, rsid: string): string {
 }
 
 async function buildSnpediaRecords(): Promise<EvidencePackRecord[]> {
-  const sourceFile = path.join(cacheRoot, "snpedia", "pages.json");
+  const sourceFile = sourceCacheFiles.snpedia;
   if (!existsSync(sourceFile)) return [];
 
   const pages = JSON.parse(await readFile(sourceFile, "utf8")) as CachedSnpediaPage[];
@@ -708,8 +722,8 @@ async function buildSnpediaRecords(): Promise<EvidencePackRecord[]> {
 
 
 async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
-  const clinvarFile = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
-  const gwasFile = path.join(cacheRoot, "gwas", "associations.tsv");
+  const clinvarFile = sourceCacheFiles.clinvar;
+  const gwasFile = sourceCacheFiles.gwas;
 
   // rsid → definition id (for quick lookup)
   const rsidToDefId = new Map<string, string>();
@@ -718,7 +732,7 @@ async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
   }
 
   // Collect per-definition data from sources
-  const defData = new Map<string, { pmids: Set<string>; notes: Set<string>; sourceIds: Set<string>; riskAllele?: string }>();
+  const defData = new Map<string, { pmids: Set<string>; notes: Set<string>; sourceIds: Set<string> }>();
   for (const defId of Object.keys(DEFINITION_MARKERS)) {
     defData.set(defId, { pmids: new Set(), notes: new Set(), sourceIds: new Set() });
   }
@@ -790,7 +804,7 @@ async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
 }
 
 async function buildClinvarRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
-  const sourceFile = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
+  const sourceFile = sourceCacheFiles.clinvar;
   if (!existsSync(sourceFile)) return [];
 
   const records: EvidencePackRecord[] = [];
@@ -804,7 +818,7 @@ async function buildClinvarRecords(maxRecords: number): Promise<EvidencePackReco
 }
 
 async function buildGwasRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
-  const sourceFile = path.join(cacheRoot, "gwas", "associations.tsv");
+  const sourceFile = sourceCacheFiles.gwas;
   if (!existsSync(sourceFile)) return [];
 
   // Keep first-seen per (rsid, primary trait): the source file groups rows by study,
@@ -834,8 +848,8 @@ interface CpicPair {
 }
 
 async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
-  const variantsFile = path.join(cacheRoot, "cpic", "variants.json");
-  const pairsFile = path.join(cacheRoot, "cpic", "pairs.json");
+  const variantsFile = sourceCacheFiles.cpicVariants;
+  const pairsFile = sourceCacheFiles.cpicPairs;
   if (!existsSync(variantsFile) || !existsSync(pairsFile)) return [];
 
   const variants = JSON.parse(await readFile(variantsFile, "utf8")) as CpicVariant[];
@@ -844,9 +858,7 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
   const pairsByGene = new Map<string, CpicPair[]>();
   for (const pair of pairs) {
     const gene = pair.genesymbol.toUpperCase();
-    const arr = pairsByGene.get(gene);
-    if (arr) arr.push(pair);
-    else pairsByGene.set(gene, [pair]);
+    pushMapValue(pairsByGene, gene, pair);
   }
 
   const records: EvidencePackRecord[] = [];
@@ -911,8 +923,14 @@ interface PharmGkbAnnotation {
   url: string;
 }
 
+function pharmgkbEvidenceTier(level: string): EvidenceTier {
+  if (level === "1A" || level === "1B") return "high";
+  if (level === "2A" || level === "2B") return "moderate";
+  return "emerging";
+}
+
 async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
-  const annotationsFile = path.join(cacheRoot, "pharmgkb", "annotations.json");
+  const annotationsFile = sourceCacheFiles.pharmgkb;
   if (!existsSync(annotationsFile)) return [];
 
   const annotations = JSON.parse(await readFile(annotationsFile, "utf8")) as PharmGkbAnnotation[];
@@ -922,10 +940,7 @@ async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
     const rsid = normalizeRsid(ann.rsid);
     if (!rsid) continue;
 
-    const evidenceLevel: EvidenceTier =
-      ann.evidenceLevel === "1A" || ann.evidenceLevel === "1B" ? "high" :
-      ann.evidenceLevel === "2A" || ann.evidenceLevel === "2B" ? "moderate" :
-      "emerging";
+    const evidenceLevel = pharmgkbEvidenceTier(ann.evidenceLevel);
 
     const drugs = ann.drugs.slice(0, 4);
     const category = ann.phenotypeCategory.toLowerCase();
@@ -981,8 +996,13 @@ interface ClinGenClassification {
   url: string;
 }
 
+function clingenEvidenceTier(classification: string): EvidenceTier {
+  if (classification === "Definitive" || classification === "Strong") return "high";
+  return "moderate";
+}
+
 async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promise<EvidencePackRecord[]> {
-  const sourceFile = path.join(cacheRoot, "clingen", "gene_validity.json");
+  const sourceFile = sourceCacheFiles.clingen;
   if (!existsSync(sourceFile)) return [];
 
   const classifications = JSON.parse(await readFile(sourceFile, "utf8")) as ClinGenClassification[];
@@ -1004,9 +1024,7 @@ async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promis
     const rsids = geneToRsids.get(gene);
     if (!rsids || rsids.length === 0) continue;
 
-    const evidenceLevel: EvidenceTier =
-      cls.classification === "Definitive" ? "high" :
-      cls.classification === "Strong" ? "high" : "moderate";
+    const evidenceLevel = clingenEvidenceTier(cls.classification);
 
     const slug = cls.gene.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     const diseaseSlug = cls.disease.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
@@ -1068,12 +1086,12 @@ async function writeIfChanged(filePath: string, text: string, check: boolean): P
 
 async function sourceChecksums(): Promise<Record<string, string | null>> {
   const sources: Record<string, string> = {
-    clinvar: path.join(cacheRoot, "clinvar", "variant_summary.txt.gz"),
-    gwas: path.join(cacheRoot, "gwas", "associations.tsv"),
-    snpedia: path.join(cacheRoot, "snpedia", "pages.json"),
-    cpic: path.join(cacheRoot, "cpic", "variants.json"),
-    pharmgkb: path.join(cacheRoot, "pharmgkb", "annotations.json"),
-    clingen: path.join(cacheRoot, "clingen", "gene_validity.json"),
+    clinvar: sourceCacheFiles.clinvar,
+    gwas: sourceCacheFiles.gwas,
+    snpedia: sourceCacheFiles.snpedia,
+    cpic: sourceCacheFiles.cpicVariants,
+    pharmgkb: sourceCacheFiles.pharmgkb,
+    clingen: sourceCacheFiles.clingen,
   };
   const entries = await Promise.all(
     Object.entries(sources).map(async ([key, filePath]) =>
@@ -1108,9 +1126,7 @@ async function main(): Promise<void> {
 
   for (const record of records) {
     const bucket = rsidBucket(record.markerIds[0] ?? record.id);
-    const arr = buckets.get(bucket);
-    if (arr) arr.push(record);
-    else buckets.set(bucket, [record]);
+    pushMapValue(buckets, bucket, record);
   }
 
   if (!options.check) {
@@ -1198,9 +1214,4 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
-}
+runCli(import.meta.url, main);

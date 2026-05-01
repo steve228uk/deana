@@ -6,6 +6,18 @@ export function splitTsv(line: string): string[] {
   return line.split("\t").map((v) => v.trim());
 }
 
+export function rowFromValues(
+  headers: string[],
+  values: string[],
+  keyTransform: (header: string) => string = (header) => header,
+): Record<string, string> {
+  const row: Record<string, string> = {};
+  headers.forEach((header, index) => {
+    row[keyTransform(header)] = values[index] ?? "";
+  });
+  return row;
+}
+
 export async function* tsvRows(filePath: string): AsyncGenerator<Record<string, string>> {
   const stream = filePath.endsWith(".gz")
     ? createReadStream(filePath).pipe(createGunzip())
@@ -14,11 +26,12 @@ export async function* tsvRows(filePath: string): AsyncGenerator<Record<string, 
   let headers: string[] | null = null;
   for await (const line of lines) {
     if (!line.trim()) continue;
-    if (!headers) { headers = splitTsv(line); continue; }
+    if (!headers) {
+      headers = splitTsv(line);
+      continue;
+    }
     const values = splitTsv(line);
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => { row[h] = values[i] ?? ""; });
-    yield row;
+    yield rowFromValues(headers, values);
   }
 }
 

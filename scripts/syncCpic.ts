@@ -3,23 +3,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fetchWithRetry } from "./fetchUtils";
+import { parseForceOption, runCli } from "./scriptUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = path.join(repoRoot, ".evidence-cache", "cpic");
 const apiBase = "https://api.cpicpgx.org/v1";
-
-interface Options {
-  force: boolean;
-}
-
-function parseOptions(argv: string[]): Options {
-  const options: Options = { force: false };
-  for (const arg of argv) {
-    if (arg === "--force") { options.force = true; continue; }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
-}
 
 interface RawCpicVariant {
   rsid: string | null;
@@ -85,7 +73,7 @@ async function fetchVariants(): Promise<RawCpicVariant[]> {
 }
 
 async function main(): Promise<void> {
-  const options = parseOptions(process.argv.slice(2));
+  const options = parseForceOption(process.argv.slice(2));
 
   const variantsFile = path.join(cacheDir, "variants.json");
   const pairsFile = path.join(cacheDir, "pairs.json");
@@ -127,9 +115,4 @@ async function main(): Promise<void> {
   console.log(`Wrote CPIC cache to ${path.relative(repoRoot, cacheDir)}/`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
-}
+runCli(import.meta.url, main);

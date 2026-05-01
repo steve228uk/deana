@@ -3,7 +3,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { unzipSync } from "fflate";
-import { splitTsv } from "./tsvUtils";
+import { findZipTextEntry, parseForceOption, runCli } from "./scriptUtils";
+import { rowFromValues, splitTsv } from "./tsvUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = path.join(repoRoot, ".evidence-cache", "pharmgkb");
@@ -11,19 +12,6 @@ const downloadUrl = "https://api.pharmgkb.org/v1/download/file/data/clinicalAnno
 
 // Include levels with robust clinical evidence; exclude 3/4 (case reports, weak associations)
 const INCLUDED_LEVELS = new Set(["1A", "1B", "2A", "2B"]);
-
-interface Options {
-  force: boolean;
-}
-
-function parseOptions(argv: string[]): Options {
-  const options: Options = { force: false };
-  for (const arg of argv) {
-    if (arg === "--force") { options.force = true; continue; }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
-}
 
 interface PharmGkbAnnotation {
   variantId: string;
@@ -46,8 +34,7 @@ function parseClinicalAnnotationsTsv(text: string): PharmGkbAnnotation[] {
 
   for (let i = 1; i < lines.length; i++) {
     const values = splitTsv(lines[i]);
-    const row: Record<string, string> = {};
-    headers.forEach((h, idx) => { row[h] = values[idx] ?? ""; });
+    const row = rowFromValues(headers, values);
 
     const level = row["Level of Evidence"] ?? "";
     if (!INCLUDED_LEVELS.has(level)) continue;
@@ -78,7 +65,7 @@ function parseClinicalAnnotationsTsv(text: string): PharmGkbAnnotation[] {
 }
 
 async function main(): Promise<void> {
-  const options = parseOptions(process.argv.slice(2));
+  const options = parseForceOption(process.argv.slice(2));
   const annotationsFile = path.join(cacheDir, "annotations.json");
 
   if (!options.force && existsSync(annotationsFile)) {
@@ -96,24 +83,17 @@ async function main(): Promise<void> {
 
   const bytes = new Uint8Array(await response.arrayBuffer());
   const entries = unzipSync(bytes);
-
-  const tsvEntry = Object.entries(entries).find(([name]) =>
-    /clinical.?annotations?/i.test(name) && /\.(tsv|txt)$/i.test(name),
+  const tsvBytes = findZipTextEntry(
+    entries,
+    /clinical.?annotations?/i,
+    "PharmGKB ZIP did not contain a clinical annotations TSV file.",
   );
-  if (!tsvEntry) {
-    throw new Error("PharmGKB ZIP did not contain a clinical annotations TSV file.");
-  }
 
-  const text = new TextDecoder().decode(tsvEntry[1]);
+  const text = new TextDecoder().decode(tsvBytes);
   const annotations = parseClinicalAnnotationsTsv(text);
 
   await writeFile(annotationsFile, `${JSON.stringify(annotations, null, 2)}\n`);
   console.log(`PharmGKB: ${annotations.length.toLocaleString()} level 1A–2B annotations written to ${path.relative(repoRoot, annotationsFile)}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
-}
+runCli(import.meta.url, main);

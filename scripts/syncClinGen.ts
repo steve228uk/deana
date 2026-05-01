@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { splitCsv } from "./tsvUtils";
+import { parseForceOption, runCli } from "./scriptUtils";
+import { rowFromValues, splitCsv } from "./tsvUtils";
 import { CLINGEN_GENE_DISEASE_VALIDITY_CSV } from "../src/lib/clingen/endpoints";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,19 +13,6 @@ const downloadUrl = CLINGEN_GENE_DISEASE_VALIDITY_CSV;
 
 // Only include classifications with meaningful positive evidence
 const INCLUDED_CLASSIFICATIONS = new Set(["Definitive", "Strong", "Moderate"]);
-
-interface Options {
-  force: boolean;
-}
-
-function parseOptions(argv: string[]): Options {
-  const options: Options = { force: false };
-  for (const arg of argv) {
-    if (arg === "--force") { options.force = true; continue; }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
-}
 
 export interface ClinGenClassification {
   gene: string;
@@ -36,7 +24,7 @@ export interface ClinGenClassification {
 
 function parseClinGenCsv(text: string): ClinGenClassification[] {
   // Strip UTF-8 BOM if present
-  const clean = text.startsWith("﻿") ? text.slice(1) : text;
+  const clean = text.startsWith("\uFEFF") ? text.slice(1) : text;
   const lines = clean.split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) {
     console.warn(`ClinGen: response has ${lines.length} line(s) — first 500 chars:\n${text.slice(0, 500)}`);
@@ -51,8 +39,7 @@ function parseClinGenCsv(text: string): ClinGenClassification[] {
 
   for (let i = 1; i < lines.length; i++) {
     const values = splitCsv(lines[i]);
-    const row: Record<string, string> = {};
-    headers.forEach((h, idx) => { row[h.toUpperCase()] = values[idx] ?? ""; });
+    const row = rowFromValues(headers, values, (header) => header.toUpperCase());
 
     const classification = row["CLASSIFICATION"] ?? row["FINAL CLASSIFICATION"] ?? "";
     classificationValues.add(classification);
@@ -76,7 +63,7 @@ function parseClinGenCsv(text: string): ClinGenClassification[] {
 }
 
 async function main(): Promise<void> {
-  const options = parseOptions(process.argv.slice(2));
+  const options = parseForceOption(process.argv.slice(2));
   const outputFile = path.join(cacheDir, "gene_validity.json");
 
   if (!options.force && existsSync(outputFile)) {
@@ -108,9 +95,4 @@ async function main(): Promise<void> {
   console.log(`ClinGen: ${classifications.length.toLocaleString()} Definitive/Strong/Moderate classifications written to ${path.relative(repoRoot, outputFile)}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
-}
+runCli(import.meta.url, main);
