@@ -224,6 +224,19 @@ describe("parseGeneDiseaseValidityText", () => {
     const records = parseGeneDiseaseValidityText(csv);
     expect(records).toHaveLength(1);
   });
+
+  it("skips separator rows from live ClinGen CSV exports", () => {
+    const csv = [
+      "GENE SYMBOL,GENE ID (HGNC),DISEASE LABEL,DISEASE ID (MONDO),MOI,SOP,CLASSIFICATION,ONLINE REPORT,CLASSIFICATION DATE,GCEP",
+      "+++++++++++,++++++++++++++,+++++++++++++,++++++++++++++++++,+++++++++,+++++++++,++++++++++++++,+++++++++++++,+++++++++++++++++++,+++++++++++++++++++",
+      "BRCA1,HGNC:1100,Test Disease,MONDO:0000001,AD,SOP8,Definitive,https://example.com,2020-01-01,GCEP1",
+    ].join("\n");
+
+    const records = parseGeneDiseaseValidityText(csv);
+
+    expect(records).toHaveLength(1);
+    expect(records[0].geneSymbol).toBe("BRCA1");
+  });
 });
 
 // --- importDosageSensitivity ---
@@ -321,6 +334,41 @@ describe("parseClinicalActionabilityJson", () => {
     const wrapped = { results: json };
     const records = parseClinicalActionabilityJson(wrapped, "Adult");
     expect(records.length).toBe(3);
+  });
+
+  it("handles current ClinGen columns/rows table responses", () => {
+    const json = {
+      columns: [
+        "docId",
+        "geneOrVariant",
+        "disease",
+        "contextIri",
+        "outcome",
+        "intervention",
+        "overall",
+      ],
+      rows: [
+        [
+          "AC1084",
+          "CYP27A1",
+          "Cerebrotendinous xanthomatosis",
+          "https://actionability.clinicalgenome.org/ac/Adult/api/sepio/doc/AC1084",
+          "Morbidity and mortality resulting from progressive lipid accumulation",
+          "Referral to specialist for treatment including bile acids",
+          "10CN",
+        ],
+      ],
+    };
+
+    const records = parseClinicalActionabilityJson(json, "Adult");
+
+    expect(records).toHaveLength(1);
+    expect(records[0].geneSymbol).toBe("CYP27A1");
+    expect(records[0].diseaseLabel).toBe("Cerebrotendinous xanthomatosis");
+    expect(records[0].reportUrl).toBe(
+      "https://actionability.clinicalgenome.org/ac/Adult/api/sepio/doc/AC1084",
+    );
+    expect(records[0].raw).toHaveProperty("overall", "10CN");
   });
 
   it("sets context correctly", () => {

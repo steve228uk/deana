@@ -19,6 +19,16 @@ function extractRows(json: unknown): Record<string, unknown>[] {
     const obj = json as Record<string, unknown>;
     if (Array.isArray(obj.data)) return obj.data as Record<string, unknown>[];
     if (Array.isArray(obj.results)) return obj.results as Record<string, unknown>[];
+    if (Array.isArray(obj.columns) && Array.isArray(obj.rows)) {
+      const columns = obj.columns.map((column) => String(column));
+      return obj.rows
+        .filter((row): row is unknown[] => Array.isArray(row))
+        .map((row) =>
+          Object.fromEntries(
+            columns.map((column, index) => [column, row[index]]),
+          ),
+        );
+    }
   }
   return [];
 }
@@ -39,7 +49,8 @@ function normaliseRow(
       str(raw["gene"]) ??
       str(raw["geneSymbol"]) ??
       str(raw["gene_symbol"]) ??
-      str(raw["hgnc_symbol"]),
+      str(raw["hgnc_symbol"]) ??
+      str(raw["geneOrVariant"]),
     hgncId: normaliseHgncId(str(raw["hgncId"] ?? raw["hgnc_id"] ?? raw["gene_id"])),
     diseaseLabel:
       str(raw["disease"]) ??
@@ -53,11 +64,18 @@ function normaliseRow(
       str(raw["reportUrl"]) ??
       str(raw["report_url"]) ??
       str(raw["url"]) ??
-      str(raw["report"]),
+      str(raw["report"]) ??
+      str(raw["contextIri"]),
     actionabilityAssertions: splitListField(
-      str(raw["assertions"] ?? raw["actionability_assertions"] ?? raw["assertion"]),
+      str(
+        raw["assertions"] ??
+          raw["actionability_assertions"] ??
+          raw["assertion"] ??
+          raw["outcome"] ??
+          raw["intervention"],
+      ),
     ),
-    overallScore: str(raw["overallScore"] ?? raw["overall_score"] ?? raw["score"]),
+    overallScore: str(raw["overallScore"] ?? raw["overall_score"] ?? raw["score"] ?? raw["overall"]),
     sourceRaw: raw,
   };
 }
