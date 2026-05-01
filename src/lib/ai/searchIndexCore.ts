@@ -1,5 +1,5 @@
-import { create, insertMultiple, search, type AnyOrama } from "@orama/orama";
-import { pluginQPS } from "@orama/plugin-qps";
+import MiniSearch from "minisearch";
+import type { SearchResult } from "minisearch";
 import {
   deleteSearchIndexCache,
   loadSearchIndexCache,
@@ -27,8 +27,8 @@ interface LightEntry {
   tagValues: string[];
   markers: string;
   body: string;
-  // Sort fields are stored with the document but kept outside the schema so
-  // Orama does not build inverted index entries for them, reducing memory.
+  // Sort fields stored with the document but outside the search fields,
+  // so MiniSearch does not build index entries for them.
   sortSeverity: number;
   sortEvidence: number;
   sortPublications: number;
@@ -78,37 +78,17 @@ export type WorkerResponse =
   | { type: "clearIndex"; requestId: string }
   | { type: "error"; requestId: string; error: string };
 
-const indexes = new Map<string, AnyOrama>();
+const indexes = new Map<string, MiniSearch<LightEntry>>();
 const inFlight = new Map<string, Promise<void>>();
 
-// Version 4: switched to LightEntry[] cache format (avoids loadOrama/saveOrama
-// 2× memory spike) and added QPS plugin + removed sort fields from schema.
-const SEARCH_INDEX_CACHE_VERSION = 4;
-const SEARCH_INDEX_INSERT_BATCH_SIZE = 100;
+// Version 5: replaced Orama with MiniSearch and added evidence-tier quality filter.
+const SEARCH_INDEX_CACHE_VERSION = 5;
+const SEARCH_INDEX_INSERT_BATCH_SIZE = 500;
 
-// Only searchable and filterable fields go in the schema. Sort-only fields
-// (sortSeverity, sortEvidence, sortPublications, sortAlphabetical) are
-// inserted as extra document properties — Orama stores them but does not
-// build inverted index entries for them, cutting index memory significantly.
-const SEARCH_INDEX_SCHEMA = {
-  id: "string",
-  category: "string",
-  title: "string",
-  genes: "string",
-  topics: "string",
-  conditions: "string",
-  rsids: "string",
-  evidenceTier: "string",
-  sourceNames: "string[]",
-  significance: "string",
-  repute: "string",
-  coverage: "string",
-  publicationBucket: "string",
-  geneValues: "string[]",
-  tagValues: "string[]",
-  markers: "string",
-  body: "string",
-} as const;
+// Only index entries with meaningful evidence quality. preview/supplementary entries
+// are not surfaced by AI search, so excluding them keeps the index small enough for iOS.
+const INDEXED_EVIDENCE_TIERS = new Set<EvidenceTier>(["high", "moderate", "emerging"]);
+
 const SEARCH_INDEX_FIELD_BOOSTS = {
   rsids: 8,
   markers: 7,
@@ -118,6 +98,7 @@ const SEARCH_INDEX_FIELD_BOOSTS = {
   topics: 3,
   body: 2,
 } as const;
+
 const EXPLORER_ARRAY_FILTER_FIELDS: Array<[
   "evidence" | "significance" | "repute" | "coverage" | "publications" | "gene" | "tag",
   keyof LightEntry,
@@ -131,20 +112,17 @@ const EXPLORER_ARRAY_FILTER_FIELDS: Array<[
   ["tag", "tagValues"],
 ];
 
-function createSearchIndex(): AnyOrama {
-  return create({
-    schema: SEARCH_INDEX_SCHEMA,
-    plugins: [pluginQPS()],
+function createSearchIndex(): MiniSearch<LightEntry> {
+  return new MiniSearch<LightEntry>({
+    idField: "id",
+    fields: ["title", "genes", "topics", "conditions", "rsids", "markers", "body"],
+    storeFields: [
+      "id", "category", "evidenceTier", "genes", "topics", "conditions", "rsids",
+      "title", "sortSeverity", "sortEvidence", "sortPublications", "sortAlphabetical",
+      "significance", "repute", "coverage", "publicationBucket",
+      "geneValues", "tagValues", "sourceNames",
+    ],
   });
-}
-
-function fullTextSearchParams(term: string) {
-  return {
-    term,
-    mode: "fulltext" as const,
-    exact: false,
-    boost: SEARCH_INDEX_FIELD_BOOSTS,
-  };
 }
 
 function toLightEntry(entry: StoredReportEntry): LightEntry {
@@ -189,66 +167,71 @@ function toLightEntry(entry: StoredReportEntry): LightEntry {
   };
 }
 
-function toSearchCandidate(doc: LightEntry): SearchCandidate {
+function toSearchCandidate(result: SearchResult): SearchCandidate {
   return {
-    id: doc.id,
-    category: doc.category,
-    evidenceTier: (doc.evidenceTier as EvidenceTier) ?? "supplementary",
-    genes: doc.genes,
-    topics: doc.topics,
-    conditions: doc.conditions,
-    rsids: doc.rsids,
-    title: doc.title,
-    sortSeverity: doc.sortSeverity,
-    sortEvidence: doc.sortEvidence,
+    id: result.id as string,
+    category: result.category as string,
+    evidenceTier: (result.evidenceTier as EvidenceTier) ?? "supplementary",
+    genes: result.genes as string,
+    topics: result.topics as string,
+    conditions: result.conditions as string,
+    rsids: result.rsids as string,
+    title: result.title as string,
+    sortSeverity: result.sortSeverity as number,
+    sortEvidence: result.sortEvidence as number,
   };
 }
 
-async function insertBatched(index: AnyOrama, documents: LightEntry[]): Promise<void> {
+function insertBatched(index: MiniSearch<LightEntry>, documents: LightEntry[]): void {
   for (let i = 0; i < documents.length; i += SEARCH_INDEX_INSERT_BATCH_SIZE) {
-    await insertMultiple(index, documents.slice(i, i + SEARCH_INDEX_INSERT_BATCH_SIZE));
+    index.addAll(documents.slice(i, i + SEARCH_INDEX_INSERT_BATCH_SIZE));
   }
 }
 
-async function searchDocs(index: AnyOrama, terms: string[], limit: number): Promise<Array<{ document: LightEntry }>> {
+function searchDocs(index: MiniSearch<LightEntry>, terms: string[], limit: number): SearchResult[] {
   if (terms.length === 0) return [];
   const query = terms.join(" ").trim();
   if (!query) return [];
-
-  const result = await search(index, {
-    ...fullTextSearchParams(query),
-    tolerance: 1,
-    limit,
-  });
-
-  return result.hits as unknown as Array<{ document: LightEntry }>;
+  return index.search(query, {
+    boost: SEARCH_INDEX_FIELD_BOOSTS,
+    fuzzy: 0.2,
+    prefix: true,
+    combineWith: "OR",
+  }).slice(0, limit);
 }
 
-function explorerWhere(category: StoredReportEntry["category"], filters: ExplorerFilters): Record<string, unknown> {
-  const where: Record<string, unknown> = {
-    category,
+function explorerFilter(category: StoredReportEntry["category"], filters: ExplorerFilters) {
+  return (result: SearchResult): boolean => {
+    if ((result.category as string) !== category) return false;
+    if (filters.source && !(result.sourceNames as string[]).includes(filters.source)) return false;
+    for (const [filterKey, documentField] of EXPLORER_ARRAY_FILTER_FIELDS) {
+      const values = filters[filterKey];
+      if (values.length === 0) continue;
+      const docValue = result[documentField as string];
+      if (Array.isArray(docValue)) {
+        if (!values.some((v) => (docValue as string[]).includes(v))) return false;
+      } else if (!values.includes(docValue as string)) return false;
+    }
+    return true;
   };
-
-  if (filters.source) where.sourceNames = filters.source;
-  for (const [filterKey, documentField] of EXPLORER_ARRAY_FILTER_FIELDS) {
-    const values = filters[filterKey];
-    if (values.length > 0) where[documentField] = values;
-  }
-
-  return where;
 }
 
-function compareExplorerDocuments(left: LightEntry, right: LightEntry, sort: ExplorerFilters["sort"]): number {
+function compareExplorerDocuments(left: SearchResult, right: SearchResult, sort: ExplorerFilters["sort"]): number {
   switch (sort) {
     case "alphabetical":
-      return left.sortAlphabetical.localeCompare(right.sortAlphabetical);
+      return (left.sortAlphabetical as string).localeCompare(right.sortAlphabetical as string);
     case "publications":
-      return right.sortPublications - left.sortPublications || left.title.localeCompare(right.title);
+      return (right.sortPublications as number) - (left.sortPublications as number)
+        || (left.title as string).localeCompare(right.title as string);
     case "evidence":
-      return right.sortEvidence - left.sortEvidence || right.sortSeverity - left.sortSeverity || left.title.localeCompare(right.title);
+      return (right.sortEvidence as number) - (left.sortEvidence as number)
+        || (right.sortSeverity as number) - (left.sortSeverity as number)
+        || (left.title as string).localeCompare(right.title as string);
     case "severity":
     default:
-      return right.sortSeverity - left.sortSeverity || right.sortEvidence - left.sortEvidence || left.title.localeCompare(right.title);
+      return (right.sortSeverity as number) - (left.sortSeverity as number)
+        || (right.sortEvidence as number) - (left.sortEvidence as number)
+        || (left.title as string).localeCompare(right.title as string);
   }
 }
 
@@ -259,15 +242,12 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
   const job = (async () => {
     const index = createSearchIndex();
 
-    // Cache (v4+) stores LightEntry[] directly. This avoids the 2× memory
-    // spike that occurred when saveOrama/loadOrama held both the serialised
-    // JSON blob and the live index structure in memory simultaneously.
     const cached = await loadSearchIndexCache(profileId, SEARCH_INDEX_CACHE_VERSION);
     if (cached) {
       try {
         const documents = cached.rawData as LightEntry[];
         if (Array.isArray(documents) && documents.length > 0) {
-          await insertBatched(index, documents);
+          insertBatched(index, documents);
           indexes.set(profileId, index);
           return;
         }
@@ -282,8 +262,6 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
       return;
     }
 
-    // Convert and insert in batches so we never hold a full parallel LightEntry[]
-    // alongside source.entries — only one small batch lives at a time.
     const allDocuments: LightEntry[] = [];
     const seenIds = new Set<string>();
     let batch: LightEntry[] = [];
@@ -291,16 +269,17 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
     for (const entry of source.entries) {
       if (seenIds.has(entry.id)) continue;
       seenIds.add(entry.id);
+      if (!INDEXED_EVIDENCE_TIERS.has(entry.evidenceTier)) continue;
       const doc = toLightEntry(entry);
       allDocuments.push(doc);
       batch.push(doc);
       if (batch.length >= SEARCH_INDEX_INSERT_BATCH_SIZE) {
-        await insertMultiple(index, batch);
+        index.addAll(batch);
         batch = [];
       }
     }
     if (batch.length > 0) {
-      await insertMultiple(index, batch);
+      index.addAll(batch);
     }
 
     await saveSearchIndexCache({
@@ -320,16 +299,13 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
 export async function queryCandidateIds(profileId: string, terms: string[], limit = 50): Promise<string[]> {
   const index = indexes.get(profileId);
   if (!index) return [];
-  const hits = await searchDocs(index, terms, limit);
-  return hits.map((result) => result.document.id);
+  return searchDocs(index, terms, limit).map((result) => result.id as string);
 }
 
 export async function searchWithFields(profileId: string, terms: string[], limit: number): Promise<SearchCandidate[]> {
   const index = indexes.get(profileId);
   if (!index) return [];
-  const hits = await searchDocs(index, terms, limit);
-
-  return hits.map((result) => toSearchCandidate(result.document));
+  return searchDocs(index, terms, limit).map(toSearchCandidate);
 }
 
 export async function searchExplorerEntryIds({
@@ -343,35 +319,23 @@ export async function searchExplorerEntryIds({
   const query = filters.q.trim();
   if (!index || !query) return { ids: [], count: 0 };
 
-  const searchParams = {
-    ...fullTextSearchParams(query),
-    tolerance: 1,
-    threshold: 0,
-    where: explorerWhere(category, filters),
-  } as const;
-
-  // Orama narrows the text match set; Explorer's selected sort remains authoritative for visible ordering.
-  const preflight = await search(index, {
-    ...searchParams,
-    preflight: true,
-  });
-
-  if (preflight.count === 0) return { ids: [], count: 0 };
-
-  const result = await search(index, {
-    ...searchParams,
-    limit: preflight.count,
-  });
-
-  const hits = (result.hits as unknown as Array<{ document: LightEntry; score: number }>)
+  const hits = index
+    .search(query, {
+      boost: SEARCH_INDEX_FIELD_BOOSTS,
+      fuzzy: 0.2,
+      prefix: true,
+      combineWith: "OR",
+      filter: explorerFilter(category, filters),
+    })
     .filter((hit) => hit.score > 0)
     .sort((left, right) =>
-      compareExplorerDocuments(left.document, right.document, filters.sort) ||
-      right.score - left.score,
+      compareExplorerDocuments(left, right, filters.sort) || right.score - left.score,
     );
 
+  if (hits.length === 0) return { ids: [], count: 0 };
+
   return {
-    ids: hits.slice(offset, offset + limit).map((hit) => hit.document.id),
+    ids: hits.slice(offset, offset + limit).map((hit) => hit.id as string),
     count: hits.length,
   };
 }
