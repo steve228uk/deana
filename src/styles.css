@@ -1422,6 +1422,28 @@ a { color: inherit; }
     overflow: visible;
   }
   .dn-ai-thread-list.is-open { display: block; }
+  .dn-ai-thread-list__header {
+    min-height: 78px;
+    padding: 14px 18px;
+  }
+  .dn-ai-thread-list__title { gap: 0; }
+  .dn-ai-thread-list__header h2 { font-size: 1.45rem; }
+  .dn-ai-thread-list__items {
+    gap: 6px;
+    padding: 10px 18px;
+  }
+  .dn-ai-thread {
+    padding: 6px 8px;
+  }
+  .dn-ai-thread > button:first-child {
+    gap: 3px;
+    padding: 2px 4px;
+  }
+  .dn-ai-thread-note {
+    margin: 8px 18px 0;
+    padding: 12px 36px 12px 12px;
+    border-radius: 12px;
+  }
   .dn-ai-chat-pane {
     display: none;
     height: auto;

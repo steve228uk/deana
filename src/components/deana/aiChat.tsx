@@ -76,6 +76,27 @@ const entryLinkPrefix = "deana://entry/";
 const entryLinkPattern = new RegExp(`${entryLinkPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[A-Za-z0-9_%~-]+`, "g");
 const showDebugModelName = import.meta.env.DEV;
 const noSavedReportFindingsMessage = "No saved report findings matched this local browser search.";
+const compactAiLayoutQuery = "(max-width: 980px)";
+
+function mediaQueryMatches(query: string): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => mediaQueryMatches(query));
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mediaQuery = window.matchMedia(query);
+    const updateMatches = () => setMatches(mediaQuery.matches);
+
+    updateMatches();
+    mediaQuery.addEventListener("change", updateMatches);
+    return () => mediaQuery.removeEventListener("change", updateMatches);
+  }, [query]);
+
+  return matches;
+}
 
 function makeId(prefix: string): string {
   return `${prefix}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -358,6 +379,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const [deleteThreadError, setDeleteThreadError] = useState<string | null>(null);
   const [panel, setPanel] = useState<ChatPanel | null>(null);
   const [resolvedEntryTitles, setResolvedEntryTitles] = useState<Record<string, string>>({});
+  const canCollapseThreadPanel = !useMediaQuery(compactAiLayoutQuery);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const setMessagesRef = useRef<((messages: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
@@ -1004,7 +1026,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
 
   return (
     <section
-      className={`dn-ai-screen ${isThreadPanelCollapsed ? "is-thread-collapsed" : ""} ${hasConsented ? "" : "is-consent-pending"}`}
+      className={`dn-ai-screen ${canCollapseThreadPanel && isThreadPanelCollapsed ? "is-thread-collapsed" : ""} ${hasConsented ? "" : "is-consent-pending"}`}
       aria-labelledby="ai-chat-title"
     >
       <h1 id="ai-chat-title" className="dn-screen-reader-text">AI chat</h1>
@@ -1013,10 +1035,13 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
           threads={threads}
           activeThreadId={activeThread?.id ?? null}
           isOpen={isThreadListOpen}
-          isCollapsed={isThreadPanelCollapsed}
+          isCollapsed={canCollapseThreadPanel && isThreadPanelCollapsed}
+          canCollapse={canCollapseThreadPanel}
           onNewThread={() => startDraftThread()}
           onSelect={(thread) => void selectThread(thread)}
-          onCollapse={() => setIsThreadPanelCollapsed(true)}
+          onCollapse={() => {
+            if (canCollapseThreadPanel) setIsThreadPanelCollapsed(true);
+          }}
           onExpand={() => setIsThreadPanelCollapsed(false)}
           isPrivacyNoteVisible={isThreadPrivacyNoteVisible}
           onDismissPrivacyNote={() => void dismissThreadPrivacyNote()}
@@ -1200,6 +1225,7 @@ function ThreadList({
   activeThreadId,
   isOpen,
   isCollapsed,
+  canCollapse,
   isPrivacyNoteVisible,
   onNewThread,
   onSelect,
@@ -1213,6 +1239,7 @@ function ThreadList({
   activeThreadId: string | null;
   isOpen: boolean;
   isCollapsed: boolean;
+  canCollapse: boolean;
   isPrivacyNoteVisible: boolean;
   onNewThread: () => void;
   onSelect: (thread: StoredChatThread) => void;
@@ -1239,15 +1266,17 @@ function ThreadList({
         <>
       <div className="dn-ai-thread-list__header">
         <div className="dn-ai-thread-list__title">
-          <button
-            className="dn-icon-button dn-ai-thread-collapse"
-            aria-label="Collapse chats"
-            aria-expanded="true"
-            type="button"
-            onClick={onCollapse}
-          >
-            <Icon name="chevronLeft" />
-          </button>
+          {canCollapse ? (
+            <button
+              className="dn-icon-button dn-ai-thread-collapse"
+              aria-label="Collapse chats"
+              aria-expanded="true"
+              type="button"
+              onClick={onCollapse}
+            >
+              <Icon name="chevronLeft" />
+            </button>
+          ) : null}
           <h2>Chats</h2>
         </div>
         <button className="dn-icon-button dn-ai-compose-button" type="button" onClick={onNewThread} aria-label="New chat">
