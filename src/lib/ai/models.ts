@@ -5,3 +5,8 @@ export const DEANA_MODELS = {
 } as const;
 
 export const TITLE_GENERATION_MODELS = [DEANA_MODELS.cheap] as const;
+
+export function chatModelFromEnv(env: Record<string, string | undefined>): string {
+  const model = env.DEANA_LLM_MODEL?.trim();
+  return model || DEANA_MODELS.default;
+}

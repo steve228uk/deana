@@ -9,6 +9,8 @@ import type { ExplorerFilters } from "../../lib/explorer";
 import {
   buildChatContext,
   CHAT_CONSENT_VERSION,
+  CHAT_SEARCH_TOOL_NAME,
+  CHAT_SEARCH_TOOL_PART_TYPE,
   extractChatFollowUps,
   formatChatTitle,
   mergeChatFindings,
@@ -72,6 +74,7 @@ interface ParsedChatMessage {
 
 const entryLinkPrefix = "deana://entry/";
 const entryLinkPattern = new RegExp(`${entryLinkPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[A-Za-z0-9_%~-]+`, "g");
+const showDebugModelName = import.meta.env.DEV;
 const noSavedReportFindingsMessage = "No saved report findings matched this local browser search.";
 
 function makeId(prefix: string): string {
@@ -99,7 +102,7 @@ function displayMessageText(message: UIMessage): string {
 }
 
 function isSettledSearchToolPart(part: UIMessage["parts"][number]): boolean {
-  return part.type === "tool-searchReportFindings"
+  return part.type === CHAT_SEARCH_TOOL_PART_TYPE
     && "state" in part
     && (part.state === "output-available" || part.state === "output-error");
 }
@@ -653,7 +656,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     transport,
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     onToolCall: async ({ toolCall }) => {
-      if (toolCall.dynamic || toolCall.toolName !== "searchReportFindings") return;
+      if (toolCall.dynamic || toolCall.toolName !== CHAT_SEARCH_TOOL_NAME) return;
 
       setSearchStatus({ status: "searching" });
 
@@ -666,7 +669,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         });
         applyChatRetrieval(retrieval);
         void addToolOutput({
-          tool: "searchReportFindings",
+          tool: CHAT_SEARCH_TOOL_NAME,
           toolCallId: toolCall.toolCallId,
           output: {
             findings: retrieval.findings,
@@ -679,7 +682,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         const message = error instanceof Error ? error.message : "AI report search is unavailable right now.";
         setSearchStatus({ status: "error", message });
         void addToolOutput({
-          tool: "searchReportFindings",
+          tool: CHAT_SEARCH_TOOL_NAME,
           toolCallId: toolCall.toolCallId,
           state: "output-error",
           errorText: message,
@@ -1055,7 +1058,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
                   key={message.id}
                   role={message.role}
                   content={displayTextForMessage(message)}
-                  modelName={messageModel(message)}
+                  modelName={showDebugModelName ? messageModel(message) : null}
                   trace={traceByMessageRef.current[message.id]}
                   interpretedFindingCount={contextFindingsByMessageRef.current[message.id]?.length}
                   reasoningSummary={messageReasoning(message) ?? reasoningByMessageRef.current[message.id] ?? null}
@@ -1545,7 +1548,7 @@ const ChatMessage = memo(function ChatMessage({
 
   return (
     <article className={`dn-ai-message dn-ai-message--${role}`}>
-      {role === "assistant" && modelName ? <p className="dn-ai-model-name">Model: {modelName}</p> : null}
+      {showDebugModelName && role === "assistant" && modelName ? <p className="dn-ai-model-name">Model: {modelName}</p> : null}
       {hasReasoning && role === "assistant" ? <ModelReasoning reasoning={reasoningSummary ?? ""} /> : null}
       {content ? (
         <ReactMarkdown

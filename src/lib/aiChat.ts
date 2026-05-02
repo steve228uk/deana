@@ -7,8 +7,11 @@ export const CHAT_CONSENT_VERSION = 1;
 export const MAX_CHAT_CONTEXT_FINDINGS = 18;
 export const MAX_CHAT_SEARCH_RESULTS = 8;
 export const MAX_CHAT_FOLLOW_UPS = 3;
+export const CHAT_SEARCH_TOOL_NAME = "searchReportFindings";
+export const CHAT_SEARCH_TOOL_PART_TYPE = `tool-${CHAT_SEARCH_TOOL_NAME}`;
 const MAX_CHAT_FOLLOW_UP_TITLE_LENGTH = 44;
 const MAX_CHAT_FOLLOW_UP_BODY_LENGTH = 220;
+const openAiReasoningModelPattern = /^openai\/(?:gpt-5(?:[.-]|$)|o[1-9](?:[.-]|$))/;
 
 export interface ChatConsent {
   accepted: true;
@@ -107,7 +110,7 @@ export function extractChatFollowUps(content: string): { content: string; follow
 
 export function buildGatewayProviderOptions(model: string, includeThoughts = false) {
   const isGeminiGatewayModel = model.startsWith("google/gemini-");
-  const isOpenAiGatewayModel = model.startsWith("openai/");
+  const isOpenAiReasoningGatewayModel = openAiReasoningModelPattern.test(model);
 
   return {
     // Gemma routes use only gateway privacy flags; no Gemini/OpenAI provider options.
@@ -119,7 +122,7 @@ export function buildGatewayProviderOptions(model: string, includeThoughts = fal
           },
         }
       : {}),
-    ...(isOpenAiGatewayModel
+    ...(isOpenAiReasoningGatewayModel
       ? {
           openai: {
             reasoningEffort: "low",

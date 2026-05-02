@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, trimMessagesToRecentWindow } from "./chat.js";
+import { chatModelFromEnv, DEANA_MODELS } from "../src/lib/ai/models.js";
+import { CHAT_SEARCH_TOOL_PART_TYPE } from "../src/lib/aiChat.js";
+import { buildSystemPrompt, shouldRequireReportSearch, trimMessagesToRecentWindow } from "./chat.js";
+
+type ChatContext = Parameters<typeof buildSystemPrompt>[0];
 
 function buildMessages(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -7,6 +11,39 @@ function buildMessages(count: number) {
     role: index % 2 === 0 ? "user" : "assistant",
     parts: [{ type: "text", text: `message-${index}` }],
   }));
+}
+
+function buildChatContext(): ChatContext {
+  return {
+    contextVersion: 1,
+    currentTab: "ai",
+    activeFilters: {
+      q: "",
+      source: "",
+      evidence: [],
+      significance: [],
+      repute: [],
+      coverage: [],
+      publications: [],
+      gene: [],
+      tag: [],
+      sort: "relevance",
+    },
+    report: {
+      provider: "23andMe",
+      build: "GRCh37",
+      markerCount: 10,
+      coverageScore: 90,
+      evidencePackVersion: "test-pack",
+      evidenceStatus: "complete",
+      evidenceMatchedFindings: 1,
+      localEvidenceEntryMatches: 1,
+      warnings: [],
+      categoryCounts: [],
+    },
+    selectedFindingId: null,
+    findings: [],
+  };
 }
 
 describe("trimMessagesToRecentWindow", () => {
@@ -39,38 +76,45 @@ describe("trimMessagesToRecentWindow", () => {
   });
 });
 
+describe("chatModelFromEnv", () => {
+  it("uses the configured chat model when present", () => {
+    expect(chatModelFromEnv({ DEANA_LLM_MODEL: "openai/gpt-4o-mini" })).toBe("openai/gpt-4o-mini");
+  });
+
+  it("falls back to the default chat model for missing or empty values", () => {
+    expect(chatModelFromEnv({})).toBe(DEANA_MODELS.default);
+    expect(chatModelFromEnv({ DEANA_LLM_MODEL: " " })).toBe(DEANA_MODELS.default);
+  });
+});
+
+describe("shouldRequireReportSearch", () => {
+  it("requires local search for phenotype lookup questions", () => {
+    expect(shouldRequireReportSearch([
+      { id: "u1", role: "user", parts: [{ type: "text", text: "Will I go bald?" }] },
+    ], buildChatContext())).toBe(true);
+  });
+
+  it("keeps normal text answers for explanation follow-ups", () => {
+    expect(shouldRequireReportSearch([
+      { id: "u1", role: "user", parts: [{ type: "text", text: "What does coverage score mean?" }] },
+    ], buildChatContext())).toBe(false);
+  });
+
+  it("does not require another search while returning completed tool output", () => {
+    expect(shouldRequireReportSearch([
+      { id: "u1", role: "user", parts: [{ type: "text", text: "Will I go bald?" }] },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: CHAT_SEARCH_TOOL_PART_TYPE, state: "output-available", toolCallId: "tool-1", output: { findings: [] } }],
+      },
+    ], buildChatContext())).toBe(false);
+  });
+});
+
 describe("buildSystemPrompt", () => {
   it("keeps follow-up suggestions structured and privacy scoped", () => {
-    const prompt = buildSystemPrompt({
-      contextVersion: 1,
-      currentTab: "ai",
-      activeFilters: {
-        q: "",
-        source: "",
-        evidence: [],
-        significance: [],
-        repute: [],
-        coverage: [],
-        publications: [],
-        gene: [],
-        tag: [],
-        sort: "relevance",
-      },
-      report: {
-        provider: "23andMe",
-        build: "GRCh37",
-        markerCount: 10,
-        coverageScore: 90,
-        evidencePackVersion: "test-pack",
-        evidenceStatus: "complete",
-        evidenceMatchedFindings: 1,
-        localEvidenceEntryMatches: 1,
-        warnings: [],
-        categoryCounts: [],
-      },
-      selectedFindingId: null,
-      findings: [],
-    });
+    const prompt = buildSystemPrompt(buildChatContext());
 
     expect(prompt).toContain("<!-- deana-follow-ups:");
     expect(prompt).toContain("\"title\":\"Short button label\"");
