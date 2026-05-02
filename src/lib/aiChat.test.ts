@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_FILTERS } from "./explorer";
 import {
   buildChatContext,
+  buildGatewayProviderOptions,
   extractChatFollowUps,
   mergeChatFindings,
   MAX_CHAT_CONTEXT_FINDINGS,
   normalizeChatFollowUps,
 } from "./aiChat";
+import { DEANA_MODELS } from "./ai/models";
 import { makeProfileMeta, makeStoredReportEntries } from "../test/fixtures";
 
 describe("buildChatContext", () => {
@@ -153,5 +155,15 @@ describe("normalizeChatFollowUps", () => {
       "Second",
       "Third",
     ]);
+  });
+});
+
+describe("buildGatewayProviderOptions", () => {
+  it("does not send OpenAI reasoning options to non-reasoning OpenAI models", () => {
+    expect(buildGatewayProviderOptions("openai/gpt-4o-mini")).not.toHaveProperty("openai");
+  });
+
+  it("keeps OpenAI reasoning options for reasoning models", () => {
+    expect(buildGatewayProviderOptions(DEANA_MODELS.strongFallback)).toHaveProperty("openai.reasoningEffort", "low");
   });
 });

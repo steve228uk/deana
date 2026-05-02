@@ -1,0 +1,9 @@
+README: This file contains gene-disease validity classifications from ClinGen. See https://clinicalgenome.org for details.
+README: Classification levels: Definitive, Strong, Moderate, Limited, Disputed, Refuted, No Known Disease Relationship.
+,,,,,,,,,
+GENE SYMBOL,GENE ID (HGNC),DISEASE LABEL,DISEASE ID (MONDO),MOI,SOP,CLASSIFICATION,ONLINE REPORT,CLASSIFICATION DATE,GCEP
+BRCA1,HGNC:1100,Hereditary Breast and Ovarian Cancer,MONDO:0011450,AD,SOP8,Definitive,https://search.clinicalgenome.org/kb/gene-validity/8787,2020-01-15,Hereditary Breast and Ovarian Cancer GCEP
+BRCA2,HGNC:1101,Hereditary Breast and Ovarian Cancer,MONDO:0011450,AD,SOP8,Definitive,https://search.clinicalgenome.org/kb/gene-validity/8788,2020-01-15,Hereditary Breast and Ovarian Cancer GCEP
+MUTYH,HGNC:7527,"MUTYH-associated polyposis, autosomal recessive",MONDO:0012563,AR,SOP7,Strong,https://search.clinicalgenome.org/kb/gene-validity/8789,2019-06-10,Colon Cancer GCEP
+TP53,HGNC:11998,Li-Fraumeni syndrome,MONDO:0007959,AD,SOP8,Definitive,https://search.clinicalgenome.org/kb/gene-validity/8790,2021-03-01,Hereditary Cancer GCEP
+NOTCH1,HGNC:7881,Adams-Oliver syndrome,MONDO:0008697,AD,SOP5,Moderate,https://search.clinicalgenome.org/kb/gene-validity/8791,2018-11-20,Cardiology GCEP

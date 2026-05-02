@@ -1,0 +1,4 @@
+#Gene Symbol	Gene ID	cytoBand	Genomic Location	Haploinsufficiency Score	Haploinsufficiency Description	Haploinsufficiency PMID1	Haploinsufficiency PMID2	Haploinsufficiency PMID3	Triplosensitivity Score	Triplosensitivity Description	Triplosensitivity PMID1	Triplosensitivity PMID2	Triplosensitivity PMID3	Date Last Evaluated	Loss phenotype OMIM ID	Triplosensitive phenotype OMIM ID
+MECP2	HGNC:6990	Xq28	chrX:154021573-154097717	3	Sufficient evidence for dosage pathogenicity	17210919	19376936	21937992	3	Sufficient evidence for dosage pathogenicity	16005263	17210919	19376936	2020-05-01	312750	300260
+SHANK3	HGNC:14294	22q13.33	chr22:51114086-51241756	3	Sufficient evidence for dosage pathogenicity	18038310	19376936		2	Some evidence for dosage pathogenicity	25706627			2021-02-15	606230
+NRXN1	HGNC:8008	2p16.3	chr2:50145643-51259674	3	Sufficient evidence for dosage pathogenicity	16712697	17994018	18668040	1	Little evidence for dosage pathogenicity				2019-09-01

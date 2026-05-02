@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "15 6 1 * *"
   workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: 'Force re-download of all cached evidence sources'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -25,6 +30,30 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set cache month
+        run: echo "CACHE_MONTH=$(date +'%Y-%m')" >> "$GITHUB_ENV"
+
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-install-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-install-${{ runner.os }}-
+
+      - name: Cache evidence sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            .evidence-cache/clinvar
+            .evidence-cache/gwas
+            .evidence-cache/snpedia
+            .evidence-cache/pharmgkb
+            .evidence-cache/clingen
+          key: evidence-sources-${{ runner.os }}-${{ env.CACHE_MONTH }}
+          restore-keys: |
+            evidence-sources-${{ runner.os }}-
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -39,16 +68,28 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Update evidence pack
-        run: bun run evidence:update:monthly
+        run: |
+          FORCE="${{ inputs.force_refresh && '--force' || '' }}"
+          bun run scripts/syncEvidenceSources.ts $FORCE
+          bun run scripts/syncCpic.ts $FORCE
+          bun run scripts/syncSnpedia.ts $FORCE
+          bun run scripts/syncDbsnp.ts $FORCE
+          bun run scripts/syncPharmgkb.ts $FORCE
+          bun run scripts/importClinGen.ts $FORCE
+          bun run scripts/buildEvidencePack.ts
 
       - name: Check evidence pack
         run: bun run evidence:check
 
       - name: Run tests
         run: bun run test
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Build
         run: bun run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Open pull request
         uses: peter-evans/create-pull-request@v6

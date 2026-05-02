@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fetchWithRetry } from "./fetchUtils";
+import { fileSha256, runCli, sha256 } from "./scriptUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = path.join(repoRoot, ".evidence-cache", "snpedia");
@@ -81,16 +82,8 @@ function parseOptions(argv: string[]): Options {
   return options;
 }
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-async function fetchJson<T>(params: URLSearchParams): Promise<T> {
-  const response = await fetch(`${apiUrl}?${params.toString()}`);
-  if (!response.ok) {
-    throw new Error(`SNPedia request failed with ${response.status} ${response.statusText}`);
-  }
-  return response.json() as Promise<T>;
+function fetchJson<T>(params: URLSearchParams): Promise<T> {
+  return fetchWithRetry<T>(`${apiUrl}?${params.toString()}`);
 }
 
 async function categoryTitles(category: string, limit: number | null): Promise<string[]> {
@@ -121,19 +114,12 @@ async function categoryTitles(category: string, limit: number | null): Promise<s
   return titles;
 }
 
-function chunks<T>(values: T[], size: number): T[][] {
-  const result: T[][] = [];
-  for (let index = 0; index < values.length; index += size) {
-    result.push(values.slice(index, index + size));
-  }
-  return result;
-}
-
 async function fetchPages(titles: string[], batchSize: number): Promise<CachedSnpediaPage[]> {
   const pages: CachedSnpediaPage[] = [];
-  const batches = chunks(titles, batchSize);
+  const totalBatches = Math.ceil(titles.length / batchSize);
 
-  for (const [index, batch] of batches.entries()) {
+  for (let index = 0; index < titles.length; index += batchSize) {
+    const batch = titles.slice(index, index + batchSize);
     const params = new URLSearchParams({
       action: "query",
       prop: "revisions",
@@ -154,7 +140,7 @@ async function fetchPages(titles: string[], batchSize: number): Promise<CachedSn
         pages.push({ title: page.title, content, timestamp: revision.timestamp });
       }
     }
-    console.log(`Fetched SNPedia page batch ${index + 1} of ${batches.length}`);
+    console.log(`Fetched SNPedia page batch ${index / batchSize + 1} of ${totalBatches}`);
   }
 
   return pages;
@@ -163,8 +149,8 @@ async function fetchPages(titles: string[], batchSize: number): Promise<CachedSn
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   if (!options.force && existsSync(pagesPath)) {
-    const text = await readFile(pagesPath, "utf8");
-    console.log(`Using cached ${path.relative(repoRoot, pagesPath)} (${sha256(text).slice(0, 12)}).`);
+    const checksum = await fileSha256(pagesPath);
+    console.log(`Using cached ${path.relative(repoRoot, pagesPath)} (${checksum.slice(0, 12)}).`);
     return;
   }
 
@@ -186,9 +172,4 @@ async function main(): Promise<void> {
   console.log(`Wrote ${path.relative(repoRoot, pagesPath)} with ${pages.length.toLocaleString()} pages.`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
-}
+runCli(import.meta.url, main);

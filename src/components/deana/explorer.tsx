@@ -551,6 +551,8 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
         <div className="dn-finding-card__meta">
           <span>{entry.sources[0]?.name ?? "Source"}</span>
           <span>{entry.evidenceTier} · {entry.coverage}</span>
+          {entry.pharmgkbLevel ? <PharmGkbLevelBadge level={entry.pharmgkbLevel} /> : null}
+          {entry.clingenClassification ? <span>{entry.clingenClassification}</span> : null}
           <span className="dn-priority-pill">{priorityLabel(entry)}</span>
         </div>
         <h2>{entry.title} {firstMarker ? <small>{firstMarker.rsid} ({firstMarker.genotype ?? "n/a"})</small> : null}</h2>
@@ -644,7 +646,10 @@ export function FindingDetailContent({
     <>
       <p className="dn-eyebrow">Inspector</p>
       <Title id={titleId}>{finding.title}</Title>
-      <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
+      <div className="dn-finding-badges">
+        <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
+        {finding.pharmgkbLevel ? <PharmGkbLevelBadge level={finding.pharmgkbLevel} /> : null}
+      </div>
       {summary ? <div className="dn-inspector__intro">{renderMarkdown(summary)}</div> : null}
       {finding.detail.trim() ? (
         <section>
@@ -676,13 +681,25 @@ export function FindingDetailContent({
       <section>
         <h3>Sources</h3>
         <div className="dn-source-link-list">
-          {finding.sources.map((source) => (
-            <a key={source.id} href={ensureAbsoluteUrl(source.url)} target="_blank" rel="noreferrer">
-              <span>{source.name}</span>
-              <small>{source.id}</small>
-              <Icon name="external" />
-            </a>
-          ))}
+          {finding.sources.map((source) => {
+            const href = ensureAbsoluteUrl(source.url);
+            const content = (
+              <>
+                <span>{source.name}</span>
+                <small>{source.id}</small>
+              </>
+            );
+            return href ? (
+              <a key={source.id} href={href} target="_blank" rel="noreferrer">
+                {content}
+                <Icon name="external" />
+              </a>
+            ) : (
+              <div className="dn-source-link-static" key={source.id}>
+                {content}
+              </div>
+            );
+          })}
         </div>
       </section>
       {finding.sourceNotes.length > 0 ? (
@@ -718,6 +735,12 @@ function EvidenceSnapshot({ finding }: { finding: StoredReportEntry }) {
           <div>
             <dt>Source genotype</dt>
             <dd>{finding.sourceGenotype}</dd>
+          </div>
+        ) : null}
+        {finding.clingenClassification ? (
+          <div>
+            <dt>ClinGen classification</dt>
+            <dd>{finding.clingenClassification}</dd>
           </div>
         ) : null}
         <div>
@@ -801,9 +824,11 @@ function renderMarkdown(value: string): ReactNode {
   return blocks;
 }
 
-function ensureAbsoluteUrl(url: string): string {
-  if (/^https?:\/\//i.test(url)) return url;
-  return `https://${url}`;
+function ensureAbsoluteUrl(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
 }
 
 function renderMarkdownInline(value: string): ReactNode {
@@ -821,11 +846,12 @@ function renderMarkdownInline(value: string): ReactNode {
     if (token.startsWith("[") && token.includes("](") && token.endsWith(")")) {
       const label = token.slice(1, token.indexOf("]("));
       const url = token.slice(token.indexOf("](") + 2, -1).trim();
-      nodes.push(
-        <a key={`${tokenIndex}-${url}`} href={ensureAbsoluteUrl(url)} target="_blank" rel="noreferrer">
+      const href = ensureAbsoluteUrl(url);
+      nodes.push(href ? (
+        <a key={`${tokenIndex}-${url}`} href={href} target="_blank" rel="noreferrer">
           {label}
-        </a>,
-      );
+        </a>
+      ) : label);
     } else if ((token.startsWith("**") && token.endsWith("**")) || (token.startsWith("__") && token.endsWith("__"))) {
       nodes.push(<strong key={tokenIndex}>{token.slice(2, -2)}</strong>);
     } else if ((token.startsWith("*") && token.endsWith("*")) || (token.startsWith("_") && token.endsWith("_"))) {
@@ -933,6 +959,19 @@ function optionList(values: string[], emptyLabel: string): Array<[string, string
   return [["", emptyLabel], ...values.map((value): [string, string] => [value, value])];
 }
 
+const PHARMGKB_LEVEL_LABELS: Record<string, string> = {
+  "1A": "Level 1A",
+  "1B": "Level 1B",
+  "2A": "Level 2A",
+  "2B": "Level 2B",
+};
+
+function PharmGkbLevelBadge({ level }: { level: string }) {
+  const label = PHARMGKB_LEVEL_LABELS[level] ?? `Level ${level}`;
+  const modifier = level.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return <span className={`dn-pgkb-level-badge dn-pgkb-level-badge--${modifier}`}>{label}</span>;
+}
+
 function summaryUnlessTitle(summary: string, title: string): string | null {
   const cleanedSummary = summary.trim();
   const normalizedSummary = cleanedSummary.replace(/\s+/g, " ").toLowerCase();
@@ -976,9 +1015,10 @@ function iconForSource(source: string): IconName {
   const normalized = source.toLowerCase();
   if (normalized.includes("pub")) return "book";
   if (normalized.includes("snp")) return "dna";
-  if (normalized.includes("clin")) return "shield";
   if (normalized.includes("gwas")) return "chart";
   if (normalized.includes("cpic")) return "target";
+  if (normalized.includes("pharm")) return "target";
+  if (normalized.includes("clin")) return "shield";
   return "file";
 }
 

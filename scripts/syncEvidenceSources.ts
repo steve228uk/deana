@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { unzipSync } from "fflate";
+import { fileSha256, findZipTextEntry, runCli, sha256 } from "./scriptUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
@@ -58,18 +58,6 @@ function sources(options: Options): SourceConfig[] {
   ];
 }
 
-async function sha256(filePath: string): Promise<string> {
-  const file = Bun.file(filePath);
-  const digest = createHash("sha256");
-  const reader = file.stream().getReader();
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    digest.update(value);
-  }
-  return digest.digest("hex");
-}
-
 function isZipSource(source: SourceConfig, response: Response): boolean {
   return (
     source.id === "gwas" &&
@@ -80,15 +68,11 @@ function isZipSource(source: SourceConfig, response: Response): boolean {
 
 function extractGwasAssociationsZip(source: SourceConfig, bytes: Uint8Array): Uint8Array {
   const entries = unzipSync(bytes);
-  const match = Object.entries(entries).find(([name]) =>
-    /associations/i.test(name) && /\.(tsv|txt)$/i.test(name),
+  return findZipTextEntry(
+    entries,
+    /associations/i,
+    `${source.id} ZIP did not contain an associations TSV/TXT file.`,
   );
-
-  if (!match) {
-    throw new Error(`${source.id} ZIP did not contain an associations TSV/TXT file.`);
-  }
-
-  return match[1];
 }
 
 async function download(source: SourceConfig, force: boolean): Promise<object> {
@@ -108,7 +92,7 @@ async function download(source: SourceConfig, force: boolean): Promise<object> {
       status: "cached",
       path: path.relative(repoRoot, source.path),
       bytes: Bun.file(source.path).size,
-      sha256: await sha256(source.path),
+      sha256: await fileSha256(source.path),
     };
   }
 
@@ -138,7 +122,7 @@ async function download(source: SourceConfig, force: boolean): Promise<object> {
     url: source.url,
     path: path.relative(repoRoot, source.path),
     bytes: Bun.file(source.path).size,
-    sha256: await sha256(source.path),
+    sha256: sha256(bytes),
     fetchedAt: new Date().toISOString(),
   };
 }
@@ -160,9 +144,4 @@ async function main(): Promise<void> {
   console.log(`Wrote ${path.relative(repoRoot, path.join(cacheRoot, "manifest.json"))}.`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
-}
+runCli(import.meta.url, main);

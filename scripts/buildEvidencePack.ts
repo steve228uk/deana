@@ -1,11 +1,9 @@
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { createGunzip } from "node:zlib";
 import type {
   EvidencePackManifest,
   EvidencePackRecord,
@@ -13,14 +11,27 @@ import type {
   EvidenceTier,
   GenomeBuild,
   InsightCategory,
+  InsightTone,
   ReputeStatus,
 } from "../src/types";
 import { normalizeConditions } from "../src/lib/normalization";
 import { normalizeChromosome } from "../src/lib/dbsnpAnnotation";
+import { column, extractPmids, extractRsids, normalizeRsid, riskSummaryForClinvar, riskSummaryForGwas, singleBaseAllele, splitTsv, tsvRows } from "./tsvUtils";
+import { DEFINITION_MARKERS, DEFINITION_TITLES } from "./definitionMarkers";
+import { fileSha256, runCli, sha256 } from "./scriptUtils";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
 const packRoot = path.join(repoRoot, "public", "evidence-packs");
+const sourceCacheFiles = {
+  clinvar: path.join(cacheRoot, "clinvar", "variant_summary.txt.gz"),
+  gwas: path.join(cacheRoot, "gwas", "associations.tsv"),
+  snpedia: path.join(cacheRoot, "snpedia", "pages.json"),
+  cpicVariants: path.join(cacheRoot, "cpic", "variants.json"),
+  cpicPairs: path.join(cacheRoot, "cpic", "pairs.json"),
+  pharmgkb: path.join(cacheRoot, "pharmgkb", "annotations.json"),
+  clingen: path.join(cacheRoot, "clingen", "gene_validity.json"),
+} as const;
 const schemaVersion = 1;
 const shardModulo = 256;
 const dbsnpSources: Record<GenomeBuild, { path: string; url: string }> = {
@@ -44,7 +55,7 @@ const defaultVersion = (() => {
 })();
 
 const attribution =
-  "Local Deana evidence pack built from public ClinVar, CPIC, GWAS Catalog, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
+  "Local Deana evidence pack built from public ClinVar, CPIC, GWAS Catalog, PharmGKB, PubMed citation metadata, and gnomAD context. User marker IDs and genotypes are matched locally in the browser.";
 
 const sourceMetadata: EvidencePackManifest["sources"] = [
   {
@@ -64,8 +75,22 @@ const sourceMetadata: EvidencePackManifest["sources"] = [
   {
     id: "cpic",
     name: "CPIC",
-    release: "Curated CPIC records from Deana seed pack",
+    release: "CPIC API variant and pair data",
     url: "https://cpicpgx.org/api-and-database/",
+    role: "primary",
+  },
+  {
+    id: "pharmgkb",
+    name: "PharmGKB",
+    release: "PharmGKB clinical annotations bulk download",
+    url: "https://www.pharmgkb.org/downloads",
+    role: "primary",
+  },
+  {
+    id: "clingen",
+    name: "ClinGen",
+    release: "ClinGen gene-disease validity classifications",
+    url: "https://clinicalgenome.org/",
     role: "primary",
   },
   {
@@ -102,8 +127,8 @@ function parseOptions(argv: string[]): Options {
   const options: Options = {
     version: defaultVersion,
     check: false,
-    maxClinvarRecords: 50000,
-    maxGwasRecords: 50000,
+    maxClinvarRecords: 100000,
+    maxGwasRecords: 100000,
   };
 
   for (const arg of argv) {
@@ -133,65 +158,6 @@ function parseOptions(argv: string[]): Options {
   return options;
 }
 
-function splitTsv(line: string): string[] {
-  return line.split("\t").map((value) => value.trim());
-}
-
-async function* tsvRows(filePath: string): AsyncGenerator<Record<string, string>> {
-  const stream = filePath.endsWith(".gz")
-    ? createReadStream(filePath).pipe(createGunzip())
-    : createReadStream(filePath);
-  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  let headers: string[] | null = null;
-
-  for await (const line of lines) {
-    if (!line.trim()) continue;
-    if (!headers) {
-      headers = splitTsv(line);
-      continue;
-    }
-    const values = splitTsv(line);
-    const row: Record<string, string> = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index] ?? "";
-    });
-    yield row;
-  }
-}
-
-function column(row: Record<string, string>, names: string[]): string {
-  for (const name of names) {
-    const value = row[name];
-    if (value) return value;
-  }
-  return "";
-}
-
-function normalizeRsid(value: string): string | null {
-  const match = value.match(/rs\d+/i);
-  if (!match) return null;
-  return match[0].toLowerCase();
-}
-
-function extractRsids(value: string): string[] {
-  return Array.from(new Set(Array.from(value.matchAll(/rs\d+/gi), (match) => match[0].toLowerCase())));
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-async function fileSha256(filePath: string): Promise<string> {
-  const file = Bun.file(filePath);
-  const digest = createHash("sha256");
-  const reader = file.stream().getReader();
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    digest.update(value);
-  }
-  return digest.digest("hex");
-}
 
 function recordText(records: EvidencePackRecord[]): string {
   return `${JSON.stringify(records.sort((left, right) => left.id.localeCompare(right.id)))}\n`;
@@ -225,10 +191,24 @@ function sourceRole(sourceId: string): EvidenceSourceRole {
 
 type DbsnpAnnotationRow = [chromosome: string, position: number, ref: string, alt: string, rsids: string[]];
 
+function pushMapValue<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const values = map.get(key);
+  if (values) {
+    values.push(value);
+  } else {
+    map.set(key, [value]);
+  }
+}
 
 function evidenceRsids(records: EvidencePackRecord[]): string[] {
-  return Array.from(new Set(records.flatMap((record) => record.markerIds).map(normalizeRsid).filter(Boolean) as string[]))
-    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  const rsids = new Set<string>();
+  for (const record of records) {
+    for (const markerId of record.markerIds) {
+      const rsid = normalizeRsid(markerId);
+      if (rsid) rsids.add(rsid);
+    }
+  }
+  return Array.from(rsids).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
 }
 
 async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids: Set<string>): Promise<DbsnpAnnotationRow[]> {
@@ -244,7 +224,7 @@ async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids:
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  const rows = new Map<string, DbsnpAnnotationRow>();
+  const rows = new Map<string, { chromosome: string; position: number; ref: string; alt: string; rsids: Set<string> }>();
   let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
@@ -271,9 +251,9 @@ async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids:
       const key = [chromosome, position, ref, alt].join(":");
       const existing = rows.get(key);
       if (existing) {
-        existing[4] = Array.from(new Set([...existing[4], ...rsids])).sort();
+        for (const rsid of rsids) existing.rsids.add(rsid);
       } else {
-        rows.set(key, [chromosome, position, ref, alt, Array.from(new Set(rsids)).sort()]);
+        rows.set(key, { chromosome, position, ref, alt, rsids: new Set(rsids) });
       }
     }
   }
@@ -286,7 +266,13 @@ async function queryDbsnpRows(build: GenomeBuild, rsidFile: string, wantedRsids:
     throw new Error(`bcftools dbSNP query failed for ${build}: ${stderr.trim() || `exit ${exitCode}`}`);
   }
 
-  return Array.from(rows.values());
+  return Array.from(rows.values(), (row): DbsnpAnnotationRow => [
+    row.chromosome,
+    row.position,
+    row.ref,
+    row.alt,
+    Array.from(row.rsids).sort(),
+  ]);
 }
 
 async function buildAnnotationIndexes(
@@ -404,10 +390,6 @@ function plainClinvarTitle(gene: string, significance: string, conditions: strin
   return `${gene} variant reported for ${condition}`;
 }
 
-function singleBaseAllele(value: string): string | undefined {
-  const allele = value.trim().toUpperCase();
-  return /^[ACGT]$/.test(allele) ? allele : undefined;
-}
 
 function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
   const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
@@ -427,6 +409,13 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
   const condition = primaryCondition(traits, "the reported condition");
   const riskAllele = singleBaseAllele(column(row, ["AlternateAlleleVCF", "AlternateAllele"]));
   const title = plainClinvarTitle(gene, significance, traits, category);
+  const pmids = extractPmids(column(row, ["OtherIDs"]));
+  const numSubmitters = column(row, ["NumberSubmitters"]);
+  const lastEvaluated = column(row, ["LastEvaluated"]);
+
+  const submitterNote = numSubmitters && numSubmitters !== "0"
+    ? `${numSubmitters} submitter${numSubmitters === "1" ? "" : "s"}.`
+    : null;
 
   return {
     id: `clinvar-${variationId}-${rsid}`,
@@ -440,7 +429,7 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
     title,
     technicalName,
     summary: `ClinVar classifies this ${gene} variant as ${significance.toLowerCase()} for ${condition}.`,
-    detail: `ClinVar reports ${significance} for ${technicalName}. Review status: ${reviewStatus || "not supplied"}.`,
+    detail: `ClinVar reports ${significance} for ${technicalName}.`,
     whyItMatters: `This is source-reviewed clinical context for ${condition}; Deana only surfaces it when the uploaded genotype matches the reported allele where ClinVar provides one.`,
     topics: ["ClinVar", "Clinical variant"],
     conditions: traits,
@@ -451,9 +440,15 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
     repute: reputeForSignificance(significance),
     tone: category === "drug" ? "caution" : "neutral",
     riskAllele,
-    pmids: [],
+    riskSummary: /reviewed by expert panel|practice guideline/i.test(reviewStatus)
+      ? riskSummaryForClinvar(gene, significance, condition)
+      : undefined,
+    qualityTier: /reviewed by expert panel|practice guideline/i.test(reviewStatus) ? "tier-1" : undefined,
+    pmids,
     notes: [
       `Review status: ${reviewStatus || "not supplied"}.`,
+      ...(submitterNote ? [submitterNote] : []),
+      ...(lastEvaluated && lastEvaluated !== "-" ? [`Last evaluated: ${lastEvaluated}.`] : []),
       ...(riskAllele ? [`Reported alternate allele: ${riskAllele}.`] : []),
       "Generated from bulk ClinVar data; clinical interpretation requires human review and confirmatory testing.",
     ],
@@ -464,6 +459,21 @@ function includeGwas(row: Record<string, string>): boolean {
   const pValueRaw = column(row, ["P-VALUE"]);
   const pValue = Number(pValueRaw);
   return Number.isFinite(pValue) && pValue > 0 && pValue <= 5e-8;
+}
+
+function gwasEvidenceTier(pValue: number): EvidenceTier {
+  return pValue <= 1e-10 ? "high" : "moderate";
+}
+
+function gwasRepute(orBeta: number): ReputeStatus {
+  if (orBeta > 1.05) return "bad";
+  if (orBeta < 0.95 && orBeta > 0) return "good";
+  return "not-set";
+}
+
+function normalizeGwasUrl(raw: string): string {
+  if (!raw) return "";
+  return raw.startsWith("http") ? raw : `https://${raw}`;
 }
 
 function gwasRecords(row: Record<string, string>, index: number): EvidencePackRecord[] {
@@ -479,33 +489,77 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
   const pmid = column(row, ["PUBMEDID", "PUBMED ID"]);
   const strongestAllele = column(row, ["STRONGEST SNP-RISK ALLELE"]);
   const riskAllele = singleBaseAllele(strongestAllele.split("-").pop() ?? "");
+
+  const pValue = Number(column(row, ["P-VALUE"]));
+  const orBetaRaw = column(row, ["OR or BETA"]);
+  const orBeta = Number(orBetaRaw);
+  const ci = column(row, ["95% CI (TEXT)"]);
+  const sampleSize = column(row, ["INITIAL SAMPLE SIZE"]);
+  const firstAuthor = column(row, ["FIRST AUTHOR"]);
+  const journal = column(row, ["JOURNAL"]);
+  const date = column(row, ["DATE"]);
+  const studyAccession = column(row, ["STUDY ACCESSION"]);
+  const riskAlleleFreq = column(row, ["RISK ALLELE FREQUENCY"]);
+
+  const genes = Array.from(new Set(
+    mappedGene.split(/[;,]/).map((g) => g.trim()).filter(Boolean),
+  )).slice(0, 5);
+
+  const rawUrl = column(row, ["LINK"]);
+
+  const detailParts: string[] = [
+    `GWAS Catalog association with p=${pValue}.`,
+  ];
+  if (orBetaRaw && Number.isFinite(orBeta)) {
+    detailParts.push(`Effect: OR/Beta=${orBetaRaw}${ci ? ` ${ci}` : ""}.`);
+  }
+  if (sampleSize) {
+    detailParts.push(`Initial sample: ${sampleSize}.`);
+  }
+
+  const citationNote = [firstAuthor, journal, date].filter(Boolean).join(", ");
+  const notes: string[] = [
+    `Risk allele: ${strongestAllele || "not supplied"}.`,
+    ...(citationNote ? [`Study: ${citationNote}.`] : []),
+    ...(studyAccession ? [`GWAS Catalog accession: ${studyAccession}.`] : []),
+    "Generated from bulk GWAS Catalog data; effect size and ancestry transferability require review.",
+  ];
+
+  const frequencyNote =
+    riskAlleleFreq && riskAlleleFreq !== "NR"
+      ? `Risk allele frequency in study: ${riskAlleleFreq}`
+      : undefined;
+
+  const isTier1Gwas = pValue <= 1e-10 && Boolean(column(row, ["REPLICATION SAMPLE SIZE"])) && Number.isFinite(orBeta);
+  const gwasRiskSummary = isTier1Gwas ? riskSummaryForGwas(genes[0] ?? mappedGene, trait, orBeta, ci) : undefined;
+
   return rsids.map((rsid) => ({
     id: `gwas-${rsid}-${index}`,
     entryId: `local-trait-gwas-${rsid}-${index}`,
     sourceId: "gwas",
     role: "primary",
-    category: "traits",
+    category: "traits" as const,
     subcategory: "association",
     markerIds: [rsid],
-    genes: mappedGene.split(/[;,]/).map((gene) => gene.trim()).filter(Boolean).slice(0, 5),
-    title: `${trait} association near ${mappedGene.split(/[;,]/)[0]?.trim() || rsid}`,
+    genes,
+    title: `${trait} association near ${genes[0] || rsid}`,
     technicalName: `${rsid} ${trait}`,
     summary: `GWAS Catalog links ${riskAllele ? `${rsid}-${riskAllele}` : rsid} with ${trait}.`,
-    detail: `GWAS Catalog association with p-value ${column(row, ["P-VALUE"])}.`,
+    detail: detailParts.join(" "),
     whyItMatters: "This common-variant association is matched locally against the uploaded genotype and should be treated as a tendency signal, not a prediction.",
     topics: ["GWAS", "Association"],
-    conditions: trait.split(",").map((value) => value.trim()).filter(Boolean),
-    url: column(row, ["LINK"]) || `https://www.ebi.ac.uk/gwas/search?query=${encodeURIComponent(rsid)}`,
+    conditions: trait.split(",").map((v) => v.trim()).filter(Boolean),
+    url: normalizeGwasUrl(rawUrl) || `https://www.ebi.ac.uk/gwas/search?query=${encodeURIComponent(rsid)}`,
     release: "GWAS Catalog association export",
-    evidenceLevel: "moderate",
+    evidenceLevel: gwasEvidenceTier(pValue),
     clinicalSignificance: "trait-association",
-    repute: "not-set",
+    repute: Number.isFinite(orBeta) ? gwasRepute(orBeta) : "not-set",
     riskAllele,
+    riskSummary: gwasRiskSummary,
+    qualityTier: isTier1Gwas ? "tier-1" : undefined,
     pmids: pmid ? [pmid] : [],
-    notes: [
-      `Risk allele: ${strongestAllele || "not supplied"}.`,
-      "Generated from bulk GWAS Catalog data; effect size and ancestry transferability require review.",
-    ],
+    frequencyNote,
+    notes,
   }));
 }
 
@@ -599,7 +653,7 @@ function snpediaTitle(summary: string, rsid: string): string {
 }
 
 async function buildSnpediaRecords(): Promise<EvidencePackRecord[]> {
-  const sourceFile = path.join(cacheRoot, "snpedia", "pages.json");
+  const sourceFile = sourceCacheFiles.snpedia;
   if (!existsSync(sourceFile)) return [];
 
   const pages = JSON.parse(await readFile(sourceFile, "utf8")) as CachedSnpediaPage[];
@@ -666,14 +720,91 @@ async function buildSnpediaRecords(): Promise<EvidencePackRecord[]> {
   });
 }
 
-async function existingCuratedRecords(version: string): Promise<EvidencePackRecord[]> {
-  const recordsFile = path.join(packRoot, version, "records.json");
-  if (!existsSync(recordsFile)) return [];
-  return JSON.parse(await readFile(recordsFile, "utf8")) as EvidencePackRecord[];
+
+async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
+  const clinvarFile = sourceCacheFiles.clinvar;
+  const gwasFile = sourceCacheFiles.gwas;
+
+  // rsid → definition id (for quick lookup)
+  const rsidToDefId = new Map<string, string>();
+  for (const [defId, rsids] of Object.entries(DEFINITION_MARKERS)) {
+    for (const rsid of rsids) rsidToDefId.set(rsid, defId);
+  }
+
+  // Collect per-definition data from sources
+  const defData = new Map<string, { pmids: Set<string>; notes: Set<string>; sourceIds: Set<string> }>();
+  for (const defId of Object.keys(DEFINITION_MARKERS)) {
+    defData.set(defId, { pmids: new Set(), notes: new Set(), sourceIds: new Set() });
+  }
+
+  if (existsSync(clinvarFile)) {
+    for await (const row of tsvRows(clinvarFile)) {
+      const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
+      if (!rawRsid || rawRsid === "-1") continue;
+      const rsid = normalizeRsid(rawRsid.startsWith("rs") ? rawRsid : `rs${rawRsid}`);
+      if (!rsid) continue;
+      const defId = rsidToDefId.get(rsid);
+      if (!defId) continue;
+      const data = defData.get(defId)!;
+      data.sourceIds.add("clinvar");
+      for (const pmid of extractPmids(column(row, ["OtherIDs"]))) data.pmids.add(pmid);
+      const reviewStatus = column(row, ["ReviewStatus"]);
+      if (reviewStatus) data.notes.add(`ClinVar review status: ${reviewStatus}.`);
+    }
+  }
+
+  if (existsSync(gwasFile)) {
+    for await (const row of tsvRows(gwasFile)) {
+      const rsidsRaw = extractRsids([
+        column(row, ["SNPS", "SNP_ID_CURRENT"]),
+        column(row, ["STRONGEST SNP-RISK ALLELE"]),
+      ].join(" "));
+      for (const rsid of rsidsRaw) {
+        const defId = rsidToDefId.get(rsid);
+        if (!defId) continue;
+        const data = defData.get(defId)!;
+        data.sourceIds.add("gwas");
+        const pmid = column(row, ["PUBMEDID", "PUBMED ID"]);
+        if (pmid) data.pmids.add(pmid);
+        const riskAlleleFreq = column(row, ["RISK ALLELE FREQUENCY"]);
+        if (riskAlleleFreq && riskAlleleFreq !== "NR") {
+          data.notes.add(`Risk allele frequency in study: ${riskAlleleFreq}.`);
+        }
+      }
+    }
+  }
+
+  // Build one record per definition
+  const records: EvidencePackRecord[] = [];
+  for (const [defId, rsids] of Object.entries(DEFINITION_MARKERS)) {
+    const data = defData.get(defId)!;
+    const pmidsArr = Array.from(data.pmids);
+    const sourceIds = Array.from(data.sourceIds);
+    if (sourceIds.length === 0) sourceIds.push("clinvar"); // fallback
+
+    records.push({
+      id: `curated-${defId}`,
+      entryId: defId,
+      sourceId: sourceIds[0],
+      role: "primary",
+      markerIds: rsids,
+      genes: [],
+      title: DEFINITION_TITLES[defId] ?? defId,
+      url: "",
+      release: "Auto-generated from ClinVar/GWAS source data",
+      evidenceLevel: "high",
+      clinicalSignificance: null,
+      pmids: pmidsArr,
+      notes: Array.from(data.notes),
+    });
+  }
+
+  console.log(`Definition seed records: ${records.length} generated from source data.`);
+  return records;
 }
 
 async function buildClinvarRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
-  const sourceFile = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
+  const sourceFile = sourceCacheFiles.clinvar;
   if (!existsSync(sourceFile)) return [];
 
   const records: EvidencePackRecord[] = [];
@@ -687,17 +818,259 @@ async function buildClinvarRecords(maxRecords: number): Promise<EvidencePackReco
 }
 
 async function buildGwasRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
-  const sourceFile = path.join(cacheRoot, "gwas", "associations.tsv");
+  const sourceFile = sourceCacheFiles.gwas;
   if (!existsSync(sourceFile)) return [];
 
-  const records: EvidencePackRecord[] = [];
+  // Keep first-seen per (rsid, primary trait): the source file groups rows by study,
+  // so first occurrence tends to be the most-cited association for that pair.
+  const seen = new Map<string, EvidencePackRecord>();
   let rowIndex = 0;
   for await (const row of tsvRows(sourceFile)) {
     rowIndex += 1;
-    records.push(...gwasRecords(row, rowIndex));
-    if (records.length >= maxRecords) break;
+    for (const record of gwasRecords(row, rowIndex)) {
+      const key = `${record.markerIds[0]}|${record.conditions[0] ?? ""}`;
+      if (!seen.has(key)) seen.set(key, record);
+    }
   }
-  return records.slice(0, maxRecords);
+  return Array.from(seen.values()).slice(0, maxRecords);
+}
+
+interface CpicVariant {
+  rsid: string;
+  genesymbol: string;
+  function: string | null;
+}
+
+interface CpicPair {
+  genesymbol: string;
+  drugname: string;
+  level: string;
+}
+
+async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
+  const variantsFile = sourceCacheFiles.cpicVariants;
+  const pairsFile = sourceCacheFiles.cpicPairs;
+  if (!existsSync(variantsFile) || !existsSync(pairsFile)) return [];
+
+  const variants = JSON.parse(await readFile(variantsFile, "utf8")) as CpicVariant[];
+  const pairs = JSON.parse(await readFile(pairsFile, "utf8")) as CpicPair[];
+
+  const pairsByGene = new Map<string, CpicPair[]>();
+  for (const pair of pairs) {
+    const gene = pair.genesymbol.toUpperCase();
+    pushMapValue(pairsByGene, gene, pair);
+  }
+
+  const records: EvidencePackRecord[] = [];
+  for (const variant of variants) {
+    const rsid = normalizeRsid(variant.rsid);
+    if (!rsid) continue;
+    const gene = variant.genesymbol.toUpperCase();
+    const genePairs = pairsByGene.get(gene);
+    if (!genePairs || genePairs.length === 0) continue;
+
+    const drugs = Array.from(new Set(genePairs.map((p) => p.drugname))).slice(0, 4);
+    const topPair = genePairs[0];
+    const level = topPair.level;
+    const evidenceLevel: EvidenceTier = level === "A" ? "high" : "moderate";
+    const functionNote = variant.function ? `Variant function: ${variant.function}.` : null;
+
+    records.push({
+      id: `cpic-${rsid}-${gene.toLowerCase()}`,
+      entryId: `local-drug-cpic-${rsid}`,
+      sourceId: "cpic",
+      role: "primary",
+      category: "drug",
+      subcategory: "pharmacogenomics",
+      markerIds: [rsid],
+      genes: [gene],
+      title: `${gene} pharmacogenomic variant — ${drugs[0]} context (CPIC)`,
+      summary: `${rsid} affects ${gene} function and is relevant to ${drugs.slice(0, 2).join(" and ")} dosing per CPIC level ${level} guidelines.`,
+      riskSummary: `${gene} variant with altered function (${variant.function ?? "see guideline"}) — ${drugs[0]} dosing may require adjustment`,
+      qualityTier: level === "A" ? "tier-1" : undefined,
+      detail: `CPIC level ${level} guideline covers ${gene} and ${drugs.join(", ")}.`,
+      whyItMatters: "CPIC guidelines provide evidence-based recommendations for adjusting drug therapy based on pharmacogenomic results.",
+      topics: ["CPIC", "Drug response", "Pharmacogenomics"],
+      conditions: drugs.map((d) => `${d} response`),
+      url: `https://cpicpgx.org/guidelines/`,
+      release: "CPIC API variant and pair data",
+      evidenceLevel,
+      clinicalSignificance: "drug-response",
+      repute: "mixed",
+      tone: "caution",
+      pmids: [],
+      notes: [
+        `CPIC level ${level} guideline.`,
+        ...(functionNote ? [functionNote] : []),
+        "Consumer arrays may not cover all alleles needed for a complete CPIC phenotype call.",
+        "Medication changes require clinical review and confirmatory testing.",
+      ],
+    });
+  }
+
+  return records;
+}
+
+interface PharmGkbAnnotation {
+  variantId: string;
+  rsid: string;
+  gene: string;
+  drugs: string[];
+  phenotypeCategory: string;
+  evidenceLevel: string;
+  significance: string;
+  pmids: string[];
+  url: string;
+}
+
+function pharmgkbEvidenceTier(level: string): EvidenceTier {
+  if (level === "1A" || level === "1B") return "high";
+  if (level === "2A" || level === "2B") return "moderate";
+  return "emerging";
+}
+
+async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
+  const annotationsFile = sourceCacheFiles.pharmgkb;
+  if (!existsSync(annotationsFile)) return [];
+
+  const annotations = JSON.parse(await readFile(annotationsFile, "utf8")) as PharmGkbAnnotation[];
+  const records: EvidencePackRecord[] = [];
+
+  for (const ann of annotations) {
+    const rsid = normalizeRsid(ann.rsid);
+    if (!rsid) continue;
+
+    const evidenceLevel = pharmgkbEvidenceTier(ann.evidenceLevel);
+
+    const drugs = ann.drugs.slice(0, 4);
+    const category = ann.phenotypeCategory.toLowerCase();
+    const isEfficacy = /efficacy/i.test(category);
+    const isToxicity = /toxicity|adverse/i.test(category);
+    const tone: InsightTone = isToxicity ? "caution" : isEfficacy ? "good" : "neutral";
+    const repute: ReputeStatus = isToxicity ? "bad" : isEfficacy ? "good" : "not-set";
+
+    records.push({
+      id: `pharmgkb-${ann.variantId}-${rsid}`,
+      entryId: `local-drug-pharmgkb-${ann.variantId}`,
+      sourceId: "pharmgkb",
+      role: "primary",
+      category: "drug",
+      subcategory: "pharmacogenomics",
+      markerIds: [rsid],
+      genes: ann.gene ? [ann.gene] : [],
+      title: `${ann.gene || rsid} / ${drugs[0] ?? "drug response"}`,
+      summary: `PharmGKB level ${ann.evidenceLevel} annotation links ${rsid} to ${ann.phenotypeCategory.toLowerCase()} with ${drugs.slice(0, 2).join(" and ")}.`,
+      riskSummary: evidenceLevel === "high" || evidenceLevel === "moderate"
+        ? `${ann.gene || rsid} variant associated with ${ann.phenotypeCategory.toLowerCase()} for ${drugs[0] ?? "the reported drug"}`
+        : undefined,
+      qualityTier: ann.evidenceLevel === "1A" || ann.evidenceLevel === "1B" ? "tier-1" : undefined,
+      pharmgkbLevel: ann.evidenceLevel,
+      detail: `PharmGKB clinical annotation level ${ann.evidenceLevel}: ${ann.phenotypeCategory} for ${drugs.join(", ")}.`,
+      whyItMatters: "PharmGKB curates pharmacogenomic evidence from the literature, with level 1A–2B annotations backed by expert review and published clinical studies.",
+      topics: ["PharmGKB", "Drug response", "Pharmacogenomics"],
+      conditions: drugs.map((d) => `${d} ${ann.phenotypeCategory.toLowerCase()}`),
+      url: ann.url,
+      release: "PharmGKB clinical annotations bulk download",
+      evidenceLevel,
+      clinicalSignificance: "drug-response",
+      repute,
+      tone,
+      pmids: ann.pmids,
+      notes: [
+        `PharmGKB evidence level: ${ann.evidenceLevel}.`,
+        `Phenotype category: ${ann.phenotypeCategory}.`,
+        ...(ann.significance ? [`Significance: ${ann.significance}.`] : []),
+        "PharmGKB annotations reflect published literature and should not replace clinical pharmacogenomic testing.",
+      ],
+    });
+  }
+
+  return records;
+}
+
+interface ClinGenClassification {
+  gene: string;
+  disease: string;
+  diseaseId: string;
+  classification: string;
+  url: string;
+  pmids?: string[];
+}
+
+const CLINGEN_CLASSIFICATION_NOTE_PREFIX = "ClinGen classification:";
+
+function clingenEvidenceTier(classification: string): EvidenceTier {
+  if (isHighConfidenceClinGenClassification(classification)) return "high";
+  return "moderate";
+}
+
+function isHighConfidenceClinGenClassification(classification: string): boolean {
+  return classification === "Definitive" || classification === "Strong";
+}
+
+async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promise<EvidencePackRecord[]> {
+  const sourceFile = sourceCacheFiles.clingen;
+  if (!existsSync(sourceFile)) return [];
+
+  const classifications = JSON.parse(await readFile(sourceFile, "utf8")) as ClinGenClassification[];
+
+  // Build gene → rsid map from ClinVar records so we can key ClinGen data on rsids
+  const geneToRsids = new Map<string, string[]>();
+  for (const record of clinvarRecords) {
+    for (const gene of record.genes ?? []) {
+      const upper = gene.toUpperCase();
+      const existing = geneToRsids.get(upper);
+      if (existing) { if (!existing.includes(record.markerIds[0])) existing.push(record.markerIds[0]); }
+      else geneToRsids.set(upper, [record.markerIds[0]]);
+    }
+  }
+
+  const records: EvidencePackRecord[] = [];
+  for (const cls of classifications) {
+    const gene = cls.gene.toUpperCase();
+    const rsids = geneToRsids.get(gene);
+    if (!rsids || rsids.length === 0) continue;
+
+    const evidenceLevel = clingenEvidenceTier(cls.classification);
+    const pmids = cls.pmids?.length ? Array.from(new Set(cls.pmids)) : [];
+
+    const slug = cls.gene.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const diseaseSlug = cls.disease.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+
+    records.push({
+      id: `clingen-${slug}-${diseaseSlug}`,
+      entryId: `local-medical-clingen-${slug}-${diseaseSlug}`,
+      sourceId: "clingen",
+      role: "primary",
+      category: "medical",
+      subcategory: "gene-disease-validity",
+      markerIds: rsids.slice(0, 3),
+      genes: [cls.gene],
+      title: `${cls.gene} / ${cls.disease}`,
+      summary: `ClinGen has classified the relationship between ${cls.gene} and ${cls.disease} as ${cls.classification} based on systematic evidence review.`,
+      riskSummary: `${cls.gene} variant in a gene with ClinGen ${cls.classification} evidence for ${cls.disease}`,
+      qualityTier: isHighConfidenceClinGenClassification(cls.classification) ? "tier-1" : undefined,
+      clingenClassification: cls.classification,
+      detail: `ClinGen ${cls.classification} classification: expert curation found ${cls.classification.toLowerCase()} evidence that ${cls.gene} variants cause ${cls.disease}.`,
+      whyItMatters: "ClinGen gene-disease validity classifications reflect the strength of evidence that variants in this gene cause the specified disease, using a rigorous semi-quantitative framework.",
+      topics: ["ClinGen", "Gene-disease validity"],
+      conditions: [cls.disease],
+      url: cls.url,
+      release: "ClinGen gene-disease validity classifications",
+      evidenceLevel,
+      clinicalSignificance: "pathogenic",
+      repute: "bad",
+      tone: "caution",
+      pmids,
+      notes: [
+        `${CLINGEN_CLASSIFICATION_NOTE_PREFIX} ${cls.classification}.`,
+        ...(cls.diseaseId ? [`Disease identifier: ${cls.diseaseId}.`] : []),
+        "ClinGen classifications reflect published literature and expert panel review; they do not replace diagnostic genetic testing.",
+      ],
+    });
+  }
+
+  return records;
 }
 
 function dedupeRecords(records: EvidencePackRecord[]): EvidencePackRecord[] {
@@ -721,14 +1094,20 @@ async function writeIfChanged(filePath: string, text: string, check: boolean): P
 }
 
 async function sourceChecksums(): Promise<Record<string, string | null>> {
-  const clinvar = path.join(cacheRoot, "clinvar", "variant_summary.txt.gz");
-  const gwas = path.join(cacheRoot, "gwas", "associations.tsv");
-  const snpedia = path.join(cacheRoot, "snpedia", "pages.json");
-  return {
-    clinvar: existsSync(clinvar) ? await fileSha256(clinvar) : null,
-    gwas: existsSync(gwas) ? await fileSha256(gwas) : null,
-    snpedia: existsSync(snpedia) ? await fileSha256(snpedia) : null,
+  const sources: Record<string, string> = {
+    clinvar: sourceCacheFiles.clinvar,
+    gwas: sourceCacheFiles.gwas,
+    snpedia: sourceCacheFiles.snpedia,
+    cpic: sourceCacheFiles.cpicVariants,
+    pharmgkb: sourceCacheFiles.pharmgkb,
+    clingen: sourceCacheFiles.clingen,
   };
+  const entries = await Promise.all(
+    Object.entries(sources).map(async ([key, filePath]) =>
+      [key, existsSync(filePath) ? await fileSha256(filePath) : null] as const,
+    ),
+  );
+  return Object.fromEntries(entries);
 }
 
 function replaceVersionConstant(source: string, exportName: string, version: string): string {
@@ -742,18 +1121,21 @@ function replaceVersionConstant(source: string, exportName: string, version: str
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const targetDir = path.join(packRoot, options.version);
-  const curatedRecords = await existingCuratedRecords(options.version);
-  const clinvarRecords = await buildClinvarRecords(options.maxClinvarRecords);
-  const gwasRecords = await buildGwasRecords(options.maxGwasRecords);
-  const snpediaRecords = await buildSnpediaRecords();
-  const records = dedupeRecords(withKnownSourceRoles([...curatedRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords]));
+  const [definitionRecords, clinvarRecords, gwasRecords, snpediaRecords, cpicRecords, pharmgkbRecords] = await Promise.all([
+    buildDefinitionRecords(),
+    buildClinvarRecords(options.maxClinvarRecords),
+    buildGwasRecords(options.maxGwasRecords),
+    buildSnpediaRecords(),
+    buildCpicRecords(),
+    buildPharmgkbRecords(),
+  ]);
+  const clingenRecords = await buildClinGenRecords(clinvarRecords);
+  const records = dedupeRecords(withKnownSourceRoles([...definitionRecords, ...clinvarRecords, ...gwasRecords, ...snpediaRecords, ...cpicRecords, ...pharmgkbRecords, ...clingenRecords]));
   const buckets = new Map<number, EvidencePackRecord[]>();
 
   for (const record of records) {
     const bucket = rsidBucket(record.markerIds[0] ?? record.id);
-    const arr = buckets.get(bucket);
-    if (arr) arr.push(record);
-    else buckets.set(bucket, [record]);
+    pushMapValue(buckets, bucket, record);
   }
 
   if (!options.check) {
@@ -820,10 +1202,18 @@ async function main(): Promise<void> {
     options.check,
   )) || changed;
 
-  console.log(`Curated records: ${curatedRecords.length.toLocaleString()}`);
+  // Write records.json (auto-generated definition seeds — replaces hand-maintained file)
+  const recordsJsonPath = path.join(targetDir, "records.json");
+  const recordsJsonText = `${JSON.stringify(definitionRecords, null, 2)}\n`;
+  changed = (await writeIfChanged(recordsJsonPath, recordsJsonText, options.check)) || changed;
+
+  console.log(`Definition seed records: ${definitionRecords.length.toLocaleString()}`);
   console.log(`ClinVar records: ${clinvarRecords.length.toLocaleString()}`);
   console.log(`GWAS records: ${gwasRecords.length.toLocaleString()}`);
   console.log(`SNPedia records: ${snpediaRecords.length.toLocaleString()}`);
+  console.log(`CPIC records: ${cpicRecords.length.toLocaleString()}`);
+  console.log(`PharmGKB records: ${pharmgkbRecords.length.toLocaleString()}`);
+  console.log(`ClinGen records: ${clingenRecords.length.toLocaleString()}`);
   console.log(`Packed records: ${records.length.toLocaleString()} across ${shards.length.toLocaleString()} shards.`);
   if (options.check && changed) {
     process.exitCode = 1;
@@ -833,9 +1223,4 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
-}
+runCli(import.meta.url, main);

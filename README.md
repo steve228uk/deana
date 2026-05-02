@@ -133,9 +133,14 @@ That runs:
 
 ```bash
 bun run evidence:sources:sync
+bun run evidence:cpic:sync
 bun run evidence:snpedia:sync
+bun run evidence:pharmgkb:sync
+bun run evidence:clingen:sync
 bun run evidence:pack:build
 ```
+
+`evidence:clingen:sync` imports the ClinGen gene-disease validity, dosage sensitivity, clinical actionability, and variant pathogenicity feeds. Each feed can also be refreshed directly with `evidence:clingen:gene-disease:sync`, `evidence:clingen:dosage:sync`, `evidence:clingen:actionability:sync`, or `evidence:clingen:variant-pathogenicity:sync`.
 
 The monthly automation also refreshes dbSNP references for GRCh37 and GRCh38 so unannotated VCF imports can be annotated locally against evidence-relevant rsIDs:
 

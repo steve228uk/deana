@@ -12,8 +12,7 @@ import {
   ReportEntry,
 } from "../types";
 import { normalizeClinicalSignificance } from "./normalization";
-
-export const EVIDENCE_PACK_VERSION = "2026-04-core";
+export const EVIDENCE_PACK_VERSION = "2026-05-core";
 
 export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
   clinvar: {
@@ -66,6 +65,26 @@ export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
     chipCaveat: "Consumer-friendly summaries can oversimplify clinical nuance.",
     disclaimer: "Supplementary reference only; Deana does not treat SNPedia as a primary clinical source.",
   },
+  pharmgkb: {
+    id: "pharmgkb",
+    name: "PharmGKB",
+    url: "https://www.pharmgkb.org/",
+    citation: "Pharmacogenomics Knowledge Base",
+    evidenceNote: "Curated pharmacogenomic evidence with clinical annotation levels 1A–2B backed by expert review.",
+    populationNote: "Drug-response associations can vary by ancestry and by which alleles a chip covers.",
+    chipCaveat: "Consumer arrays may miss pharmacogenomically relevant variants and haplotypes.",
+    disclaimer: "Preview only. Medication decisions require clinical pharmacogenomic review and testing.",
+  },
+  clingen: {
+    id: "clingen",
+    name: "ClinGen",
+    url: "https://clinicalgenome.org/",
+    citation: "Clinical Genome Resource",
+    evidenceNote: "Expert-curated gene-disease validity classifications backed by systematic evidence review.",
+    populationNote: "Gene-disease classifications are based on published literature and may not reflect all populations.",
+    chipCaveat: "Consumer arrays cover only a subset of variants in any given gene.",
+    disclaimer: "Informational only. Gene-disease validity classifications do not replace diagnostic genetic testing.",
+  },
   pubmed: {
     id: "pubmed",
     name: "PubMed",
@@ -79,6 +98,85 @@ export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
 };
 
 type MarkerMap = Map<string, CompactMarker>;
+
+export interface GenericDefinitionParams {
+  id: string;
+  rsid: string;
+  gene: string;
+  riskAllele: string | null;
+  category: InsightCategory;
+  subcategory: string;
+  title: string;
+  riskSummary: string;
+  topics: string[];
+  conditions: string[];
+  evidenceTier: EvidenceTier;
+  clinicalSignificance: string | null;
+  repute: ReputeStatus;
+  publicationCount: number;
+  sourceIds: string[];
+  frequencyNote?: string;
+}
+
+export function makeGenericDefinition(p: GenericDefinitionParams): EvidenceDefinition {
+  return {
+    id: p.id,
+    category: p.category,
+    subcategory: p.subcategory,
+    title: p.title,
+    markerIds: [p.rsid],
+    genes: p.gene ? [p.gene] : [],
+    topics: p.topics,
+    conditions: p.conditions,
+    evidenceTier: p.evidenceTier,
+    clinicalSignificance: p.clinicalSignificance,
+    repute: p.repute,
+    publicationCount: p.publicationCount,
+    sourceIds: p.sourceIds,
+    frequencyNote: p.frequencyNote,
+    evaluate: (map) => {
+      const markers = [readMarker(map, p.rsid, p.gene || undefined)];
+      const genotype = markers[0].genotype;
+      const riskCount =
+        p.riskAllele && genotype
+          ? [...genotype].filter((a) => a === p.riskAllele).length
+          : null;
+      const tone: InsightTone =
+        riskCount !== null && riskCount > 0 && p.repute === "bad"
+          ? "caution"
+          : riskCount !== null && riskCount > 0 && p.repute === "good"
+            ? "good"
+            : "neutral";
+      const summary =
+        genotype === null
+          ? `This upload did not include the ${p.rsid} marker.`
+          : riskCount === 0
+            ? `No risk allele detected at ${p.rsid}.`
+            : riskCount === 1
+              ? `One copy of the risk allele detected. ${p.riskSummary}.`
+              : riskCount === 2
+                ? `Two copies of the risk allele detected. ${p.riskSummary}.`
+                : `${p.rsid} present (${genotype}). ${p.riskSummary}.`;
+      return {
+        tone,
+        coverage: coverageFrom(markers),
+        summary,
+        detail: p.riskSummary,
+        whyItMatters: `${p.gene || p.rsid} is one of the better-characterised loci for ${p.conditions[0] ?? p.title}.`,
+        genotypeSummary: summaryList(markers),
+        matchedMarkers: markers,
+        warnings: [
+          "This finding came from an automatically ingested source; interpret alongside clinical context.",
+          "Consumer array coverage may not capture all relevant variants at this locus.",
+        ],
+        confidenceNote:
+          genotype === null
+            ? `The ${p.rsid} marker was not present in this upload.`
+            : `The ${p.rsid} marker was present.`,
+      };
+    },
+  };
+}
 
 export interface EvidenceDefinition {
   id: string;
@@ -147,10 +245,11 @@ function summaryList(markers: MatchedMarker[]): string {
 function sourceEntries(sourceIds: string[], matches: EvidencePackMatch[] = []): ReportEntry["sources"] {
   const recordSources = matches.map(({ record }) => {
     const source = SOURCE_LIBRARY[record.sourceId];
+    const recordUrl = record.url.trim();
     return {
       id: source?.id ?? record.sourceId,
       name: source?.name ?? record.sourceId,
-      url: record.url,
+      url: recordUrl || source?.url || "",
     };
   });
   if (recordSources.length > 0) {

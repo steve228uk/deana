@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ensureCurrentProfile } from "./storage";
-import { EVIDENCE_PACK_VERSION } from "./evidencePack";
+import { EVIDENCE_PACK_VERSION, SOURCE_LIBRARY } from "./evidencePack";
 import { generateReport, REPORT_VERSION } from "./reportEngine";
 import { makeParsedDnaFile, makeSavedProfile } from "../test/fixtures";
 import type { EvidenceSupplement } from "../types";
@@ -136,6 +136,117 @@ describe("reportEngine", () => {
     expect(report.tabs.find((tab) => tab.tab === "traits")?.count).toBeGreaterThan(4);
     expect(report.tabs.find((tab) => tab.tab === "traits")?.count).toBeGreaterThan(4);
     expect(report.overview.curatedMarkerMatches).toBeGreaterThan(1);
+  });
+
+  it("falls back to the source library URL for curated evidence records without record URLs", () => {
+    const dna = makeParsedDnaFile();
+    const supplement: EvidenceSupplement = {
+      status: "complete",
+      fetchedAt: "2026-04-25T00:00:00.000Z",
+      attribution: "test",
+      packVersion: EVIDENCE_PACK_VERSION,
+      manifest: null,
+      totalRsids: dna.markerCount,
+      processedRsids: dna.markerCount,
+      matchedRecords: [
+        {
+          record: {
+            id: "curated-medical-apoe",
+            entryId: "medical-apoe",
+            sourceId: "clinvar",
+            role: "primary",
+            markerIds: ["rs429358", "rs7412"],
+            genes: [],
+            title: "APOE / Alzheimer's & cardiovascular risk",
+            url: "",
+            release: "Auto-generated from ClinVar/GWAS source data",
+            evidenceLevel: "high",
+            clinicalSignificance: null,
+            pmids: ["30072576"],
+            notes: ["test"],
+          },
+          matchedMarkers: [
+            {
+              rsid: "rs429358",
+              genotype: "CT",
+              chromosome: "19",
+              position: 45411941,
+              gene: "APOE",
+            },
+          ],
+        },
+      ],
+      unmatchedRsids: dna.markerCount - 1,
+      failedItems: [],
+      retries: 0,
+    };
+
+    const report = generateReport(dna, { evidence: supplement });
+    const apoe = report.entries.find((entry) => entry.id === "medical-apoe");
+
+    expect(apoe?.sources).toContainEqual({
+      id: "clinvar",
+      name: "ClinVar",
+      url: SOURCE_LIBRARY.clinvar.url,
+    });
+  });
+
+  it("extracts legacy ClinGen classifications from local evidence titles", () => {
+    const dna = makeParsedDnaFile();
+    const supplement: EvidenceSupplement = {
+      status: "complete",
+      fetchedAt: "2026-04-25T00:00:00.000Z",
+      attribution: "test",
+      packVersion: EVIDENCE_PACK_VERSION,
+      manifest: null,
+      totalRsids: dna.markerCount,
+      processedRsids: dna.markerCount,
+      matchedRecords: [
+        {
+          record: {
+            id: "clingen-zmynd11-syndromic-complex-neurodevelopmental-disorder",
+            entryId: "local-medical-clingen-zmynd11-syndromic-complex-neurodevelopmental-disorder",
+            sourceId: "clingen",
+            role: "primary",
+            category: "medical",
+            subcategory: "gene-disease-validity",
+            markerIds: ["rs6025"],
+            genes: ["ZMYND11"],
+            title: "ZMYND11 / syndromic complex neurodevelopmental disorder (ClinGen Definitive)",
+            url: "https://search.clinicalgenome.org/kb/gene-validity/test",
+            release: "test",
+            evidenceLevel: "high",
+            clinicalSignificance: "pathogenic",
+            repute: "bad",
+            pmids: ["123", "456"],
+            notes: [
+              "ClinGen classification: Definitive.",
+              "ClinGen classifications reflect published literature and expert panel review.",
+            ],
+          },
+          matchedMarkers: [
+            {
+              rsid: "rs6025",
+              genotype: "CT",
+              chromosome: "1",
+              position: 169519049,
+              gene: "ZMYND11",
+            },
+          ],
+        },
+      ],
+      unmatchedRsids: dna.markerCount - 1,
+      failedItems: [],
+      retries: 0,
+    };
+
+    const report = generateReport(dna, { evidence: supplement });
+    const localEntry = report.entries.find((entry) =>
+      entry.id === "local-medical-clingen-zmynd11-syndromic-complex-neurodevelopmental-disorder"
+    );
+
+    expect(localEntry?.title).toBe("ZMYND11 / syndromic complex neurodevelopmental disorder");
+    expect(localEntry?.clingenClassification).toBe("Definitive");
   });
 
   it("keeps SNPedia repute and magnitude as structured report fields", () => {

@@ -128,6 +128,10 @@ export interface EvidencePackRecord {
   magnitude?: number | null;
   pmids: string[];
   frequencyNote?: string;
+  riskSummary?: string;
+  qualityTier?: "tier-1";
+  pharmgkbLevel?: string;
+  clingenClassification?: string;
   notes: string[];
 }
 
@@ -186,6 +190,8 @@ export interface ReportEntry {
   };
   confidenceNote: string;
   disclaimer: string;
+  pharmgkbLevel?: string;
+  clingenClassification?: string;
 }
 
 export interface TabSummary {
@@ -433,6 +439,8 @@ export interface StoredChatContextFinding {
   disclaimer: string;
   frequencyNote: string;
   sourceGenotype: string;
+  pharmgkbLevel?: string;
+  clingenClassification?: string;
   publicationCount: number;
   sourceNames: string[];
   sourceUrls: string[];

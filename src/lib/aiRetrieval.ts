@@ -138,7 +138,22 @@ function entryFieldText(entry: StoredReportEntry): EntrySearchField[] {
     { field: "disclaimer", text: entry.disclaimer, weight: 20 },
     { field: "frequencyNote", text: entry.frequencyNote ?? "", weight: 20 },
     { field: "sourceGenotype", text: [entry.sourceGenotype, entry.sourcePageKey, entry.sourcePageUrl].join(" "), weight: 28 },
-    { field: "classification", text: [entry.entryKind, entry.category, entry.subcategory, entry.evidenceTier, entry.repute, entry.coverage, entry.tone, entry.outcome].join(" "), weight: 18 },
+    {
+      field: "classification",
+      text: [
+        entry.entryKind,
+        entry.category,
+        entry.subcategory,
+        entry.evidenceTier,
+        entry.repute,
+        entry.coverage,
+        entry.tone,
+        entry.outcome,
+        entry.pharmgkbLevel,
+        entry.clingenClassification,
+      ].join(" "),
+      weight: 18,
+    },
   ].map((field) => {
     const text = normalize(field.text);
     return {
