@@ -26,6 +26,13 @@ let workerInitAttempted = false;
 let requestCounter = 0;
 const pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: unknown) => void }>();
 
+function resetWorkerAfterFailure(): Worker | null {
+  const failedWorker = worker;
+  worker = null;
+  workerInitAttempted = false;
+  return failedWorker;
+}
+
 function getWorker(): Worker | null {
   if (typeof Worker === "undefined") return null;
   if (worker) return worker;
@@ -49,10 +56,11 @@ function getWorker(): Worker | null {
         handler.reject(new Error(event.message ?? "Search worker error"));
       }
       pending.clear();
-      worker = null;
+      resetWorkerAfterFailure()?.terminate();
     };
     return worker;
   } catch {
+    resetWorkerAfterFailure();
     return null;
   }
 }
