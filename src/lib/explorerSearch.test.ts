@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSearchIndex } from "./ai/searchIndex";
+import { shouldIndexEntry } from "./ai/searchIndexCore";
 import { DEFAULT_FILTERS, buildEntrySearchText } from "./explorer";
 import { loadExplorerPage } from "./explorerSearch";
 import {
@@ -331,7 +332,7 @@ describe("loadExplorerPage", () => {
     ]);
   });
 
-  it("returns supplementary SNPedia context from MiniSearch results", async () => {
+  it("returns high-signal supplementary SNPedia context from MiniSearch results", async () => {
     const template = storedEntries()[0];
     const snpedia = withSearchText({
       ...template,
@@ -342,6 +343,7 @@ describe("loadExplorerPage", () => {
       summary: "SNPedia genotype context for male pattern baldness.",
       detail: "Supplementary consumer-facing SNPedia context.",
       evidenceTier: "supplementary",
+      magnitude: 2,
       sources: [{ id: "snpedia", name: "SNPedia", url: "https://example.com/snpedia" }],
       topics: ["SNPedia", "Genotype page"],
       conditions: ["Male Pattern Baldness"],
@@ -356,6 +358,74 @@ describe("loadExplorerPage", () => {
     });
 
     expect(page.entries.map((entry) => entry.id)).toEqual(["local-traits-snpedia-baldness-context"]);
+  });
+
+  it("does not include low-signal supplementary SNPedia context in MiniSearch results", async () => {
+    const template = storedEntries()[0];
+    const snpedia = withSearchText({
+      ...template,
+      id: "local-traits-snpedia-low-signal",
+      entryKind: "local-evidence",
+      category: "traits",
+      subcategory: "snpedia",
+      title: "Low signal SNPedia context",
+      summary: "A low signal supplementary SNPedia phrase.",
+      detail: "Supplementary consumer-facing SNPedia context.",
+      evidenceTier: "supplementary",
+      magnitude: null,
+      publicationCount: 0,
+      repute: "good",
+      sources: [{ id: "snpedia", name: "SNPedia", url: "https://example.com/snpedia" }],
+      topics: ["SNPedia", "Genotype page"],
+      conditions: ["Low signal phrase"],
+      matchedMarkers: [{ rsid: "rs2003046", genotype: "CC", chromosome: "7", position: 123, gene: undefined }],
+    });
+    installEntries([snpedia]);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "traits",
+      filters: { ...DEFAULT_FILTERS, q: "low signal phrase" },
+    });
+
+    expect(page.entries).toEqual([]);
+  });
+
+  it("falls back to IndexedDB search when the MiniSearch index is skipped for memory budget", async () => {
+    const template = storedEntries()[0];
+    const oversizedEntries = Array.from({ length: 30_001 }, (_, index) => withSearchText({
+      ...template,
+      id: `medical-budget-${index}`,
+      category: "medical",
+      title: `Budget entry ${index}`,
+      summary: index === 30_000 ? "Direct database fallback phrase." : "Unrelated budget entry.",
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${900000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
+    }));
+    const directPage = {
+      entries: [oversizedEntries[30_000]],
+      nextCursor: null,
+      totalLoaded: 1,
+      hasMore: false,
+    };
+    installEntries(oversizedEntries);
+    vi.mocked(loadCategoryPage).mockResolvedValueOnce(directPage);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "direct database fallback phrase" },
+    });
+
+    expect(page).toBe(directPage);
+    expect(loadCategoryPage).toHaveBeenCalledWith({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "direct database fallback phrase" },
+      cursor: undefined,
+      pageSize: 50,
+    });
+    expect(saveSearchIndexCache).not.toHaveBeenCalled();
   });
 
   it("returns stable MiniSearch pages with load more cursors", async () => {
@@ -426,5 +496,33 @@ describe("loadExplorerPage", () => {
     });
 
     expect(page.entries.map((entry) => entry.id)).toEqual(["medical-shared-first", "medical-shared-second"]);
+  });
+});
+
+describe("shouldIndexEntry", () => {
+  it("keeps curated entries and prunes low-signal supplementary local evidence", () => {
+    const template = storedEntries()[0];
+
+    expect(shouldIndexEntry({ ...template, entryKind: "curated", evidenceTier: "supplementary" })).toBe(true);
+    expect(shouldIndexEntry({
+      ...template,
+      entryKind: "local-evidence",
+      evidenceTier: "supplementary",
+      subcategory: "snpedia",
+      publicationCount: 0,
+      magnitude: null,
+      repute: "good",
+    })).toBe(false);
+    expect(shouldIndexEntry({
+      ...template,
+      entryKind: "local-evidence",
+      evidenceTier: "supplementary",
+      subcategory: "snpedia",
+      publicationCount: 0,
+      magnitude: 2,
+      repute: "good",
+    })).toBe(true);
+    expect(shouldIndexEntry({ ...template, entryKind: "local-evidence", evidenceTier: "moderate" })).toBe(true);
+    expect(shouldIndexEntry({ ...template, entryKind: "local-evidence", evidenceTier: "emerging" })).toBe(false);
   });
 });

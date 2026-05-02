@@ -64,7 +64,15 @@ export interface SearchExplorerEntryIdsRequest {
 export interface SearchExplorerEntryIdsResult {
   ids: string[];
   count: number;
+  indexStatus: SearchIndexStatus;
 }
+
+export type SearchIndexFallbackReason = "memory-budget" | "unavailable" | "index-error";
+
+export type SearchIndexStatus =
+  | { state: "ready"; documentCount: number }
+  | { state: "skipped"; reason: SearchIndexFallbackReason; documentCount: number; message: string }
+  | { state: "failed"; reason: SearchIndexFallbackReason; documentCount?: number; message: string };
 
 export type WorkerRequest =
   | { type: "prewarm"; requestId: string; profileId: string }
@@ -75,8 +83,8 @@ export type WorkerRequest =
   | { type: "clearIndex"; requestId: string; profileId?: string; options?: { preservePersistentCache?: boolean } };
 
 export type WorkerResponse =
-  | { type: "prewarm"; requestId: string }
-  | { type: "waitForIndex"; requestId: string }
+  | { type: "prewarm"; requestId: string; status: SearchIndexStatus }
+  | { type: "waitForIndex"; requestId: string; status: SearchIndexStatus }
   | { type: "searchExplorer"; requestId: string; result: SearchExplorerEntryIdsResult }
   | { type: "searchWithFields"; requestId: string; result: SearchCandidate[] }
   | { type: "queryCandidates"; requestId: string; result: string[] }
@@ -84,15 +92,31 @@ export type WorkerResponse =
   | { type: "error"; requestId: string; error: string };
 
 const indexes = new Map<string, MiniSearch<LightEntry>>();
-const inFlight = new Map<string, Promise<void>>();
+const indexStatuses = new Map<string, SearchIndexStatus>();
+const inFlight = new Map<string, Promise<SearchIndexStatus>>();
 
-// Version 7: includes supplementary SNPedia context in the local search index.
-const SEARCH_INDEX_CACHE_VERSION = 7;
+// Version 8: prunes low-signal supplementary records and uses memory budgets.
+const SEARCH_INDEX_CACHE_VERSION = 8;
 const SEARCH_INDEX_INSERT_BATCH_SIZE = 500;
+const LOW_MEMORY_MAX_DOCUMENTS = 8_000;
+const LOW_MEMORY_MAX_TEXT_BYTES = 4 * 1024 * 1024;
+const DEFAULT_MAX_DOCUMENTS = 30_000;
+const DEFAULT_MAX_TEXT_BYTES = 12 * 1024 * 1024;
 
-// Search should still find contextual SNPedia and preview records. Ranking
-// penalties keep them below stronger evidence when relevance is comparable.
-const INDEXED_EVIDENCE_TIERS = new Set<EvidenceTier>(["high", "moderate", "emerging", "preview", "supplementary"]);
+const INDEXED_PRIMARY_EVIDENCE_TIERS = new Set<EvidenceTier>(["high", "moderate"]);
+const EMPTY_READY_STATUS: SearchIndexStatus = { state: "ready", documentCount: 0 };
+
+type NavigatorLike = {
+  userAgent?: string;
+  platform?: string;
+  maxTouchPoints?: number;
+  deviceMemory?: number;
+};
+
+interface SearchIndexMemoryBudget {
+  maxDocuments: number;
+  maxTextBytes: number;
+}
 
 const SEARCH_INDEX_FIELD_BOOSTS = {
   rsids: 12,
@@ -128,6 +152,98 @@ function createSearchIndex(): MiniSearch<LightEntry> {
       "geneValues", "tagValues", "sourceNames",
     ],
   });
+}
+
+function navigatorLike(): NavigatorLike | null {
+  return typeof navigator === "undefined" ? null : navigator;
+}
+
+function isLowMemoryDevice(): boolean {
+  const nav = navigatorLike();
+  if (!nav) return false;
+
+  const userAgent = nav.userAgent ?? "";
+  const platform = nav.platform ?? "";
+  const isIphoneOrIpad =
+    /iPhone|iPad|iPod/i.test(userAgent) ||
+    (platform === "MacIntel" && (nav.maxTouchPoints ?? 0) > 1);
+
+  return isIphoneOrIpad || (typeof nav.deviceMemory === "number" && nav.deviceMemory <= 4);
+}
+
+function activeMemoryBudget(): SearchIndexMemoryBudget {
+  return isLowMemoryDevice()
+    ? { maxDocuments: LOW_MEMORY_MAX_DOCUMENTS, maxTextBytes: LOW_MEMORY_MAX_TEXT_BYTES }
+    : { maxDocuments: DEFAULT_MAX_DOCUMENTS, maxTextBytes: DEFAULT_MAX_TEXT_BYTES };
+}
+
+function isHighSignalSupplementaryEntry(entry: StoredReportEntry): boolean {
+  return (entry.magnitude ?? 0) >= 2 ||
+    entry.publicationCount > 0 ||
+    entry.repute === "bad" ||
+    entry.repute === "mixed";
+}
+
+export function shouldIndexEntry(entry: StoredReportEntry): boolean {
+  if (entry.entryKind === "curated") return true;
+
+  const isSupplementary = entry.evidenceTier === "supplementary" || entry.subcategory === "snpedia";
+  if (isSupplementary) return isHighSignalSupplementaryEntry(entry);
+
+  return INDEXED_PRIMARY_EVIDENCE_TIERS.has(entry.evidenceTier);
+}
+
+function joinedLength(values: string[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((total, value) => total + value.length, values.length - 1);
+}
+
+function documentTextBytes(document: LightEntry): number {
+  const fieldLengths = [
+    document.id.length,
+    document.category.length,
+    document.title.length,
+    document.genes.length,
+    document.topics.length,
+    document.conditions.length,
+    document.rsids.length,
+    document.evidenceTier.length,
+    joinedLength(document.sourceNames),
+    document.significance.length,
+    document.repute.length,
+    document.coverage.length,
+    document.publicationBucket.length,
+    joinedLength(document.geneValues),
+    joinedLength(document.tagValues),
+    document.markers.length,
+    document.body.length,
+  ];
+
+  return (fieldLengths.reduce((total, length) => total + length, 0) + fieldLengths.length - 1) * 2;
+}
+
+function memoryBudgetSkipStatus(
+  budget: SearchIndexMemoryBudget,
+  documentCount: number,
+  textBytes: number,
+): SearchIndexStatus | null {
+  if (documentCount <= budget.maxDocuments && textBytes <= budget.maxTextBytes) return null;
+
+  return {
+    state: "skipped",
+    reason: "memory-budget",
+    documentCount,
+    message: `Local search index skipped because ${documentCount.toLocaleString()} documents exceed the device memory budget.`,
+  };
+}
+
+function readyIndexStatus(documentCount: number): SearchIndexStatus {
+  return { state: "ready", documentCount };
+}
+
+function setIndexStatus(profileId: string, status: SearchIndexStatus): SearchIndexStatus {
+  indexStatuses.set(profileId, status);
+  return status;
 }
 
 function toLightEntry(entry: StoredReportEntry): LightEntry {
@@ -192,8 +308,16 @@ function toSearchCandidate(result: SearchResult): SearchCandidate {
 }
 
 function insertBatched(index: MiniSearch<LightEntry>, documents: LightEntry[]): void {
-  for (let i = 0; i < documents.length; i += SEARCH_INDEX_INSERT_BATCH_SIZE) {
-    index.addAll(documents.slice(i, i + SEARCH_INDEX_INSERT_BATCH_SIZE));
+  let batch: LightEntry[] = [];
+  for (const document of documents) {
+    batch.push(document);
+    if (batch.length >= SEARCH_INDEX_INSERT_BATCH_SIZE) {
+      index.addAll(batch);
+      batch = [];
+    }
+  }
+  if (batch.length > 0) {
+    index.addAll(batch);
   }
 }
 
@@ -257,21 +381,30 @@ function explorerRelevanceScore(result: SearchResult): number {
   return result.score * qualityMultiplier(result);
 }
 
-export async function prewarmSearchIndex(profileId: string): Promise<void> {
-  if (indexes.has(profileId)) return;
-  if (inFlight.has(profileId)) return inFlight.get(profileId);
+export async function prewarmSearchIndex(profileId: string): Promise<SearchIndexStatus> {
+  if (indexes.has(profileId)) return indexStatuses.get(profileId) ?? EMPTY_READY_STATUS;
+  const existingStatus = indexStatuses.get(profileId);
+  if (existingStatus && existingStatus.state !== "ready") return existingStatus;
+  const pendingJob = inFlight.get(profileId);
+  if (pendingJob) return pendingJob;
 
   const job = (async () => {
-    const index = createSearchIndex();
+    const budget = activeMemoryBudget();
 
     const cached = await loadSearchIndexCache(profileId, SEARCH_INDEX_CACHE_VERSION);
     if (cached) {
       try {
         const documents = cached.rawData as LightEntry[];
         if (Array.isArray(documents) && documents.length > 0) {
+          const textBytes = documents.reduce((total, document) => total + documentTextBytes(document), 0);
+          const budgetStatus = memoryBudgetSkipStatus(budget, documents.length, textBytes);
+          if (budgetStatus) {
+            return setIndexStatus(profileId, budgetStatus);
+          }
+          const index = createSearchIndex();
           insertBatched(index, documents);
           indexes.set(profileId, index);
-          return;
+          return setIndexStatus(profileId, readyIndexStatus(documents.length));
         }
       } catch {
         // Invalid cache; fall through to rebuild.
@@ -280,28 +413,32 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
 
     const source = await loadSearchIndexSource(profileId);
     if (!source) {
+      const index = createSearchIndex();
       indexes.set(profileId, index);
-      return;
+      return setIndexStatus(profileId, EMPTY_READY_STATUS);
     }
 
     const allDocuments: LightEntry[] = [];
     const seenIds = new Set<string>();
-    let batch: LightEntry[] = [];
+    let textBytes = 0;
 
     for (const entry of source.entries) {
       if (seenIds.has(entry.id)) continue;
       seenIds.add(entry.id);
-      if (!INDEXED_EVIDENCE_TIERS.has(entry.evidenceTier)) continue;
+      if (!shouldIndexEntry(entry)) continue;
       const doc = toLightEntry(entry);
+      textBytes += documentTextBytes(doc);
       allDocuments.push(doc);
-      batch.push(doc);
-      if (batch.length >= SEARCH_INDEX_INSERT_BATCH_SIZE) {
-        index.addAll(batch);
-        batch = [];
+
+      const budgetStatus = memoryBudgetSkipStatus(budget, allDocuments.length, textBytes);
+      if (budgetStatus) {
+        return setIndexStatus(profileId, budgetStatus);
       }
     }
-    if (batch.length > 0) {
-      index.addAll(batch);
+
+    const index = createSearchIndex();
+    if (allDocuments.length > 0) {
+      insertBatched(index, allDocuments);
     }
 
     await saveSearchIndexCache({
@@ -312,6 +449,7 @@ export async function prewarmSearchIndex(profileId: string): Promise<void> {
     });
 
     indexes.set(profileId, index);
+    return setIndexStatus(profileId, readyIndexStatus(allDocuments.length));
   })().finally(() => inFlight.delete(profileId));
 
   inFlight.set(profileId, job);
@@ -339,7 +477,8 @@ export async function searchExplorerEntryIds({
 }: SearchExplorerEntryIdsRequest): Promise<SearchExplorerEntryIdsResult> {
   const index = indexes.get(profileId);
   const query = filters.q.trim();
-  if (!index || !query) return { ids: [], count: 0 };
+  const indexStatus = indexStatuses.get(profileId) ?? (index ? { state: "ready", documentCount: 0 } : EMPTY_READY_STATUS);
+  if (!index || !query) return { ids: [], count: 0, indexStatus };
 
   const hits = index
     .search(query, {
@@ -357,16 +496,19 @@ export async function searchExplorerEntryIds({
         || (left.title as string).localeCompare(right.title as string),
     );
 
-  if (hits.length === 0) return { ids: [], count: 0 };
+  if (hits.length === 0) return { ids: [], count: 0, indexStatus };
 
   return {
     ids: hits.slice(offset, offset + limit).map((hit) => hit.id as string),
     count: hits.length,
+    indexStatus,
   };
 }
 
-export async function waitForIndex(profileId: string): Promise<void> {
-  if (indexes.has(profileId)) return;
+export async function waitForIndex(profileId: string): Promise<SearchIndexStatus> {
+  if (indexes.has(profileId)) return indexStatuses.get(profileId) ?? EMPTY_READY_STATUS;
+  const existingStatus = indexStatuses.get(profileId);
+  if (existingStatus && existingStatus.state !== "ready") return existingStatus;
   return inFlight.get(profileId) ?? prewarmSearchIndex(profileId);
 }
 
@@ -376,11 +518,13 @@ export function clearSearchIndex(
 ): void {
   if (profileId) {
     indexes.delete(profileId);
+    indexStatuses.delete(profileId);
     inFlight.delete(profileId);
     if (!options.preservePersistentCache) void deleteSearchIndexCache(profileId);
     return;
   }
   indexes.clear();
+  indexStatuses.clear();
   inFlight.clear();
   if (!options.preservePersistentCache) void deleteSearchIndexCache();
 }

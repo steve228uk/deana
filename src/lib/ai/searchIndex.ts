@@ -2,6 +2,7 @@ import type {
   SearchCandidate,
   SearchExplorerEntryIdsRequest,
   SearchExplorerEntryIdsResult,
+  SearchIndexStatus,
   WorkerRequest,
   WorkerResponse,
 } from "./searchIndexCore";
@@ -14,10 +15,10 @@ import {
   waitForIndex as waitForIndexDirect,
 } from "./searchIndexCore";
 
-export type { SearchCandidate };
+export type { SearchCandidate, SearchExplorerEntryIdsResult, SearchIndexStatus };
 
 // ---- Worker client ----
-// All Orama operations run in a dedicated worker to isolate memory from the
+// All MiniSearch operations run in a dedicated worker to isolate memory from the
 // main thread, preventing iOS Safari from killing the tab on memory spikes.
 // When Worker is unavailable (e.g. test environments) the core runs directly.
 
@@ -25,6 +26,14 @@ let worker: Worker | null = null;
 let workerInitAttempted = false;
 let requestCounter = 0;
 const pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: unknown) => void }>();
+
+function failedIndexStatus(error: unknown): SearchIndexStatus {
+  return {
+    state: "failed",
+    reason: "index-error",
+    message: error instanceof Error ? error.message : "Search index is unavailable.",
+  };
+}
 
 function resetWorkerAfterFailure(): Worker | null {
   const failedWorker = worker;
@@ -75,13 +84,41 @@ function sendToWorker<T>(w: Worker, message: WorkerRequest): Promise<T> {
   });
 }
 
+async function sendStatusRequest(
+  type: "prewarm" | "waitForIndex",
+  profileId: string,
+  runDirect: (profileId: string) => Promise<SearchIndexStatus>,
+): Promise<SearchIndexStatus> {
+  const w = getWorker();
+  if (!w) {
+    try {
+      return await runDirect(profileId);
+    } catch (error) {
+      return failedIndexStatus(error);
+    }
+  }
+
+  const requestId = String(++requestCounter);
+  const message: WorkerRequest = type === "prewarm"
+    ? { type: "prewarm", requestId, profileId }
+    : { type: "waitForIndex", requestId, profileId };
+
+  try {
+    const response = await sendToWorker<{
+      type: "prewarm" | "waitForIndex";
+      requestId: string;
+      status: SearchIndexStatus;
+    }>(w, message);
+    return response.status;
+  } catch (error) {
+    return failedIndexStatus(error);
+  }
+}
+
 // ---- Public API ----
 
-export async function prewarmSearchIndex(profileId: string): Promise<void> {
-  const w = getWorker();
-  if (!w) return prewarmDirect(profileId);
-  const requestId = String(++requestCounter);
-  return sendToWorker(w, { type: "prewarm", requestId, profileId });
+export async function prewarmSearchIndex(profileId: string): Promise<SearchIndexStatus> {
+  return sendStatusRequest("prewarm", profileId, prewarmDirect);
 }
 
 export async function queryCandidateIds(profileId: string, terms: string[], limit = 50): Promise<string[]> {
@@ -123,11 +160,8 @@ export async function searchExplorerEntryIds(
   return response.result;
 }
 
-export async function waitForIndex(profileId: string): Promise<void> {
-  const w = getWorker();
-  if (!w) return waitForIndexDirect(profileId);
-  const requestId = String(++requestCounter);
-  return sendToWorker(w, { type: "waitForIndex", requestId, profileId });
+export async function waitForIndex(profileId: string): Promise<SearchIndexStatus> {
+  return sendStatusRequest("waitForIndex", profileId, waitForIndexDirect);
 }
 
 export function clearSearchIndex(

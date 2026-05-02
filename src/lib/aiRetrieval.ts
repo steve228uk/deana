@@ -1,6 +1,6 @@
 import { DEFAULT_FILTERS, matchesEntryFilters } from "./explorer";
 import { findingToChatContext, MAX_CHAT_CONTEXT_FINDINGS, type ChatContextFinding } from "./aiChat";
-import { searchWithFields, waitForIndex, type SearchCandidate } from "./ai/searchIndex";
+import { searchWithFields, waitForIndex, type SearchCandidate, type SearchIndexStatus } from "./ai/searchIndex";
 import { rankingQualityMultiplier } from "./ai/ranking";
 import { loadReportEntriesByIds, streamReportEntries } from "./storage";
 import type { ChatRetrievalTrace, ChatSearchPlan, InsightCategory, StoredReportEntry } from "../types";
@@ -355,6 +355,12 @@ function preScoreCandidate(candidate: SearchCandidate, plan: ChatSearchPlan): nu
     + Math.min(candidate.sortEvidence, 100) / 200;
 }
 
+function fallbackReasonForIndexStatus(status: SearchIndexStatus): ChatRetrievalTrace["fallbackReason"] | undefined {
+  if (status.state === "ready") return undefined;
+  if (status.reason === "memory-budget") return "memory-budget";
+  return status.state === "failed" ? "index-error" : "unavailable";
+}
+
 export async function searchReportEntriesForChat({
   profileId,
   prompt,
@@ -371,10 +377,26 @@ export async function searchReportEntriesForChat({
   const excludedIds = new Set(excludeIds);
 
   const startedAt = performance.now();
-  await waitForIndex(profileId);
+  let fallbackReason: ChatRetrievalTrace["fallbackReason"] | undefined;
+  let isIndexReady = false;
+  try {
+    const status = await waitForIndex(profileId);
+    isIndexReady = status.state === "ready";
+    fallbackReason = fallbackReasonForIndexStatus(status);
+  } catch {
+    fallbackReason = "index-error";
+  }
   const indexReadyAt = performance.now();
 
-  const candidates = await searchWithFields(profileId, terms, INDEX_CANDIDATE_LIMIT);
+  let candidates: SearchCandidate[] = [];
+  if (isIndexReady) {
+    try {
+      candidates = await searchWithFields(profileId, terms, INDEX_CANDIDATE_LIMIT);
+    } catch {
+      fallbackReason = "index-error";
+      candidates = [];
+    }
+  }
   const indexSearchedAt = performance.now();
 
   const rankEntry = (entry: StoredReportEntry) => {
@@ -393,15 +415,18 @@ export async function searchReportEntriesForChat({
     .map((c) => c.id)
     .filter((id) => !excludedIds.has(id));
 
-  const indexedEntries = await loadReportEntriesByIds(profileId, candidateIds);
+  const indexedEntries = candidateIds.length > 0
+    ? await loadReportEntriesByIds(profileId, candidateIds)
+    : [];
   const idbReadAt = performance.now();
   for (const entry of indexedEntries) {
     rankEntry(entry);
   }
   const indexedScoredAt = performance.now();
 
-  // Fallback: full scan only when the index returned no candidates at all.
-  const usedFallback = candidates.length === 0;
+  // Fallback: full scan when the index is unavailable or found no candidates.
+  const usedFallback = !isIndexReady || candidates.length === 0;
+  if (usedFallback && !fallbackReason) fallbackReason = isIndexReady ? "no-index-candidates" : "unavailable";
   let fallbackScannedAt = indexedScoredAt;
   if (usedFallback) {
     for await (const entry of streamReportEntries(profileId)) {
@@ -459,6 +484,7 @@ export async function searchReportEntriesForChat({
       },
       indexCandidateCount: candidates.length,
       usedFallback,
+      fallbackReason,
       timingMs,
     },
   };

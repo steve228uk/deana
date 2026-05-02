@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildEntrySearchText } from "./explorer";
 import { searchReportEntriesForChat } from "./aiRetrieval";
 import { clearSearchIndex } from "./ai/searchIndex";
@@ -88,6 +88,10 @@ describe("searchReportEntriesForChat", () => {
     vi.clearAllMocks();
     cachedSearchIndex = null;
     clearSearchIndex();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("uses AI-planned genes and rsIDs to retrieve local report findings", async () => {
@@ -417,6 +421,7 @@ describe("searchReportEntriesForChat", () => {
       summary: "Male Pattern Baldness genotype context.",
       detail: "Supplementary consumer-facing SNPedia context.",
       evidenceTier: "supplementary",
+      magnitude: 2,
       genes: [],
       topics: ["SNPedia", "Genotype page"],
       conditions: ["Male Pattern Baldness"],
@@ -561,6 +566,52 @@ describe("searchReportEntriesForChat", () => {
     expect(result.trace.usedFallback).toBe(true);
     expect(result.trace.indexCandidateCount).toBe(0);
     expect(result.trace.timingMs?.fallbackScan).toBeGreaterThanOrEqual(0);
+  });
+
+  it("falls back to direct IndexedDB search when MiniSearch is skipped for memory budget", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
+    const template = storedEntries()[0];
+    const entries = Array.from({ length: 8_001 }, (_, index) => withSearchText({
+      ...template,
+      id: `local-medical-budget-${index}`,
+      category: "medical",
+      title: index === 8_000 ? "Budget fallback Factor V finding" : `Budget filler ${index}`,
+      summary: index === 8_000 ? "Factor V Leiden direct scan result." : "Unrelated budget filler.",
+      detail: index === 8_000 ? "The direct IndexedDB scan should still find F5." : "Unrelated budget filler.",
+      genes: index === 8_000 ? ["F5"] : ["GENE"],
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${700000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: index === 8_000 ? "F5" : "GENE" }],
+    }));
+    installEntries(entries);
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "Factor V Leiden",
+      plan: {
+        query: "Factor V Leiden",
+        categories: ["medical"],
+        genes: ["F5"],
+        rsids: [],
+        topics: [],
+        conditions: [],
+        relatedTerms: [],
+        evidence: ["high"],
+        rationale: "Search for Factor V.",
+      },
+    });
+
+    expect(result.findings[0]).toMatchObject({
+      id: "local-medical-budget-8000",
+      title: "Budget fallback Factor V finding",
+    });
+    expect(result.trace.usedFallback).toBe(true);
+    expect(result.trace.fallbackReason).toBe("memory-budget");
+    expect(result.trace.indexCandidateCount).toBe(0);
+    expect(saveSearchIndexCache).not.toHaveBeenCalled();
   });
 });
 

@@ -41,6 +41,11 @@ import {
   StoredReportEntry,
 } from "./types";
 
+const readySearchIndexStatus = vi.hoisted(() => (documentCount = 0) => ({
+  state: "ready" as const,
+  documentCount,
+}));
+
 vi.mock("./lib/storage", () => ({
   loadProfileSummaries: vi.fn(),
   loadProfileMeta: vi.fn(),
@@ -63,9 +68,9 @@ vi.mock("./lib/storage", () => ({
 
 vi.mock("./lib/ai/searchIndex", () => ({
   clearSearchIndex: vi.fn(),
-  prewarmSearchIndex: vi.fn(async () => undefined),
+  prewarmSearchIndex: vi.fn(async () => readySearchIndexStatus()),
   searchExplorerEntryIds: vi.fn(),
-  waitForIndex: vi.fn(async () => undefined),
+  waitForIndex: vi.fn(async () => readySearchIndexStatus()),
 }));
 
 const parsed = makeParsedDnaFile();
@@ -290,15 +295,16 @@ function installStorageMocks() {
       hasMore: nextCursor !== null,
     };
   });
-  vi.mocked(waitForIndex).mockImplementation(async () => undefined);
+  vi.mocked(waitForIndex).mockImplementation(async () => readySearchIndexStatus());
   vi.mocked(searchExplorerEntryIds).mockImplementation(async ({ profileId, category, filters, offset, limit }) => {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
-    if (!profile) return { ids: [], count: 0 };
+    if (!profile) return { ids: [], count: 0, indexStatus: readySearchIndexStatus() };
 
     const entries = queryEntries(profile, category, filters);
     return {
       ids: sliceEntries(entries, offset, limit).map((entry) => entry.id),
       count: entries.length,
+      indexStatus: readySearchIndexStatus(entries.length),
     };
   });
   vi.mocked(loadReportEntry).mockImplementation(async (profileId: string, entryId: string) => {
@@ -546,6 +552,7 @@ describe("Deana app", () => {
       await new Promise<void>((resolve) => {
         resolveIndex = resolve;
       });
+      return readySearchIndexStatus();
     });
     const { container } = renderApp("/");
 
@@ -583,6 +590,7 @@ describe("Deana app", () => {
       await new Promise<void>((resolve) => {
         resolveIndex = resolve;
       });
+      return readySearchIndexStatus();
     });
     storedProfiles = [makeStaleEvidenceProfile("profile-stale")];
 
