@@ -72,6 +72,7 @@ interface ParsedChatMessage {
 
 const entryLinkPrefix = "deana://entry/";
 const entryLinkPattern = new RegExp(`${entryLinkPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[A-Za-z0-9_%~-]+`, "g");
+const noSavedReportFindingsMessage = "No saved report findings matched this local browser search.";
 
 function makeId(prefix: string): string {
   return `${prefix}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -97,15 +98,39 @@ function displayMessageText(message: UIMessage): string {
   return parseChatMessage(message).content;
 }
 
+function isSettledSearchToolPart(part: UIMessage["parts"][number]): boolean {
+  return part.type === "tool-searchReportFindings"
+    && "state" in part
+    && (part.state === "output-available" || part.state === "output-error");
+}
+
+function shouldKeepLatestToolResult(
+  message: UIMessage,
+  index: number,
+  messages: UIMessage[],
+  text: string,
+  settledSearchToolParts: UIMessage["parts"],
+): boolean {
+  return index === messages.length - 1
+    && message.role === "assistant"
+    && !text
+    && settledSearchToolParts.length > 0;
+}
+
 export function compactChatMessagesForRequest(messages: UIMessage[]): UIMessage[] {
   return messages
-    .map((message) => {
+    .map((message, index) => {
       const text = displayMessageText(message).trim();
+      const settledSearchToolParts = message.parts.filter(isSettledSearchToolPart);
+      const parts: UIMessage["parts"] = text ? [{ type: "text" as const, text }] : [];
+      if (shouldKeepLatestToolResult(message, index, messages, text, settledSearchToolParts)) {
+        parts.push(...settledSearchToolParts);
+      }
 
       return {
         id: message.id,
         role: message.role,
-        parts: text ? [{ type: "text" as const, text }] : [],
+        parts,
       };
     })
     .filter((message) => message.role === "user" || message.parts.length > 0);
@@ -647,6 +672,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
             findings: retrieval.findings,
             trace: retrieval.trace,
             resultCount: retrieval.resultCount,
+            ...(retrieval.resultCount === 0 ? { message: noSavedReportFindingsMessage } : {}),
           },
         });
       } catch (error) {
@@ -1116,14 +1142,52 @@ function FollowUpSuggestions({
   followUps: ChatFollowUpAction[];
   onSelect: (action: ChatFollowUpAction) => void;
 }) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollEdges, setScrollEdges] = useState({ left: false, right: false });
+  const followUpSignature = followUps.map((followUp) => `${followUp.kind}:${followUp.title}:${followUp.body}`).join("\n");
+  const updateScrollEdges = useCallback(() => {
+    const node = scrollerRef.current;
+    if (!node) return;
+    const maxScrollLeft = node.scrollWidth - node.clientWidth;
+    const nextEdges = {
+      left: node.scrollLeft > 1,
+      right: node.scrollLeft < maxScrollLeft - 1,
+    };
+    setScrollEdges((current) => (
+      current.left === nextEdges.left && current.right === nextEdges.right ? current : nextEdges
+    ));
+  }, []);
+
+  useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node) return;
+    const frameId = window.requestAnimationFrame(updateScrollEdges);
+    node.addEventListener("scroll", updateScrollEdges, { passive: true });
+    window.addEventListener("resize", updateScrollEdges);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      node.removeEventListener("scroll", updateScrollEdges);
+      window.removeEventListener("resize", updateScrollEdges);
+    };
+  }, [followUpSignature, updateScrollEdges]);
+
+  const shellClassName = [
+    "dn-ai-follow-up-shell",
+    scrollEdges.left ? "has-left-fade" : "",
+    scrollEdges.right ? "has-right-fade" : "",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div className="dn-ai-follow-ups" aria-label="Suggested follow-up prompts">
-      {followUps.map((followUp) => (
-        <button key={`${followUp.kind}-${followUp.body}`} type="button" onClick={() => onSelect(followUp)} title={followUp.body}>
-          {followUp.kind === "searchMore" ? <Icon name="search" /> : <Icon name="spark" />}
-          <span>{followUp.title}</span>
-        </button>
-      ))}
+    <div className={shellClassName}>
+      <div ref={scrollerRef} className="dn-ai-follow-ups" aria-label="Suggested follow-up prompts">
+        {followUps.map((followUp) => (
+          <button key={`${followUp.kind}-${followUp.body}`} type="button" onClick={() => onSelect(followUp)} title={followUp.body}>
+            {followUp.kind === "searchMore" ? <Icon name="search" /> : <Icon name="spark" />}
+            <span>{followUp.title}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1221,6 +1285,7 @@ function ThreadList({
 
 export function generatingStatusDetail(status: SearchStatus): string {
   if (status.status === "searching") return "Searching saved report findings...";
+  if (status.status === "ready" && status.trace.resultCount === 0) return "No matching saved findings found...";
   if (status.status === "ready") return `Interpreting ${status.trace.resultCount} matched findings...`;
   if (status.status === "error") return status.message;
   return "Thinking…";

@@ -734,6 +734,15 @@ describe("Deana app", () => {
     renderApp("/explorer/profile-ai?tab=ai");
 
     await screen.findByText(/AI chat sends report context off this device/i);
+    const explorerNav = within(screen.getByRole("navigation", { name: "Explorer sections" }));
+    const explorerNavLabels = explorerNav.getAllByRole("button").map((button) => button.textContent);
+    expect(explorerNavLabels).toEqual([
+      "Overview",
+      "AI Chat",
+      "Medical",
+      "Traits",
+      "Drug response",
+    ]);
     expect(fetchCallsFor("/api/ai-status").length).toBeGreaterThan(0);
     expect(fetchCallsFor("/api/chat")).toHaveLength(0);
 
@@ -765,7 +774,7 @@ describe("Deana app", () => {
 
     await screen.findByText("Current report");
     await waitFor(() => expect(screen.getByTestId("location").textContent).toContain("tab=overview"));
-    expect(screen.queryByRole("button", { name: "AI" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "AI Chat" })).not.toBeInTheDocument();
   });
 
   it("shows chat privacy details from the empty-state learn more button without the old banner", async () => {

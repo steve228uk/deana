@@ -15,19 +15,23 @@ export interface ExplorerReportCard {
 
 const tabs: Array<{ id: ExplorerTab; label: string }> = [
   { id: "overview", label: "Overview" },
+  { id: "ai", label: "AI Chat" },
   { id: "medical", label: "Medical" },
   { id: "traits", label: "Traits" },
   { id: "drug", label: "Drug response" },
-  { id: "ai", label: "AI" },
 ];
 
-const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = [
-  { id: "overview", label: "Overview", icon: "home" },
-  { id: "medical", label: "Medical", icon: "heart" },
-  { id: "traits", label: "Traits", icon: "leaf" },
-  { id: "drug", label: "Drug response", icon: "pill" },
-  { id: "ai", label: "AI", icon: "spark" },
-];
+const iconByTab: Record<ExplorerTab, IconName> = {
+  overview: "home",
+  ai: "spark",
+  medical: "heart",
+  traits: "leaf",
+  drug: "pill",
+};
+const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = tabs.map((tab) => ({
+  ...tab,
+  icon: iconByTab[tab.id],
+}));
 const visibleTabsWithoutAi = tabs.filter((item) => item.id !== "ai");
 const visibleNavWithoutAi = nav.filter((item) => item.id !== "ai");
 const SORT_FILTER_OPTIONS: Array<[string, string]> = [
