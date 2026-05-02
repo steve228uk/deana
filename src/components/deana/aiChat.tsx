@@ -126,6 +126,17 @@ function entryIdFromHref(href: string | undefined): string | null {
   return decodeURIComponent(href.slice(entryLinkPrefix.length));
 }
 
+function linkedEntryIdsFromTextValues(values: string[]): string[] {
+  const ids = new Set<string>();
+  values.forEach((value) => {
+    for (const match of value.matchAll(entryLinkPattern)) {
+      const entryId = entryIdFromHref(match[0]);
+      if (entryId) ids.add(entryId);
+    }
+  });
+  return Array.from(ids).sort();
+}
+
 function textFromChildren(children: ReactNode): string {
   let text = "";
   Children.forEach(children, (child) => {
@@ -234,6 +245,8 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const setMessagesRef = useRef<((messages: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
   const attemptedEntryTitleIdsRef = useRef<Set<string>>(new Set());
+  const entryTitleByIdRef = useRef<Map<string, string>>(new Map());
+  const openEntryPanelRef = useRef<(href: string | undefined) => void | Promise<void>>(() => undefined);
   latestPropsRef.current = props;
   activeThreadRef.current = activeThread;
 
@@ -283,6 +296,15 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
 
   async function selectThread(thread: StoredChatThread, closeList = true) {
     const storedMessages = await loadChatMessages(thread.id);
+    const linkedEntryIds = linkedEntryIdsFromTextValues(storedMessages.map((message) => message.content));
+    if (linkedEntryIds.length > 0) {
+      try {
+        const entries = await loadReportEntriesByIds(latestPropsRef.current.profile.id, linkedEntryIds);
+        cacheResolvedEntryTitles(entries);
+      } catch {
+        // Chat content should still open if optional chip title lookup fails.
+      }
+    }
     traceByMessageRef.current = Object.fromEntries(
       storedMessages
         .filter((message) => message.trace)
@@ -688,20 +710,14 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       error: finding ? null : "This finding is no longer available in the saved report.",
     });
   }, [loadChatEntry]);
+  openEntryPanelRef.current = openEntryPanel;
 
   const openFindingsPanel = useCallback(() => {
     setPanel({ mode: "findings" });
   }, []);
 
   const linkedEntryIds = useMemo(() => {
-    const ids = new Set<string>();
-    messages.forEach((message) => {
-      for (const match of messageText(message).matchAll(entryLinkPattern)) {
-        const entryId = entryIdFromHref(match[0]);
-        if (entryId) ids.add(entryId);
-      }
-    });
-    return Array.from(ids).sort();
+    return linkedEntryIdsFromTextValues(messages.map(messageText));
   }, [messages]);
 
   const entryTitleById = useMemo(() => {
@@ -715,6 +731,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       activeTrace: searchStatus.status === "ready" ? searchStatus.trace : undefined,
     });
   }, [messages, props.selectedEntry, props.visibleEntries, resolvedEntryTitles, searchStatus]);
+  entryTitleByIdRef.current = entryTitleById;
 
   useEffect(() => {
     const missingEntryIds = linkedEntryIds.filter((entryId) => !entryTitleById.has(entryId) && !attemptedEntryTitleIdsRef.current.has(entryId));
@@ -739,7 +756,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     a({ href, children }) {
       if (entryIdFromHref(href)) {
         return (
-          <EntryChip href={href ?? ""} entryTitleById={entryTitleById} onOpenEntry={(entryHref) => void openEntryPanel(entryHref)}>
+          <EntryChip href={href ?? ""} entryTitleById={entryTitleByIdRef.current} onOpenEntry={(entryHref) => void openEntryPanelRef.current(entryHref)}>
             {children}
           </EntryChip>
         );
@@ -765,7 +782,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         const index = match.index ?? 0;
         if (index > lastIndex) nodes.push(value.slice(lastIndex, index));
         nodes.push(
-          <EntryChip key={`${href}-${index}`} href={href} entryTitleById={entryTitleById} onOpenEntry={(entryHref) => void openEntryPanel(entryHref)}>
+          <EntryChip key={`${href}-${index}`} href={href} entryTitleById={entryTitleByIdRef.current} onOpenEntry={(entryHref) => void openEntryPanelRef.current(entryHref)}>
             {href}
           </EntryChip>,
         );
@@ -775,7 +792,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (lastIndex < value.length) nodes.push(value.slice(lastIndex));
       return nodes.length > 0 ? <>{nodes}</> : <>{children}</>;
     },
-  }), [entryTitleById, openEntryPanel]);
+  }), []);
 
   const handleOpenEntry = useCallback(
     (entryId: string) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`),
@@ -841,6 +858,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
                   modelName={messageModel(message)}
                   trace={traceByMessageRef.current[message.id]}
                   reasoningSummary={messageReasoning(message) ?? reasoningByMessageRef.current[message.id] ?? null}
+                  entryTitleById={entryTitleById}
                   components={markdownComponents}
                   onOpenEntry={handleOpenEntry}
                   onOpenFindings={openFindingsPanel}
@@ -1212,6 +1230,7 @@ const ChatMessage = memo(function ChatMessage({
   modelName,
   trace,
   reasoningSummary,
+  entryTitleById,
   components,
   onOpenEntry,
   onOpenFindings,
@@ -1221,10 +1240,12 @@ const ChatMessage = memo(function ChatMessage({
   modelName: string | null;
   trace?: ChatRetrievalTrace;
   reasoningSummary: string | null;
+  entryTitleById: Map<string, string>;
   components: Components;
   onOpenEntry: (entryId: string) => void;
   onOpenFindings: () => void;
 }) {
+  void entryTitleById;
   const hasReasoning = Boolean(reasoningSummary?.trim());
 
   if (!content && !hasReasoning) return null;
