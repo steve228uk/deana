@@ -13,13 +13,13 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     switch (type) {
       case "prewarm": {
-        await prewarmSearchIndex(event.data.profileId);
-        self.postMessage({ type: "prewarm", requestId } satisfies WorkerResponse);
+        const status = await prewarmSearchIndex(event.data.profileId);
+        self.postMessage({ type: "prewarm", requestId, status } satisfies WorkerResponse);
         break;
       }
       case "waitForIndex": {
-        await waitForIndex(event.data.profileId);
-        self.postMessage({ type: "waitForIndex", requestId } satisfies WorkerResponse);
+        const status = await waitForIndex(event.data.profileId);
+        self.postMessage({ type: "waitForIndex", requestId, status } satisfies WorkerResponse);
         break;
       }
       case "searchExplorer": {

@@ -1,4 +1,4 @@
-import { searchExplorerEntryIds, waitForIndex } from "./ai/searchIndex";
+import { searchExplorerEntryIds, waitForIndex, type SearchExplorerEntryIdsResult } from "./ai/searchIndex";
 import { loadCategoryPage, loadReportEntriesByIds } from "./storage";
 import type { ExplorerFilters } from "./explorer";
 import type { ExplorerPage, StoredReportEntry } from "../types";
@@ -44,6 +44,17 @@ function orderEntriesByIds(ids: string[], entries: StoredReportEntry[]): StoredR
     .filter((entry): entry is StoredReportEntry => Boolean(entry));
 }
 
+function loadDirectExplorerPage(request: ExplorerPageRequest): Promise<ExplorerPage> {
+  const cursor = request.filters.q.trim() && decodeSearchCursor(request.cursor) ? undefined : request.cursor;
+  return loadCategoryPage({
+    profileId: request.profileId,
+    category: request.category,
+    filters: request.filters,
+    cursor,
+    pageSize: request.pageSize ?? DEFAULT_PAGE_SIZE,
+  });
+}
+
 export async function loadExplorerPage({
   profileId,
   category,
@@ -51,26 +62,38 @@ export async function loadExplorerPage({
   cursor,
   pageSize = DEFAULT_PAGE_SIZE,
 }: ExplorerPageRequest): Promise<ExplorerPage> {
+  const request = { profileId, category, filters, cursor, pageSize };
+  const loadDirect = () => loadDirectExplorerPage(request);
+
   if (!filters.q.trim()) {
-    return loadCategoryPage({
-      profileId,
-      category,
-      filters,
-      cursor,
-      pageSize,
-    });
+    return loadDirect();
   }
 
   const offset = decodeSearchCursor(cursor)?.offset ?? 0;
-  await waitForIndex(profileId);
+  try {
+    const indexStatus = await waitForIndex(profileId);
+    if (indexStatus.state !== "ready") {
+      return loadDirect();
+    }
+  } catch {
+    return loadDirect();
+  }
 
-  const searchResult = await searchExplorerEntryIds({
-    profileId,
-    category,
-    filters,
-    offset,
-    limit: pageSize,
-  });
+  let searchResult: SearchExplorerEntryIdsResult;
+  try {
+    searchResult = await searchExplorerEntryIds({
+      profileId,
+      category,
+      filters,
+      offset,
+      limit: pageSize,
+    });
+  } catch {
+    return loadDirect();
+  }
+  if (searchResult.indexStatus.state !== "ready") {
+    return loadDirect();
+  }
   if (searchResult.ids.length === 0) {
     return {
       entries: [],

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSearchIndex } from "./ai/searchIndex";
+import { shouldIndexEntry } from "./ai/searchIndexCore";
 import { DEFAULT_FILTERS, buildEntrySearchText } from "./explorer";
 import { loadExplorerPage } from "./explorerSearch";
 import {
@@ -24,6 +25,7 @@ vi.mock("./storage", () => ({
 
 let entries: StoredReportEntry[] = [];
 let cachedSearchIndex: unknown = null;
+const lowMemoryBudgetLimit = 125_000;
 
 function storedEntries(): StoredReportEntry[] {
   const profile = makeSavedProfile({ id: "profile-explorer-search" });
@@ -82,6 +84,10 @@ describe("loadExplorerPage", () => {
     entries = [];
     cachedSearchIndex = null;
     clearSearchIndex();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("delegates to IndexedDB cursor paging when there is no search query", async () => {
@@ -331,7 +337,7 @@ describe("loadExplorerPage", () => {
     ]);
   });
 
-  it("returns supplementary SNPedia context from MiniSearch results", async () => {
+  it("returns high-signal supplementary SNPedia context from MiniSearch results", async () => {
     const template = storedEntries()[0];
     const snpedia = withSearchText({
       ...template,
@@ -342,6 +348,7 @@ describe("loadExplorerPage", () => {
       summary: "SNPedia genotype context for male pattern baldness.",
       detail: "Supplementary consumer-facing SNPedia context.",
       evidenceTier: "supplementary",
+      magnitude: 2,
       sources: [{ id: "snpedia", name: "SNPedia", url: "https://example.com/snpedia" }],
       topics: ["SNPedia", "Genotype page"],
       conditions: ["Male Pattern Baldness"],
@@ -356,6 +363,115 @@ describe("loadExplorerPage", () => {
     });
 
     expect(page.entries.map((entry) => entry.id)).toEqual(["local-traits-snpedia-baldness-context"]);
+  });
+
+  it("does not include low-signal supplementary SNPedia context in MiniSearch results", async () => {
+    const template = storedEntries()[0];
+    const snpedia = withSearchText({
+      ...template,
+      id: "local-traits-snpedia-low-signal",
+      entryKind: "local-evidence",
+      category: "traits",
+      subcategory: "snpedia",
+      title: "Low signal SNPedia context",
+      summary: "A low signal supplementary SNPedia phrase.",
+      detail: "Supplementary consumer-facing SNPedia context.",
+      evidenceTier: "supplementary",
+      magnitude: null,
+      publicationCount: 0,
+      repute: "good",
+      sources: [{ id: "snpedia", name: "SNPedia", url: "https://example.com/snpedia" }],
+      topics: ["SNPedia", "Genotype page"],
+      conditions: ["Low signal phrase"],
+      matchedMarkers: [{ rsid: "rs2003046", genotype: "CC", chromosome: "7", position: 123, gene: undefined }],
+    });
+    installEntries([snpedia]);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "traits",
+      filters: { ...DEFAULT_FILTERS, q: "low signal phrase" },
+    });
+
+    expect(page.entries).toEqual([]);
+  });
+
+  it("falls back to IndexedDB search when the MiniSearch index is skipped for memory budget", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
+    const template = storedEntries()[0];
+    const targetIndex = lowMemoryBudgetLimit;
+    const oversizedEntries: StoredReportEntry[] = Array.from({ length: lowMemoryBudgetLimit + 1 }, (_, index) => ({
+      ...template,
+      id: `medical-budget-${index}`,
+      category: "medical",
+      title: `Budget entry ${index}`,
+      summary: index === targetIndex ? "Direct database fallback phrase." : "Unrelated budget entry.",
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${900000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
+      searchText: "",
+    }));
+    const directPage = {
+      entries: [oversizedEntries[targetIndex]],
+      nextCursor: null,
+      totalLoaded: 1,
+      hasMore: false,
+    };
+    installEntries(oversizedEntries);
+    vi.mocked(loadCategoryPage).mockResolvedValueOnce(directPage);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "direct database fallback phrase" },
+    });
+
+    expect(page).toBe(directPage);
+    expect(loadCategoryPage).toHaveBeenCalledWith({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "direct database fallback phrase" },
+      cursor: undefined,
+      pageSize: 50,
+    });
+    expect(saveSearchIndexCache).not.toHaveBeenCalled();
+  });
+
+  it("uses MiniSearch for large desktop reports within the normal browser budget", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+      platform: "MacIntel",
+      maxTouchPoints: 0,
+      deviceMemory: 8,
+    });
+    const template = storedEntries()[0];
+    const desktopTargetIndex = 30_000;
+    const entries = Array.from({ length: desktopTargetIndex + 1 }, (_, index) => withSearchText({
+      ...template,
+      id: `medical-desktop-budget-${index}`,
+      category: "medical",
+      title: index === desktopTargetIndex ? "Desktop MiniSearch phrase" : `Desktop budget entry ${index}`,
+      summary: index === desktopTargetIndex ? "Desktop MiniSearch phrase." : "Unrelated desktop budget entry.",
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${800000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
+    }));
+    installEntries(entries);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "desktop minisearch phrase" },
+    });
+
+    expect(loadCategoryPage).not.toHaveBeenCalled();
+    expect(loadReportEntriesByIds).toHaveBeenCalledWith("profile-explorer-search", [`medical-desktop-budget-${desktopTargetIndex}`]);
+    expect(page.entries.map((entry) => entry.id)).toEqual([`medical-desktop-budget-${desktopTargetIndex}`]);
+    expect(saveSearchIndexCache).toHaveBeenCalledWith(expect.objectContaining({
+      documentCount: desktopTargetIndex + 1,
+    }));
   });
 
   it("returns stable MiniSearch pages with load more cursors", async () => {
@@ -426,5 +542,33 @@ describe("loadExplorerPage", () => {
     });
 
     expect(page.entries.map((entry) => entry.id)).toEqual(["medical-shared-first", "medical-shared-second"]);
+  });
+});
+
+describe("shouldIndexEntry", () => {
+  it("keeps curated entries and prunes low-signal supplementary local evidence", () => {
+    const template = storedEntries()[0];
+
+    expect(shouldIndexEntry({ ...template, entryKind: "curated", evidenceTier: "supplementary" })).toBe(true);
+    expect(shouldIndexEntry({
+      ...template,
+      entryKind: "local-evidence",
+      evidenceTier: "supplementary",
+      subcategory: "snpedia",
+      publicationCount: 0,
+      magnitude: null,
+      repute: "good",
+    })).toBe(false);
+    expect(shouldIndexEntry({
+      ...template,
+      entryKind: "local-evidence",
+      evidenceTier: "supplementary",
+      subcategory: "snpedia",
+      publicationCount: 0,
+      magnitude: 2,
+      repute: "good",
+    })).toBe(true);
+    expect(shouldIndexEntry({ ...template, entryKind: "local-evidence", evidenceTier: "moderate" })).toBe(true);
+    expect(shouldIndexEntry({ ...template, entryKind: "local-evidence", evidenceTier: "emerging" })).toBe(false);
   });
 });

@@ -394,6 +394,7 @@ export interface ChatRetrievalTrace {
   retrievalCursor?: ChatRetrievalCursor;
   indexCandidateCount?: number;
   usedFallback?: boolean;
+  fallbackReason?: "memory-budget" | "index-error" | "no-index-candidates" | "unavailable";
   timingMs?: {
     total: number;
     indexWait: number;

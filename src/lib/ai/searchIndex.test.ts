@@ -112,7 +112,11 @@ describe("search index worker client", () => {
 
     const firstPrewarm = prewarmSearchIndex(profileId);
     MockSearchWorker.instances[0].fail("transient worker error");
-    await expect(firstPrewarm).rejects.toThrow("transient worker error");
+    await expect(firstPrewarm).resolves.toMatchObject({
+      state: "failed",
+      reason: "index-error",
+      message: "transient worker error",
+    });
 
     await prewarmSearchIndex(profileId);
 

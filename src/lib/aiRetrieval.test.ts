@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildEntrySearchText } from "./explorer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildEntrySearchText, matchesEntryFilters } from "./explorer";
 import { searchReportEntriesForChat } from "./aiRetrieval";
 import { clearSearchIndex } from "./ai/searchIndex";
 import {
   deleteSearchIndexCache,
+  loadCategoryPage,
   loadReportEntriesByIds,
   loadSearchIndexCache,
   loadSearchIndexSource,
@@ -15,6 +16,7 @@ import type { ChatSearchPlan, InsightCategory, StoredReportEntry } from "../type
 
 vi.mock("./storage", () => ({
   streamReportEntries: vi.fn(),
+  loadCategoryPage: vi.fn(),
   loadReportEntriesByIds: vi.fn(),
   loadSearchIndexSource: vi.fn(),
   loadSearchIndexCache: vi.fn(),
@@ -23,6 +25,7 @@ vi.mock("./storage", () => ({
 }));
 
 let cachedSearchIndex: unknown = null;
+const lowMemoryBudgetLimit = 125_000;
 
 function storedEntries(): StoredReportEntry[] {
   const profile = makeSavedProfile({ id: "profile-ai-search" });
@@ -34,6 +37,8 @@ function storedEntries(): StoredReportEntry[] {
 }
 
 function installEntries(entries: StoredReportEntry[]) {
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+
   vi.mocked(loadSearchIndexSource).mockImplementation(async (profileId: string) => ({
     metadata: {
       reportVersion: 1,
@@ -60,9 +65,12 @@ function installEntries(entries: StoredReportEntry[]) {
   });
 
   vi.mocked(loadReportEntriesByIds).mockImplementation(async (profileId: string, ids: string[]) => {
-    const selected = [] as StoredReportEntry[];
-    for await (const entry of streamReportEntries(profileId)) {
-      if (ids.includes(entry.id)) selected.push(entry);
+    const selected: StoredReportEntry[] = [];
+    for (const id of ids) {
+      const entry = entryById.get(id);
+      if (entry && (entry.profileId === profileId || profileId === "profile-ai-search")) {
+        selected.push(entry);
+      }
     }
     return selected;
   });
@@ -73,6 +81,28 @@ function installEntries(entries: StoredReportEntry[]) {
         yield entry;
       }
     }
+  });
+  vi.mocked(loadCategoryPage).mockImplementation(async ({
+    profileId,
+    category,
+    filters,
+    cursor,
+    pageSize = 50,
+  }) => {
+    const start = cursor ? Number(cursor) : 0;
+    const matchedEntries = entries.filter((entry) =>
+      (entry.profileId === profileId || profileId === "profile-ai-search") &&
+      matchesEntryFilters(entry, filters, category),
+    );
+    const pageEntries = matchedEntries.slice(start, start + pageSize);
+    const nextCursor = start + pageSize < matchedEntries.length ? String(start + pageSize) : null;
+
+    return {
+      entries: pageEntries,
+      nextCursor,
+      totalLoaded: start + pageEntries.length,
+      hasMore: nextCursor !== null,
+    };
   });
 }
 
@@ -88,6 +118,10 @@ describe("searchReportEntriesForChat", () => {
     vi.clearAllMocks();
     cachedSearchIndex = null;
     clearSearchIndex();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("uses AI-planned genes and rsIDs to retrieve local report findings", async () => {
@@ -417,6 +451,7 @@ describe("searchReportEntriesForChat", () => {
       summary: "Male Pattern Baldness genotype context.",
       detail: "Supplementary consumer-facing SNPedia context.",
       evidenceTier: "supplementary",
+      magnitude: 2,
       genes: [],
       topics: ["SNPedia", "Genotype page"],
       conditions: ["Male Pattern Baldness"],
@@ -561,6 +596,127 @@ describe("searchReportEntriesForChat", () => {
     expect(result.trace.usedFallback).toBe(true);
     expect(result.trace.indexCandidateCount).toBe(0);
     expect(result.trace.timingMs?.fallbackScan).toBeGreaterThanOrEqual(0);
+  });
+
+  it("falls back to direct IndexedDB search when MiniSearch is skipped for memory budget", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
+    const template = storedEntries()[0];
+    const targetIndex = lowMemoryBudgetLimit;
+    const entries: StoredReportEntry[] = Array.from({ length: lowMemoryBudgetLimit + 1 }, (_, index) => ({
+      ...template,
+      id: `local-medical-budget-${index}`,
+      category: "medical",
+      title: index === targetIndex ? "Budget fallback Factor V finding" : `Budget filler ${index}`,
+      summary: index === targetIndex ? "Factor V Leiden direct scan result." : "Unrelated budget filler.",
+      detail: index === targetIndex ? "The direct IndexedDB scan should still find F5." : "Unrelated budget filler.",
+      genes: index === targetIndex ? ["F5"] : ["GENE"],
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${700000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: index === targetIndex ? "F5" : "GENE" }],
+      searchText: "",
+    }));
+    entries[targetIndex] = withSearchText(entries[targetIndex]);
+    installEntries(entries);
+    vi.mocked(loadCategoryPage).mockResolvedValueOnce({
+      entries: [entries[targetIndex]],
+      nextCursor: null,
+      totalLoaded: 1,
+      hasMore: false,
+    });
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "Factor V Leiden",
+      plan: {
+        query: "Factor V Leiden",
+        categories: ["medical"],
+        genes: ["F5"],
+        rsids: [],
+        topics: [],
+        conditions: [],
+        relatedTerms: [],
+        evidence: ["high"],
+        rationale: "Search for Factor V.",
+      },
+    });
+
+    expect(result.findings[0]).toMatchObject({
+      id: `local-medical-budget-${targetIndex}`,
+      title: "Budget fallback Factor V finding",
+    });
+    expect(result.trace.usedFallback).toBe(true);
+    expect(result.trace.fallbackReason).toBe("memory-budget");
+    expect(result.trace.indexCandidateCount).toBe(0);
+    expect(result.trace.candidateWindowCount).toBe(1);
+    expect(streamReportEntries).not.toHaveBeenCalled();
+    expect(saveSearchIndexCache).not.toHaveBeenCalled();
+  });
+
+  it("preserves retrieval pagination when memory budget fallback has more local matches", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
+    const template = storedEntries()[0];
+    const fallbackMatchCount = 31;
+    const fallbackMatches = Array.from({ length: fallbackMatchCount }, (_, index) => withSearchText({
+      ...template,
+      id: `local-medical-budget-page-${index}`,
+      category: "medical",
+      title: `Budget fallback pagination finding ${index}`,
+      summary: "Factor V Leiden pagination fallback result.",
+      detail: "Factor V Leiden local fallback result.",
+      genes: ["F5"],
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${800000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "F5" }],
+    }));
+    const fillerEntries: StoredReportEntry[] = Array.from({ length: lowMemoryBudgetLimit + 1 - fallbackMatchCount }, (_, index) => ({
+      ...template,
+      id: `local-medical-budget-pagination-filler-${index}`,
+      category: "medical",
+      title: `Budget pagination filler ${index}`,
+      summary: "Unrelated budget pagination filler.",
+      detail: "Unrelated budget pagination filler.",
+      genes: ["GENE"],
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${900000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
+      searchText: "",
+    }));
+    installEntries([...fallbackMatches, ...fillerEntries]);
+    vi.mocked(loadCategoryPage).mockResolvedValueOnce({
+      entries: fallbackMatches,
+      nextCursor: null,
+      totalLoaded: fallbackMatches.length,
+      hasMore: false,
+    });
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "Factor V Leiden",
+      plan: {
+        query: "Factor V Leiden",
+        categories: ["medical"],
+        genes: ["F5"],
+        rsids: [],
+        topics: [],
+        conditions: [],
+        relatedTerms: [],
+        evidence: ["high"],
+        rationale: "Search for Factor V.",
+      },
+    });
+
+    expect(result.trace.usedFallback).toBe(true);
+    expect(result.trace.fallbackReason).toBe("memory-budget");
+    expect(result.trace.candidateWindowCount).toBe(fallbackMatchCount);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.findings.length).toBeLessThan(fallbackMatchCount);
+    expect(result.trace.remainingCandidateCount).toBe(fallbackMatchCount - result.findings.length);
+    expect(result.trace.retrievalCursor?.hasMore).toBe(true);
   });
 });
 
