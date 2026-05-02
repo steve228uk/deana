@@ -2,12 +2,15 @@ import { DEFAULT_FILTERS, matchesEntryFilters } from "./explorer";
 import { findingToChatContext, MAX_CHAT_CONTEXT_FINDINGS, type ChatContextFinding } from "./aiChat";
 import { searchWithFields, waitForIndex, type SearchCandidate, type SearchIndexStatus } from "./ai/searchIndex";
 import { rankingQualityMultiplier } from "./ai/ranking";
-import { loadReportEntriesByIds, streamReportEntries } from "./storage";
+import { loadCategoryPage, loadReportEntriesByIds } from "./storage";
 import type { ChatRetrievalTrace, ChatSearchPlan, InsightCategory, StoredReportEntry } from "../types";
 
 const ALL_CATEGORIES: InsightCategory[] = ["medical", "traits", "drug"];
 const MIN_CHAT_SEARCH_FINDINGS = 5;
 const INDEX_CANDIDATE_LIMIT = 180;
+const FALLBACK_QUERY_LIMIT = 8;
+const FALLBACK_PAGE_SIZE = 60;
+const FALLBACK_MAX_PAGES_PER_QUERY = 3;
 const SUPPLEMENTAL_CONTEXT_LIMIT = 2;
 const RANKING_WEIGHTS = {
   rsid: 90,
@@ -361,6 +364,53 @@ function fallbackReasonForIndexStatus(status: SearchIndexStatus): ChatRetrievalT
   return status.state === "failed" ? "index-error" : "unavailable";
 }
 
+function fallbackSearchQueries(prompt: string, plan: ChatSearchPlan): string[] {
+  return uniqueValues([
+    plan.query,
+    ...plan.rsids,
+    ...plan.genes,
+    ...plan.conditions,
+    ...plan.topics,
+    ...plan.relatedTerms,
+    prompt,
+  ]).slice(0, FALLBACK_QUERY_LIMIT);
+}
+
+async function loadFallbackReportEntries(
+  profileId: string,
+  prompt: string,
+  plan: ChatSearchPlan,
+  excludedIds: Set<string>,
+): Promise<StoredReportEntry[]> {
+  const entriesById = new Map<string, StoredReportEntry>();
+  const categories = plan.categories.length > 0 ? plan.categories : ALL_CATEGORIES;
+
+  for (const query of fallbackSearchQueries(prompt, plan)) {
+    for (const category of categories) {
+      let cursor: string | null = null;
+      for (let pageCount = 0; pageCount < FALLBACK_MAX_PAGES_PER_QUERY; pageCount += 1) {
+        const page = await loadCategoryPage({
+          profileId,
+          category,
+          filters: { ...DEFAULT_FILTERS, q: query },
+          cursor,
+          pageSize: FALLBACK_PAGE_SIZE,
+        });
+
+        for (const entry of page.entries) {
+          if (!excludedIds.has(entry.id)) entriesById.set(entry.id, entry);
+          if (entriesById.size >= INDEX_CANDIDATE_LIMIT) return [...entriesById.values()];
+        }
+
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+    }
+  }
+
+  return [...entriesById.values()];
+}
+
 export async function searchReportEntriesForChat({
   profileId,
   prompt,
@@ -427,9 +477,11 @@ export async function searchReportEntriesForChat({
   // Fallback: full scan when the index is unavailable or found no candidates.
   const usedFallback = !isIndexReady || candidates.length === 0;
   if (usedFallback && !fallbackReason) fallbackReason = isIndexReady ? "no-index-candidates" : "unavailable";
+  let fallbackEntries: StoredReportEntry[] = [];
   let fallbackScannedAt = indexedScoredAt;
   if (usedFallback) {
-    for await (const entry of streamReportEntries(profileId)) {
+    fallbackEntries = await loadFallbackReportEntries(profileId, prompt, effectivePlan, excludedIds);
+    for (const entry of fallbackEntries) {
       rankEntry(entry);
     }
     fallbackScannedAt = performance.now();
@@ -443,7 +495,8 @@ export async function searchReportEntriesForChat({
   const completedAt = performance.now();
   const selectedIds = selectedRankedEntries.map(({ entry }) => entry.id);
   const sentFindingIds = uniqueIds([...excludeIds, ...selectedIds]);
-  const remainingCandidateCount = Math.max(0, candidates.length - sentFindingIds.length);
+  const candidateWindowCount = candidates.length > 0 ? candidates.length : fallbackEntries.length;
+  const remainingCandidateCount = candidates.length > 0 ? Math.max(0, candidates.length - sentFindingIds.length) : 0;
   const hasMore = remainingCandidateCount > 0 && selectedFindings.length > 0;
   const timingMs = {
     total: Math.round(completedAt - startedAt),
@@ -465,7 +518,7 @@ export async function searchReportEntriesForChat({
       relatedTerms: effectivePlan.relatedTerms,
       resultCount: selectedFindings.length,
       sentCount: selectedFindings.length,
-      candidateWindowCount: candidates.length,
+      candidateWindowCount,
       remainingCandidateCount,
       returnedFindings: selectedRankedEntries.map(({ entry, matchedFields }) => ({
         id: entry.id,

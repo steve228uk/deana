@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildEntrySearchText } from "./explorer";
+import { buildEntrySearchText, matchesEntryFilters } from "./explorer";
 import { searchReportEntriesForChat } from "./aiRetrieval";
 import { clearSearchIndex } from "./ai/searchIndex";
 import {
   deleteSearchIndexCache,
+  loadCategoryPage,
   loadReportEntriesByIds,
   loadSearchIndexCache,
   loadSearchIndexSource,
@@ -15,6 +16,7 @@ import type { ChatSearchPlan, InsightCategory, StoredReportEntry } from "../type
 
 vi.mock("./storage", () => ({
   streamReportEntries: vi.fn(),
+  loadCategoryPage: vi.fn(),
   loadReportEntriesByIds: vi.fn(),
   loadSearchIndexSource: vi.fn(),
   loadSearchIndexCache: vi.fn(),
@@ -73,6 +75,28 @@ function installEntries(entries: StoredReportEntry[]) {
         yield entry;
       }
     }
+  });
+  vi.mocked(loadCategoryPage).mockImplementation(async ({
+    profileId,
+    category,
+    filters,
+    cursor,
+    pageSize = 50,
+  }) => {
+    const start = cursor ? Number(cursor) : 0;
+    const matchedEntries = entries.filter((entry) =>
+      (entry.profileId === profileId || profileId === "profile-ai-search") &&
+      matchesEntryFilters(entry, filters, category),
+    );
+    const pageEntries = matchedEntries.slice(start, start + pageSize);
+    const nextCursor = start + pageSize < matchedEntries.length ? String(start + pageSize) : null;
+
+    return {
+      entries: pageEntries,
+      nextCursor,
+      totalLoaded: start + pageEntries.length,
+      hasMore: nextCursor !== null,
+    };
   });
 }
 
@@ -575,17 +599,19 @@ describe("searchReportEntriesForChat", () => {
       maxTouchPoints: 5,
     });
     const template = storedEntries()[0];
-    const entries = Array.from({ length: 8_001 }, (_, index) => withSearchText({
+    const entries: StoredReportEntry[] = Array.from({ length: 125_001 }, (_, index) => ({
       ...template,
       id: `local-medical-budget-${index}`,
       category: "medical",
-      title: index === 8_000 ? "Budget fallback Factor V finding" : `Budget filler ${index}`,
-      summary: index === 8_000 ? "Factor V Leiden direct scan result." : "Unrelated budget filler.",
-      detail: index === 8_000 ? "The direct IndexedDB scan should still find F5." : "Unrelated budget filler.",
-      genes: index === 8_000 ? ["F5"] : ["GENE"],
+      title: index === 125_000 ? "Budget fallback Factor V finding" : `Budget filler ${index}`,
+      summary: index === 125_000 ? "Factor V Leiden direct scan result." : "Unrelated budget filler.",
+      detail: index === 125_000 ? "The direct IndexedDB scan should still find F5." : "Unrelated budget filler.",
+      genes: index === 125_000 ? ["F5"] : ["GENE"],
       evidenceTier: "high",
-      matchedMarkers: [{ rsid: `rs${700000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: index === 8_000 ? "F5" : "GENE" }],
+      matchedMarkers: [{ rsid: `rs${700000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: index === 125_000 ? "F5" : "GENE" }],
+      searchText: "",
     }));
+    entries[125_000] = withSearchText(entries[125_000]);
     installEntries(entries);
 
     const result = await searchReportEntriesForChat({
@@ -605,12 +631,14 @@ describe("searchReportEntriesForChat", () => {
     });
 
     expect(result.findings[0]).toMatchObject({
-      id: "local-medical-budget-8000",
+      id: "local-medical-budget-125000",
       title: "Budget fallback Factor V finding",
     });
     expect(result.trace.usedFallback).toBe(true);
     expect(result.trace.fallbackReason).toBe("memory-budget");
     expect(result.trace.indexCandidateCount).toBe(0);
+    expect(result.trace.candidateWindowCount).toBe(1);
+    expect(streamReportEntries).not.toHaveBeenCalled();
     expect(saveSearchIndexCache).not.toHaveBeenCalled();
   });
 });

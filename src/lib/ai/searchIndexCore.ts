@@ -98,10 +98,10 @@ const inFlight = new Map<string, Promise<SearchIndexStatus>>();
 // Version 8: prunes low-signal supplementary records and uses memory budgets.
 const SEARCH_INDEX_CACHE_VERSION = 8;
 const SEARCH_INDEX_INSERT_BATCH_SIZE = 500;
-const LOW_MEMORY_MAX_DOCUMENTS = 8_000;
-const LOW_MEMORY_MAX_TEXT_BYTES = 4 * 1024 * 1024;
-const DEFAULT_MAX_DOCUMENTS = 30_000;
-const DEFAULT_MAX_TEXT_BYTES = 12 * 1024 * 1024;
+const LOW_MEMORY_MAX_DOCUMENTS = 125_000;
+const LOW_MEMORY_MAX_TEXT_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_DOCUMENTS = 250_000;
+const DEFAULT_MAX_TEXT_BYTES = 512 * 1024 * 1024;
 
 const INDEXED_PRIMARY_EVIDENCE_TIERS = new Set<EvidenceTier>(["high", "moderate"]);
 const EMPTY_READY_STATUS: SearchIndexStatus = { state: "ready", documentCount: 0 };

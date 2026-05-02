@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSearchIndex } from "./ai/searchIndex";
 import { shouldIndexEntry } from "./ai/searchIndexCore";
 import { DEFAULT_FILTERS, buildEntrySearchText } from "./explorer";
@@ -83,6 +83,10 @@ describe("loadExplorerPage", () => {
     entries = [];
     cachedSearchIndex = null;
     clearSearchIndex();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("delegates to IndexedDB cursor paging when there is no search query", async () => {
@@ -392,18 +396,24 @@ describe("loadExplorerPage", () => {
   });
 
   it("falls back to IndexedDB search when the MiniSearch index is skipped for memory budget", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
     const template = storedEntries()[0];
-    const oversizedEntries = Array.from({ length: 30_001 }, (_, index) => withSearchText({
+    const oversizedEntries: StoredReportEntry[] = Array.from({ length: 125_001 }, (_, index) => ({
       ...template,
       id: `medical-budget-${index}`,
       category: "medical",
       title: `Budget entry ${index}`,
-      summary: index === 30_000 ? "Direct database fallback phrase." : "Unrelated budget entry.",
+      summary: index === 125_000 ? "Direct database fallback phrase." : "Unrelated budget entry.",
       evidenceTier: "high",
       matchedMarkers: [{ rsid: `rs${900000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
+      searchText: "",
     }));
     const directPage = {
-      entries: [oversizedEntries[30_000]],
+      entries: [oversizedEntries[125_000]],
       nextCursor: null,
       totalLoaded: 1,
       hasMore: false,
@@ -426,6 +436,39 @@ describe("loadExplorerPage", () => {
       pageSize: 50,
     });
     expect(saveSearchIndexCache).not.toHaveBeenCalled();
+  });
+
+  it("uses MiniSearch for large desktop reports within the normal browser budget", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+      platform: "MacIntel",
+      maxTouchPoints: 0,
+      deviceMemory: 8,
+    });
+    const template = storedEntries()[0];
+    const entries = Array.from({ length: 30_001 }, (_, index) => withSearchText({
+      ...template,
+      id: `medical-desktop-budget-${index}`,
+      category: "medical",
+      title: index === 30_000 ? "Desktop MiniSearch phrase" : `Desktop budget entry ${index}`,
+      summary: index === 30_000 ? "Desktop MiniSearch phrase." : "Unrelated desktop budget entry.",
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${800000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
+    }));
+    installEntries(entries);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "desktop minisearch phrase" },
+    });
+
+    expect(loadCategoryPage).not.toHaveBeenCalled();
+    expect(loadReportEntriesByIds).toHaveBeenCalledWith("profile-explorer-search", ["medical-desktop-budget-30000"]);
+    expect(page.entries.map((entry) => entry.id)).toEqual(["medical-desktop-budget-30000"]);
+    expect(saveSearchIndexCache).toHaveBeenCalledWith(expect.objectContaining({
+      documentCount: 30_001,
+    }));
   });
 
   it("returns stable MiniSearch pages with load more cursors", async () => {
