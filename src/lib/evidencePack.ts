@@ -12,7 +12,7 @@ import {
   ReportEntry,
 } from "../types";
 import { normalizeClinicalSignificance } from "./normalization";
-export const EVIDENCE_PACK_VERSION = "2026-04-core";
+export const EVIDENCE_PACK_VERSION = "2026-05-core";
 
 export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
   clinvar: {
