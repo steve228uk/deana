@@ -1,6 +1,5 @@
 import { createGateway } from "@ai-sdk/gateway";
-import { convertToModelMessages, type UIMessage } from "ai";
-import { streamText } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { z } from "zod";
 import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth.js";
 import {
@@ -21,6 +20,7 @@ export const config = {
 
 const MAX_MESSAGES = 12;
 const MAX_USER_TEXT_LENGTH = 2_000;
+const MAX_RAW_REQUEST_BYTES = 512_000;
 const MAX_CONTEXT_BYTES = 120_000;
 const MAX_ASSISTANT_OUTPUT_TOKENS = 1_800;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -191,7 +191,7 @@ function validateUserText(messages: UIMessage[]): boolean {
   });
 }
 
-function buildSystemPrompt(context: z.infer<typeof chatContextSchema>): string {
+export function buildSystemPrompt(context: z.infer<typeof chatContextSchema>): string {
   return [
     "You are Deana's report interpreter. Use only the Deana report context supplied below.",
     "The browser may provide currently visible findings and compact findings retrieved earlier in this chat.",
@@ -204,6 +204,9 @@ function buildSystemPrompt(context: z.infer<typeof chatContextSchema>): string {
     "When citing report items, use their title and deana://entry links from supplied findings or tool results. Do not invent links.",
     "If you used searchReportFindings and it returned no findings, say the browser search found no matching saved report findings for this prompt.",
     "If the user asks for anything outside Deana report interpretation, briefly redirect to the available report context.",
+    "After the visible answer, include up to 3 useful follow-up suggestions inside one hidden HTML comment exactly like: <!-- deana-follow-ups: [{\"title\":\"Short button label\",\"body\":\"Full follow-up prompt to send\"}] -->.",
+    "Each follow-up title must be under 44 characters. Each body must be under 220 characters. Suggest only Deana report interpretation follow-ups that can be answered from supplied context or a browser-local search.",
+    "Do not include profile names, uploaded file names, raw DNA, full marker lists, uncapped finding lists, diagnosis, treatment, medication-change, or non-report requests in follow-up suggestions. If no useful follow-up exists, omit the hidden comment.",
     `Deana report context JSON: ${JSON.stringify(context)}`,
   ].join("\n\n");
 }
@@ -223,7 +226,7 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   const rawBody = await request.text();
-  if (rawBody.length > MAX_CONTEXT_BYTES) {
+  if (rawBody.length > MAX_RAW_REQUEST_BYTES) {
     return jsonResponse(413, "Chat context is too large.");
   }
 
@@ -235,6 +238,10 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   const trimmedBody = trimMessagesToRecentWindow(body);
+  if (JSON.stringify(trimmedBody).length > MAX_CONTEXT_BYTES) {
+    return jsonResponse(413, "Chat context is too large.");
+  }
+
   const parsed = chatRequestSchema.safeParse(trimmedBody);
   if (!parsed.success) {
     return jsonResponse(400, "Invalid chat request.");

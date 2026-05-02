@@ -9,13 +9,15 @@ import type { ExplorerFilters } from "../../lib/explorer";
 import {
   buildChatContext,
   CHAT_CONSENT_VERSION,
+  extractChatFollowUps,
   formatChatTitle,
   mergeChatFindings,
+  normalizeChatFollowUps,
   type ChatContextFinding,
+  type ChatFollowUpSuggestion,
   type ChatReportContext,
-  type ChatSearchPlan,
 } from "../../lib/aiChat";
-import { searchReportEntriesForChat } from "../../lib/aiRetrieval";
+import { searchReportEntriesForChat, type ChatRetrievalResult } from "../../lib/aiRetrieval";
 import {
   loadAiConsent,
   loadChatMessages,
@@ -29,7 +31,7 @@ import {
   saveChatMessages,
   saveChatThread,
 } from "../../lib/storage";
-import type { ChatRetrievalTrace, ExplorerTab, ProfileMeta, StoredChatMessage, StoredChatThread, StoredReportEntry } from "../../types";
+import type { ChatRetrievalTrace, ChatSearchPlan, ExplorerTab, ProfileMeta, StoredChatMessage, StoredChatThread, StoredReportEntry } from "../../types";
 import { FindingInspector } from "./explorer";
 import { Icon } from "./ui";
 
@@ -59,8 +61,18 @@ type ChatPanel =
   | { mode: "findings" }
   | { mode: "inspector"; findingId: string; finding: StoredReportEntry | null; isLoading: boolean; error: string | null };
 
+type ChatFollowUpAction =
+  | ({ kind: "prompt" } & ChatFollowUpSuggestion)
+  | ({ kind: "searchMore"; trace: ChatRetrievalTrace } & ChatFollowUpSuggestion);
+
+interface ParsedChatMessage {
+  content: string;
+  followUps: ChatFollowUpSuggestion[];
+}
+
 const entryLinkPrefix = "deana://entry/";
 const entryLinkPattern = new RegExp(`${entryLinkPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[A-Za-z0-9_%~-]+`, "g");
+const noSavedReportFindingsMessage = "No saved report findings matched this local browser search.";
 
 function makeId(prefix: string): string {
   return `${prefix}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -71,6 +83,57 @@ function messageText(message: UIMessage): string {
     .filter((part) => part.type === "text")
     .map((part) => "text" in part ? part.text : "")
     .join("");
+}
+
+function parseChatMessage(message: UIMessage): ParsedChatMessage {
+  const text = messageText(message);
+  if (message.role !== "assistant") {
+    return { content: text, followUps: [] };
+  }
+
+  return extractChatFollowUps(text);
+}
+
+function displayMessageText(message: UIMessage): string {
+  return parseChatMessage(message).content;
+}
+
+function isSettledSearchToolPart(part: UIMessage["parts"][number]): boolean {
+  return part.type === "tool-searchReportFindings"
+    && "state" in part
+    && (part.state === "output-available" || part.state === "output-error");
+}
+
+function shouldKeepLatestToolResult(
+  message: UIMessage,
+  index: number,
+  messages: UIMessage[],
+  text: string,
+  settledSearchToolParts: UIMessage["parts"],
+): boolean {
+  return index === messages.length - 1
+    && message.role === "assistant"
+    && !text
+    && settledSearchToolParts.length > 0;
+}
+
+export function compactChatMessagesForRequest(messages: UIMessage[]): UIMessage[] {
+  return messages
+    .map((message, index) => {
+      const text = displayMessageText(message).trim();
+      const settledSearchToolParts = message.parts.filter(isSettledSearchToolPart);
+      const parts: UIMessage["parts"] = text ? [{ type: "text" as const, text }] : [];
+      if (shouldKeepLatestToolResult(message, index, messages, text, settledSearchToolParts)) {
+        parts.push(...settledSearchToolParts);
+      }
+
+      return {
+        id: message.id,
+        role: message.role,
+        parts,
+      };
+    })
+    .filter((message) => message.role === "user" || message.parts.length > 0);
 }
 
 function messageReasoning(message: UIMessage): string | null {
@@ -124,6 +187,17 @@ function hasToolPart(message: UIMessage): boolean {
 function entryIdFromHref(href: string | undefined): string | null {
   if (!href?.startsWith(entryLinkPrefix)) return null;
   return decodeURIComponent(href.slice(entryLinkPrefix.length));
+}
+
+function linkedEntryIdsFromTextValues(values: string[]): string[] {
+  const ids = new Set<string>();
+  values.forEach((value) => {
+    for (const match of value.matchAll(entryLinkPattern)) {
+      const entryId = entryIdFromHref(match[0]);
+      if (entryId) ids.add(entryId);
+    }
+  });
+  return Array.from(ids).sort();
 }
 
 function textFromChildren(children: ReactNode): string {
@@ -203,6 +277,55 @@ function restoredContextFindings(messages: StoredChatMessage[]): ChatContextFind
   );
 }
 
+export function searchMoreFollowUpFromTrace(trace: ChatRetrievalTrace | undefined): ChatFollowUpSuggestion | null {
+  if (!trace?.retrievalCursor?.hasMore || !trace.searchPlan) return null;
+
+  return {
+    title: "Search more findings",
+    body: `Show me more local findings for ${searchPlanLabel(trace.searchPlan)}.`,
+  };
+}
+
+function followUpsForMessage(message: UIMessage, storedFollowUps: ChatFollowUpSuggestion[] | undefined): ChatFollowUpSuggestion[] {
+  return normalizeChatFollowUps([
+    ...(storedFollowUps ?? []),
+    ...parseChatMessage(message).followUps,
+  ]);
+}
+
+function searchPlanLabel(plan: ChatSearchPlan): string {
+  return plan.query.trim() || "the previous local search";
+}
+
+function buildFollowUpActions({
+  message,
+  storedFollowUps,
+  trace,
+}: {
+  message: UIMessage | null;
+  storedFollowUps?: ChatFollowUpSuggestion[];
+  trace?: ChatRetrievalTrace;
+}): ChatFollowUpAction[] {
+  if (!message || message.role !== "assistant") return [];
+  const actions: ChatFollowUpAction[] = [];
+  const seenBodies = new Set<string>();
+  const searchMore = searchMoreFollowUpFromTrace(trace);
+
+  if (searchMore && trace) {
+    actions.push({ kind: "searchMore", trace, ...searchMore });
+    seenBodies.add(searchMore.body.toLocaleLowerCase());
+  }
+
+  for (const followUp of followUpsForMessage(message, storedFollowUps)) {
+    const key = followUp.body.toLocaleLowerCase();
+    if (seenBodies.has(key)) continue;
+    seenBodies.add(key);
+    actions.push({ kind: "prompt", ...followUp });
+  }
+
+  return actions.slice(0, 4);
+}
+
 export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const latestPropsRef = useRef(props);
   const latestFindingsRef = useRef<ChatReportContext["findings"]>([]);
@@ -210,6 +333,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const contextFindingsByMessageRef = useRef<Record<string, ChatContextFinding[]>>({});
   const createdAtByMessageRef = useRef<Record<string, string>>({});
   const reasoningByMessageRef = useRef<Record<string, string>>({});
+  const followUpsByMessageRef = useRef<Record<string, ChatFollowUpSuggestion[]>>({});
   const pendingTraceRef = useRef<ChatRetrievalTrace | null>(null);
   const pendingFindingsRef = useRef<ChatContextFinding[] | null>(null);
   const activeThreadRef = useRef<StoredChatThread | null>(null);
@@ -221,6 +345,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
   const [searchStatus, setSearchStatus] = useState<SearchStatus>({ status: "idle" });
+  const [isLoadingMoreFindings, setIsLoadingMoreFindings] = useState(false);
   const [isThreadListOpen, setIsThreadListOpen] = useState(true);
   const [isThreadPanelCollapsed, setIsThreadPanelCollapsed] = useState(false);
   const [modal, setModal] = useState<"chatPrivacy" | null>(null);
@@ -234,6 +359,8 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const setMessagesRef = useRef<((messages: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
   const attemptedEntryTitleIdsRef = useRef<Set<string>>(new Set());
+  const entryTitleByIdRef = useRef<Map<string, string>>(new Map());
+  const openEntryPanelRef = useRef<(href: string | undefined) => void | Promise<void>>(() => undefined);
   latestPropsRef.current = props;
   activeThreadRef.current = activeThread;
 
@@ -283,6 +410,15 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
 
   async function selectThread(thread: StoredChatThread, closeList = true) {
     const storedMessages = await loadChatMessages(thread.id);
+    const linkedEntryIds = linkedEntryIdsFromTextValues(storedMessages.map((message) => message.content));
+    if (linkedEntryIds.length > 0) {
+      try {
+        const entries = await loadReportEntriesByIds(latestPropsRef.current.profile.id, linkedEntryIds);
+        cacheResolvedEntryTitles(entries);
+      } catch {
+        // Chat content should still open if optional chip title lookup fails.
+      }
+    }
     traceByMessageRef.current = Object.fromEntries(
       storedMessages
         .filter((message) => message.trace)
@@ -299,9 +435,15 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         .filter((message) => message.reasoningSummary)
         .map((message) => [message.id, message.reasoningSummary as string]),
     );
+    followUpsByMessageRef.current = Object.fromEntries(
+      storedMessages
+        .filter((message) => message.followUps?.length)
+        .map((message) => [message.id, normalizeChatFollowUps(message.followUps)]),
+    );
     latestFindingsRef.current = restoredContextFindings(storedMessages);
     pendingTraceRef.current = null;
     pendingFindingsRef.current = null;
+    setIsLoadingMoreFindings(false);
     activeThreadRef.current = thread;
     isActiveThreadSavedRef.current = true;
     setPanel(null);
@@ -353,9 +495,11 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     contextFindingsByMessageRef.current = {};
     createdAtByMessageRef.current = {};
     reasoningByMessageRef.current = {};
+    followUpsByMessageRef.current = {};
     latestFindingsRef.current = [];
     pendingTraceRef.current = null;
     pendingFindingsRef.current = null;
+    setIsLoadingMoreFindings(false);
     setInitialMessages([]);
     setMessagesRef.current?.([]);
     setSearchStatus({ status: "idle" });
@@ -432,37 +576,46 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       .map((value) => Date.parse(value))
       .filter(Number.isFinite);
     let nextCreatedAtTime = Math.max(Date.now(), ...knownTimes) + 1;
-    const assistantText = assistantMessage ? messageText(assistantMessage).trim() : "";
+    const assistantParsed = assistantMessage ? parseChatMessage(assistantMessage) : null;
+    const assistantText = assistantParsed?.content.trim() ?? "";
     const assistantTrace = assistantMessage && assistantText && pendingTraceRef.current ? pendingTraceRef.current : null;
     const assistantFindings = assistantMessage && assistantText && pendingFindingsRef.current ? pendingFindingsRef.current : null;
     const assistantReasoning = assistantMessage ? messageReasoning(assistantMessage) : null;
+    const assistantFollowUps = assistantParsed ? normalizeChatFollowUps(assistantParsed.followUps) : [];
 
     return messages
       .filter((message) => {
         if (message.role === "user") return true;
         if (message.role !== "assistant") return false;
-        return Boolean(messageText(message).trim() || messageReasoning(message) || traceByMessageRef.current[message.id] || contextFindingsByMessageRef.current[message.id]?.length);
+        return Boolean(parseChatMessage(message).content.trim() || messageReasoning(message) || traceByMessageRef.current[message.id] || contextFindingsByMessageRef.current[message.id]?.length);
       })
       .map((message) => {
+        const parsedMessage = parseChatMessage(message);
+        const content = parsedMessage.content;
         const existingCreatedAt = createdAtByMessageRef.current[message.id];
         const createdAt = existingCreatedAt ?? new Date(nextCreatedAtTime++).toISOString();
         createdAtByMessageRef.current[message.id] = createdAt;
         const trace = message.id === assistantMessage?.id && assistantTrace ? assistantTrace : traceByMessageRef.current[message.id];
         const contextFindings = message.id === assistantMessage?.id && assistantFindings ? assistantFindings : contextFindingsByMessageRef.current[message.id];
+        const followUps = message.id === assistantMessage?.id && assistantFollowUps.length > 0
+          ? assistantFollowUps
+          : followUpsByMessageRef.current[message.id];
         if (trace) traceByMessageRef.current[message.id] = trace;
         if (contextFindings?.length) contextFindingsByMessageRef.current[message.id] = contextFindings;
         if (message.id === assistantMessage?.id && assistantReasoning) reasoningByMessageRef.current[message.id] = assistantReasoning;
+        if (followUps?.length) followUpsByMessageRef.current[message.id] = followUps;
 
         return {
           id: message.id,
           threadId: activeThreadRef.current?.id ?? "",
           profileId: props.profile.id,
           role: message.role as "user" | "assistant",
-          content: messageText(message),
+          content,
           createdAt,
           trace,
           contextFindings,
           reasoningSummary: message.id === assistantMessage?.id ? assistantReasoning : null,
+          followUps,
         };
       });
   }
@@ -479,7 +632,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
             version: CHAT_CONSENT_VERSION,
           },
           context: buildChatContext({ ...latestPropsRef.current, retrievedFindings: latestFindingsRef.current }),
-          messages,
+          messages: compactChatMessagesForRequest(messages),
         },
       };
     },
@@ -511,13 +664,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
           prompt: plan.query,
           plan,
         });
-        latestFindingsRef.current = mergeChatFindings([
-          ...retrieval.findings,
-          ...latestFindingsRef.current,
-        ]);
-        pendingTraceRef.current = retrieval.trace;
-        pendingFindingsRef.current = latestFindingsRef.current;
-        setSearchStatus({ status: "ready", trace: retrieval.trace });
+        applyChatRetrieval(retrieval);
         void addToolOutput({
           tool: "searchReportFindings",
           toolCallId: toolCall.toolCallId,
@@ -525,6 +672,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
             findings: retrieval.findings,
             trace: retrieval.trace,
             resultCount: retrieval.resultCount,
+            ...(retrieval.resultCount === 0 ? { message: noSavedReportFindingsMessage } : {}),
           },
         });
       } catch (error) {
@@ -541,7 +689,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     onFinish: async ({ message, messages: finishedMessages }) => {
       const thread = activeThreadRef.current;
       if (!thread) return;
-      if (message.role === "assistant" && hasToolPart(message) && !messageText(message).trim()) return;
+      if (message.role === "assistant" && hasToolPart(message) && !displayMessageText(message).trim()) return;
       const now = new Date().toISOString();
       const nextThread = {
         ...thread,
@@ -558,6 +706,13 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   });
   setMessagesRef.current = setMessages;
   const isBusy = status === "submitted" || status === "streaming";
+  const parsedMessageById = useMemo(() => {
+    return new Map(messages.map((message) => [message.id, parseChatMessage(message)]));
+  }, [messages]);
+  const displayTextForMessage = useCallback(
+    (message: UIMessage) => parsedMessageById.get(message.id)?.content ?? displayMessageText(message),
+    [parsedMessageById],
+  );
   const messageScrollSignal = useMemo(() => messages
     .map((message) => {
       const text = messageText(message);
@@ -581,6 +736,50 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [messageScrollSignal, status, searchStatus.status, error?.message]);
+
+  function applyChatRetrieval(retrieval: ChatRetrievalResult) {
+    latestFindingsRef.current = mergeChatFindings([
+      ...retrieval.findings,
+      ...latestFindingsRef.current,
+    ]);
+    pendingTraceRef.current = retrieval.trace;
+    pendingFindingsRef.current = latestFindingsRef.current;
+    setSearchStatus({ status: "ready", trace: retrieval.trace });
+  }
+
+  async function handleShowMoreFindings(trace: ChatRetrievalTrace, followUpPrompt?: string) {
+    const cursor = trace.retrievalCursor;
+    const plan = trace.searchPlan;
+    if (!cursor?.hasMore || !plan || isBusy || isLoadingMoreFindings) return;
+
+    setIsLoadingMoreFindings(true);
+    setSearchStatus({ status: "searching" });
+
+    try {
+      const retrieval = await searchReportEntriesForChat({
+        profileId: latestPropsRef.current.profile.id,
+        prompt: plan.query,
+        plan,
+        excludeIds: cursor.sentFindingIds,
+        offset: cursor.nextOffset,
+      });
+
+      if (retrieval.findings.length === 0) {
+        setSearchStatus({ status: "error", message: "No additional local findings matched that search." });
+        return;
+      }
+
+      applyChatRetrieval(retrieval);
+      setPanel({ mode: "findings" });
+
+      await sendMessage({ text: followUpPrompt ?? `Show me more local findings for ${searchPlanLabel(plan)}.` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not retrieve more local findings.";
+      setSearchStatus({ status: "error", message });
+    } finally {
+      setIsLoadingMoreFindings(false);
+    }
+  }
 
   function resizeInput() {
     const node = inputRef.current;
@@ -621,6 +820,16 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     }
     setIsThreadListOpen(false);
     await sendMessage({ text });
+  }
+
+  async function sendFollowUp(action: ChatFollowUpAction) {
+    if (isBusy) return;
+    clearError();
+    if (action.kind === "searchMore") {
+      await handleShowMoreFindings(action.trace, action.body);
+      return;
+    }
+    await sendPreparedMessage(action.body);
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -688,21 +897,15 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       error: finding ? null : "This finding is no longer available in the saved report.",
     });
   }, [loadChatEntry]);
+  openEntryPanelRef.current = openEntryPanel;
 
   const openFindingsPanel = useCallback(() => {
     setPanel({ mode: "findings" });
   }, []);
 
   const linkedEntryIds = useMemo(() => {
-    const ids = new Set<string>();
-    messages.forEach((message) => {
-      for (const match of messageText(message).matchAll(entryLinkPattern)) {
-        const entryId = entryIdFromHref(match[0]);
-        if (entryId) ids.add(entryId);
-      }
-    });
-    return Array.from(ids).sort();
-  }, [messages]);
+    return linkedEntryIdsFromTextValues(messages.map(displayTextForMessage));
+  }, [displayTextForMessage, messages]);
 
   const entryTitleById = useMemo(() => {
     return buildEntryTitleById({
@@ -715,6 +918,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       activeTrace: searchStatus.status === "ready" ? searchStatus.trace : undefined,
     });
   }, [messages, props.selectedEntry, props.visibleEntries, resolvedEntryTitles, searchStatus]);
+  entryTitleByIdRef.current = entryTitleById;
 
   useEffect(() => {
     const missingEntryIds = linkedEntryIds.filter((entryId) => !entryTitleById.has(entryId) && !attemptedEntryTitleIdsRef.current.has(entryId));
@@ -739,7 +943,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     a({ href, children }) {
       if (entryIdFromHref(href)) {
         return (
-          <EntryChip href={href ?? ""} entryTitleById={entryTitleById} onOpenEntry={(entryHref) => void openEntryPanel(entryHref)}>
+          <EntryChip href={href ?? ""} entryTitleById={entryTitleByIdRef.current} onOpenEntry={(entryHref) => void openEntryPanelRef.current(entryHref)}>
             {children}
           </EntryChip>
         );
@@ -765,7 +969,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         const index = match.index ?? 0;
         if (index > lastIndex) nodes.push(value.slice(lastIndex, index));
         nodes.push(
-          <EntryChip key={`${href}-${index}`} href={href} entryTitleById={entryTitleById} onOpenEntry={(entryHref) => void openEntryPanel(entryHref)}>
+          <EntryChip key={`${href}-${index}`} href={href} entryTitleById={entryTitleByIdRef.current} onOpenEntry={(entryHref) => void openEntryPanelRef.current(entryHref)}>
             {href}
           </EntryChip>,
         );
@@ -775,12 +979,25 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       if (lastIndex < value.length) nodes.push(value.slice(lastIndex));
       return nodes.length > 0 ? <>{nodes}</> : <>{children}</>;
     },
-  }), [entryTitleById, openEntryPanel]);
+  }), []);
 
   const handleOpenEntry = useCallback(
     (entryId: string) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`),
     [],
   );
+  const latestAssistantMessage = (() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "assistant" && displayTextForMessage(message).trim()) return message;
+    }
+    return null;
+  })();
+  const latestAssistantTrace = latestAssistantMessage ? traceByMessageRef.current[latestAssistantMessage.id] : undefined;
+  const followUpActions = isBusy ? [] : buildFollowUpActions({
+    message: latestAssistantMessage,
+    storedFollowUps: latestAssistantMessage ? followUpsByMessageRef.current[latestAssistantMessage.id] : undefined,
+    trace: latestAssistantTrace,
+  });
 
   return (
     <section
@@ -837,10 +1054,12 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
                 <ChatMessage
                   key={message.id}
                   role={message.role}
-                  content={messageText(message)}
+                  content={displayTextForMessage(message)}
                   modelName={messageModel(message)}
                   trace={traceByMessageRef.current[message.id]}
+                  interpretedFindingCount={contextFindingsByMessageRef.current[message.id]?.length}
                   reasoningSummary={messageReasoning(message) ?? reasoningByMessageRef.current[message.id] ?? null}
+                  entryTitleById={entryTitleById}
                   components={markdownComponents}
                   onOpenEntry={handleOpenEntry}
                   onOpenFindings={openFindingsPanel}
@@ -855,6 +1074,9 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
               ) : null}
             </div>
             <form className="dn-ai-form" onSubmit={submitMessage}>
+              {followUpActions.length > 0 ? (
+                <FollowUpSuggestions followUps={followUpActions} onSelect={(action) => void sendFollowUp(action)} />
+              ) : null}
               <div className="dn-ai-composer">
                 <textarea
                   ref={inputRef}
@@ -892,6 +1114,8 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
           onClose={() => setPanel(null)}
           onBack={() => setPanel({ mode: "findings" })}
           onOpenEntry={handleOpenEntry}
+          onShowMoreFindings={handleShowMoreFindings}
+          isLoadingMoreFindings={isLoadingMoreFindings}
         />
       ) : null}
       {modal === "chatPrivacy" ? <ChatPrivacyModal onClose={() => setModal(null)} /> : null}
@@ -908,6 +1132,63 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         />
       ) : null}
     </section>
+  );
+}
+
+function FollowUpSuggestions({
+  followUps,
+  onSelect,
+}: {
+  followUps: ChatFollowUpAction[];
+  onSelect: (action: ChatFollowUpAction) => void;
+}) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollEdges, setScrollEdges] = useState({ left: false, right: false });
+  const followUpSignature = followUps.map((followUp) => `${followUp.kind}:${followUp.title}:${followUp.body}`).join("\n");
+  const updateScrollEdges = useCallback(() => {
+    const node = scrollerRef.current;
+    if (!node) return;
+    const maxScrollLeft = node.scrollWidth - node.clientWidth;
+    const nextEdges = {
+      left: node.scrollLeft > 1,
+      right: node.scrollLeft < maxScrollLeft - 1,
+    };
+    setScrollEdges((current) => (
+      current.left === nextEdges.left && current.right === nextEdges.right ? current : nextEdges
+    ));
+  }, []);
+
+  useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node) return;
+    const frameId = window.requestAnimationFrame(updateScrollEdges);
+    node.addEventListener("scroll", updateScrollEdges, { passive: true });
+    window.addEventListener("resize", updateScrollEdges);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      node.removeEventListener("scroll", updateScrollEdges);
+      window.removeEventListener("resize", updateScrollEdges);
+    };
+  }, [followUpSignature, updateScrollEdges]);
+
+  const shellClassName = [
+    "dn-ai-follow-up-shell",
+    scrollEdges.left ? "has-left-fade" : "",
+    scrollEdges.right ? "has-right-fade" : "",
+  ].filter(Boolean).join(" ");
+
+  return (
+    <div className={shellClassName}>
+      <div ref={scrollerRef} className="dn-ai-follow-ups" aria-label="Suggested follow-up prompts">
+        {followUps.map((followUp) => (
+          <button key={`${followUp.kind}-${followUp.body}`} type="button" onClick={() => onSelect(followUp)} title={followUp.body}>
+            {followUp.kind === "searchMore" ? <Icon name="search" /> : <Icon name="spark" />}
+            <span>{followUp.title}</span>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1004,9 +1285,26 @@ function ThreadList({
 
 export function generatingStatusDetail(status: SearchStatus): string {
   if (status.status === "searching") return "Searching saved report findings...";
+  if (status.status === "ready" && status.trace.resultCount === 0) return "No matching saved findings found...";
   if (status.status === "ready") return `Interpreting ${status.trace.resultCount} matched findings...`;
   if (status.status === "error") return status.message;
   return "Thinking…";
+}
+
+function findingCountLabel(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "finding" : "findings"}`;
+}
+
+export function traceFindingSummary(trace: ChatRetrievalTrace, interpretedFindingCount?: number): string {
+  const interpretedCount = interpretedFindingCount ?? trace.sentCount ?? trace.resultCount;
+  const remainingCount = trace.remainingCandidateCount ?? 0;
+  const interpretedLabel = `${findingCountLabel(interpretedCount)} interpreted`;
+
+  if (remainingCount > 0) {
+    return `${interpretedLabel} · ${remainingCount.toLocaleString()} remaining`;
+  }
+
+  return interpretedLabel;
 }
 
 function GeneratingStatus({ status }: { status: SearchStatus }) {
@@ -1129,6 +1427,8 @@ function ChatSidePanel({
   onClose,
   onBack,
   onOpenEntry,
+  onShowMoreFindings,
+  isLoadingMoreFindings,
 }: {
   panel: ChatPanel;
   traces: ChatRetrievalTrace[];
@@ -1136,6 +1436,8 @@ function ChatSidePanel({
   onClose: () => void;
   onBack: () => void;
   onOpenEntry: (entryId: string) => void;
+  onShowMoreFindings: (trace: ChatRetrievalTrace) => void;
+  isLoadingMoreFindings: boolean;
 }) {
   const effectiveTraces = searchStatus.status === "ready"
     ? [...traces.filter((trace) => trace.searchedAt !== searchStatus.trace.searchedAt), searchStatus.trace]
@@ -1164,10 +1466,17 @@ function ChatSidePanel({
                 <h3>Searched {latestTrace.scannedCategories.join(", ")}</h3>
                 <p>{latestTrace.rationale}</p>
                 <dl>
-                  <div><dt>Matched</dt><dd>{latestTrace.resultCount.toLocaleString()} findings</dd></div>
+                  <div><dt>Sent</dt><dd>{(latestTrace.sentCount ?? latestTrace.resultCount).toLocaleString()} findings</dd></div>
+                  <div><dt>Considered</dt><dd>{(latestTrace.candidateWindowCount ?? latestTrace.indexCandidateCount ?? latestTrace.resultCount).toLocaleString()} local matches</dd></div>
+                  <div><dt>Remaining</dt><dd>{(latestTrace.remainingCandidateCount ?? 0).toLocaleString()} in this local window</dd></div>
                   <div><dt>Terms</dt><dd>{latestTrace.searchedTerms.length > 0 ? latestTrace.searchedTerms.slice(0, 16).join(", ") : "Prompt terms only"}</dd></div>
                   <div><dt>Related</dt><dd>{latestTrace.relatedTerms.length > 0 ? latestTrace.relatedTerms.slice(0, 12).join(", ") : "None returned"}</dd></div>
                 </dl>
+                {latestTrace.retrievalCursor?.hasMore ? (
+                  <button className="dn-button dn-button--primary dn-ai-show-more-button" type="button" onClick={() => onShowMoreFindings(latestTrace)} disabled={isLoadingMoreFindings}>
+                    <Icon name="search" /> {isLoadingMoreFindings ? "Finding more..." : "Show more findings"}
+                  </button>
+                ) : null}
               </section>
               <section>
                 <p className="dn-eyebrow">Sent to AI</p>
@@ -1211,7 +1520,9 @@ const ChatMessage = memo(function ChatMessage({
   content,
   modelName,
   trace,
+  interpretedFindingCount,
   reasoningSummary,
+  entryTitleById,
   components,
   onOpenEntry,
   onOpenFindings,
@@ -1220,11 +1531,14 @@ const ChatMessage = memo(function ChatMessage({
   content: string;
   modelName: string | null;
   trace?: ChatRetrievalTrace;
+  interpretedFindingCount?: number;
   reasoningSummary: string | null;
+  entryTitleById: Map<string, string>;
   components: Components;
   onOpenEntry: (entryId: string) => void;
   onOpenFindings: () => void;
 }) {
+  void entryTitleById;
   const hasReasoning = Boolean(reasoningSummary?.trim());
 
   if (!content && !hasReasoning) return null;
@@ -1244,7 +1558,7 @@ const ChatMessage = memo(function ChatMessage({
         </ReactMarkdown>
       ) : null}
       {role === "assistant" && trace ? (
-        <TracePanel trace={trace} onOpenFindings={onOpenFindings} />
+        <TracePanel trace={trace} interpretedFindingCount={interpretedFindingCount} onOpenFindings={onOpenFindings} />
       ) : null}
     </article>
   );
@@ -1263,15 +1577,17 @@ function ModelReasoning({ reasoning }: { reasoning: string }) {
 
 function TracePanel({
   trace,
+  interpretedFindingCount,
   onOpenFindings,
 }: {
   trace: ChatRetrievalTrace;
+  interpretedFindingCount?: number;
   onOpenFindings: () => void;
 }) {
   return (
     <button className="dn-ai-findings-button" type="button" onClick={onOpenFindings}>
       <Icon name="search" />
-      {trace.resultCount.toLocaleString()} matching findings sent
+      {traceFindingSummary(trace, interpretedFindingCount)}
     </button>
   );
 }

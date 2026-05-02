@@ -353,14 +353,39 @@ export interface ChatTraceFinding {
   sourceNames: string[];
 }
 
+export interface ChatSearchPlan {
+  query: string;
+  categories: InsightCategory[];
+  genes: string[];
+  rsids: string[];
+  topics: string[];
+  conditions: string[];
+  relatedTerms: string[];
+  evidence: EvidenceTier[];
+  rationale: string;
+}
+
+export type ChatTraceSearchPlan = ChatSearchPlan;
+
+export interface ChatRetrievalCursor {
+  hasMore: boolean;
+  nextOffset: number;
+  sentFindingIds: string[];
+}
+
 export interface ChatRetrievalTrace {
   searchedAt: string;
   scannedCategories: InsightCategory[];
   searchedTerms: string[];
   relatedTerms: string[];
   resultCount: number;
+  sentCount?: number;
+  candidateWindowCount?: number;
+  remainingCandidateCount?: number;
   returnedFindings: ChatTraceFinding[];
   rationale: string;
+  searchPlan?: ChatSearchPlan;
+  retrievalCursor?: ChatRetrievalCursor;
   indexCandidateCount?: number;
   usedFallback?: boolean;
   timingMs?: {
@@ -371,6 +396,11 @@ export interface ChatRetrievalTrace {
     fallbackScan: number;
     scoring: number;
   };
+}
+
+export interface ChatFollowUpSuggestion {
+  title: string;
+  body: string;
 }
 
 export interface StoredChatContextFinding {
@@ -426,6 +456,7 @@ export interface StoredChatMessage {
   trace?: ChatRetrievalTrace;
   contextFindings?: StoredChatContextFinding[];
   reasoningSummary?: string | null;
+  followUps?: ChatFollowUpSuggestion[];
 }
 
 export interface ExplorerPage {

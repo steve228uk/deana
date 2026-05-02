@@ -1,10 +1,14 @@
 import type { ExplorerFilters } from "./explorer.js";
-import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, StoredReportEntry } from "../types.js";
+import type { ChatFollowUpSuggestion, ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types.js";
+export type { ChatFollowUpSuggestion, ChatSearchPlan } from "../types.js";
 
 export const CHAT_CONTEXT_VERSION = 1;
 export const CHAT_CONSENT_VERSION = 1;
 export const MAX_CHAT_CONTEXT_FINDINGS = 18;
 export const MAX_CHAT_SEARCH_RESULTS = 8;
+export const MAX_CHAT_FOLLOW_UPS = 3;
+const MAX_CHAT_FOLLOW_UP_TITLE_LENGTH = 44;
+const MAX_CHAT_FOLLOW_UP_BODY_LENGTH = 220;
 
 export interface ChatConsent {
   accepted: true;
@@ -51,6 +55,54 @@ export interface ChatContextFinding {
 export function formatChatTitle(value: string): string {
   const title = value.replace(/\s+/g, " ").replace(/^["']|["']$/g, "").trim();
   return title.length > 52 ? `${title.slice(0, 49)}...` : title;
+}
+
+function followUpMarkerPattern(): RegExp {
+  return /<!--\s*deana-follow-ups\s*:\s*([\s\S]*?)\s*-->/gi;
+}
+
+function normalizeFollowUpText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, maxLength) : "";
+}
+
+export function normalizeChatFollowUps(value: unknown): ChatFollowUpSuggestion[] {
+  const candidates = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && "followUps" in value && Array.isArray(value.followUps)
+      ? value.followUps
+      : [];
+  const seenBodies = new Set<string>();
+  const followUps: ChatFollowUpSuggestion[] = [];
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const title = normalizeFollowUpText("title" in candidate ? candidate.title : null, MAX_CHAT_FOLLOW_UP_TITLE_LENGTH);
+    const body = normalizeFollowUpText("body" in candidate ? candidate.body : null, MAX_CHAT_FOLLOW_UP_BODY_LENGTH);
+    const bodyKey = body.toLocaleLowerCase();
+    if (!title || !body || seenBodies.has(bodyKey)) continue;
+    seenBodies.add(bodyKey);
+    followUps.push({ title, body });
+    if (followUps.length >= MAX_CHAT_FOLLOW_UPS) break;
+  }
+
+  return followUps;
+}
+
+export function extractChatFollowUps(content: string): { content: string; followUps: ChatFollowUpSuggestion[] } {
+  const followUps: ChatFollowUpSuggestion[] = [];
+  const strippedContent = content.replace(followUpMarkerPattern(), (_match, payload: string) => {
+    try {
+      followUps.push(...normalizeChatFollowUps(JSON.parse(payload)));
+    } catch {
+      // Invalid model metadata should not leak into the visible chat.
+    }
+    return "";
+  }).trim();
+
+  return {
+    content: strippedContent,
+    followUps: normalizeChatFollowUps(followUps),
+  };
 }
 
 export function buildGatewayProviderOptions(model: string, includeThoughts = false) {
@@ -111,18 +163,6 @@ export interface ChatReportContext {
   };
   selectedFindingId: string | null;
   findings: ChatContextFinding[];
-}
-
-export interface ChatSearchPlan {
-  query: string;
-  categories: InsightCategory[];
-  genes: string[];
-  rsids: string[];
-  topics: string[];
-  conditions: string[];
-  relatedTerms: string[];
-  evidence: ReportEntry["evidenceTier"][];
-  rationale: string;
 }
 
 interface BuildChatContextOptions {

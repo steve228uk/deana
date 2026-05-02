@@ -109,7 +109,7 @@ describe("loadExplorerPage", () => {
     expect(loadSearchIndexSource).not.toHaveBeenCalled();
   });
 
-  it("uses Orama tolerance for explorer typo search", async () => {
+  it("uses MiniSearch tolerance for explorer typo search", async () => {
     const template = storedEntries()[0];
     const alzheimer = withSearchText({
       ...template,
@@ -133,7 +133,7 @@ describe("loadExplorerPage", () => {
     expect(page.hasMore).toBe(false);
   });
 
-  it("loads non-visible Orama matches from IndexedDB by returned finding IDs", async () => {
+  it("loads non-visible MiniSearch matches from IndexedDB by returned finding IDs", async () => {
     const template = storedEntries()[0];
     const target = withSearchText({
       ...template,
@@ -216,7 +216,149 @@ describe("loadExplorerPage", () => {
     expect(page.entries.map((entry) => entry.id)).toEqual(["medical-factor-v-search"]);
   });
 
-  it("returns stable Orama pages with load more cursors", async () => {
+  it("ranks stronger textual matches above higher-severity body-only matches", async () => {
+    const template = storedEntries()[0];
+    const titleMatch = withSearchText({
+      ...template,
+      id: "medical-lactose-title-match",
+      category: "medical",
+      title: "Lactose intolerance response",
+      summary: "Genotype context for lactose digestion.",
+      sort: {
+        ...template.sort,
+        severity: 1,
+      },
+    });
+    const bodyOnlyMatch = withSearchText({
+      ...template,
+      id: "medical-lactose-body-match",
+      category: "medical",
+      title: "Digestive note",
+      summary: "This lower-priority body copy mentions lactose intolerance in passing.",
+      sort: {
+        ...template.sort,
+        severity: 100,
+      },
+    });
+    installEntries([bodyOnlyMatch, titleMatch]);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "lactose intolerance" },
+    });
+
+    expect(page.entries.map((entry) => entry.id)).toEqual([
+      "medical-lactose-title-match",
+      "medical-lactose-body-match",
+    ]);
+  });
+
+  it("does not rank partial multi-term matches ahead of full matches", async () => {
+    const template = storedEntries()[0];
+    const fullMatch = withSearchText({
+      ...template,
+      id: "medical-factor-v-full-match",
+      category: "medical",
+      title: "Factor V Leiden clotting risk",
+      summary: "Factor V Leiden thrombophilia context.",
+      genes: ["F5"],
+      matchedMarkers: [{ rsid: "rs6025", genotype: "CT", chromosome: "1", position: 169519049, gene: "F5" }],
+    });
+    const partialMatch = withSearchText({
+      ...template,
+      id: "medical-factor-partial-match",
+      category: "medical",
+      title: "Factor unrelated note",
+      summary: "Mentions factor but not the requested condition.",
+      sort: {
+        ...template.sort,
+        severity: 100,
+      },
+    });
+    installEntries([partialMatch, fullMatch]);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "factor leiden" },
+    });
+
+    expect(page.entries.map((entry) => entry.id)).toEqual(["medical-factor-v-full-match"]);
+  });
+
+  it("prefers positive and negative findings over informational findings when relevance is close", async () => {
+    const template = storedEntries()[0];
+    const informational = withSearchText({
+      ...template,
+      id: "medical-shared-informational",
+      category: "medical",
+      title: "Shared nutrigenomics match",
+      summary: "Shared nutrigenomics match.",
+      evidenceTier: "high",
+      outcome: "informational",
+      repute: "not-set",
+      sort: {
+        ...template.sort,
+        severity: 100,
+      },
+    });
+    const negative = withSearchText({
+      ...template,
+      id: "medical-shared-negative",
+      category: "medical",
+      title: "Shared nutrigenomics match",
+      summary: "Shared nutrigenomics match.",
+      evidenceTier: "high",
+      outcome: "negative",
+      repute: "bad",
+      sort: {
+        ...template.sort,
+        severity: 1,
+      },
+    });
+    installEntries([informational, negative]);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "medical",
+      filters: { ...DEFAULT_FILTERS, q: "shared nutrigenomics" },
+    });
+
+    expect(page.entries.map((entry) => entry.id)).toEqual([
+      "medical-shared-negative",
+      "medical-shared-informational",
+    ]);
+  });
+
+  it("returns supplementary SNPedia context from MiniSearch results", async () => {
+    const template = storedEntries()[0];
+    const snpedia = withSearchText({
+      ...template,
+      id: "local-traits-snpedia-baldness-context",
+      category: "traits",
+      subcategory: "snpedia",
+      title: "Normal higher risk of Male Pattern Baldness",
+      summary: "SNPedia genotype context for male pattern baldness.",
+      detail: "Supplementary consumer-facing SNPedia context.",
+      evidenceTier: "supplementary",
+      sources: [{ id: "snpedia", name: "SNPedia", url: "https://example.com/snpedia" }],
+      topics: ["SNPedia", "Genotype page"],
+      conditions: ["Male Pattern Baldness"],
+      matchedMarkers: [{ rsid: "rs2003046", genotype: "CC", chromosome: "7", position: 123, gene: undefined }],
+    });
+    installEntries([snpedia]);
+
+    const page = await loadExplorerPage({
+      profileId: "profile-explorer-search",
+      category: "traits",
+      filters: { ...DEFAULT_FILTERS, q: "male pattern baldness" },
+    });
+
+    expect(page.entries.map((entry) => entry.id)).toEqual(["local-traits-snpedia-baldness-context"]);
+  });
+
+  it("returns stable MiniSearch pages with load more cursors", async () => {
     const template = storedEntries()[0];
     installEntries(Array.from({ length: 3 }, (_, index) => withSearchText({
       ...template,
@@ -250,7 +392,7 @@ describe("loadExplorerPage", () => {
     expect(secondPage.hasMore).toBe(false);
   });
 
-  it("preserves Orama result order after IndexedDB hydration", async () => {
+  it("preserves MiniSearch result order after IndexedDB hydration", async () => {
     const template = storedEntries()[0];
     const first = withSearchText({
       ...template,
