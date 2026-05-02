@@ -1,6 +1,5 @@
 import { createGateway } from "@ai-sdk/gateway";
-import { convertToModelMessages, type UIMessage } from "ai";
-import { streamText } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { z } from "zod";
 import { getGatewayApiKey, isSameOrigin } from "../src/lib/aiGatewayAuth.js";
 import {

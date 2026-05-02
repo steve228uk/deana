@@ -34,6 +34,20 @@ interface ChatRetrievalRequest {
   offset?: number;
 }
 
+interface RankedChatEntry {
+  entry: StoredReportEntry;
+  score: number;
+  matchedFields: string[];
+}
+
+interface EntrySearchField {
+  field: string;
+  text: string;
+  weight: number;
+  exactTokens: Set<string>;
+  fuzzyTokens: string[];
+}
+
 function normalize(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -42,9 +56,8 @@ function hasAnyNeedle(haystack: string, needles: string[]): boolean {
   return needles.some((needle) => needle && haystack.includes(needle));
 }
 
-function matchedValues(values: string[], needles: string[]): string[] {
-  const normalizedValues = new Set(values.map(normalize).filter(Boolean));
-  return needles.filter((needle) => normalizedValues.has(needle));
+function matchedSetValues(values: Set<string>, needles: string[]): string[] {
+  return needles.filter((needle) => values.has(needle));
 }
 
 function uniqueValues(values: string[]): string[] {
@@ -84,7 +97,15 @@ function searchTerms(prompt: string, plan: ChatSearchPlan): string[] {
   ]).slice(0, 48);
 }
 
-function entryFieldText(entry: StoredReportEntry): Array<{ field: string; text: string; weight: number }> {
+function exactFieldTokens(text: string): Set<string> {
+  return new Set(text.split(/[^a-z0-9]+/).filter(Boolean));
+}
+
+function fuzzyFieldTokens(text: string): string[] {
+  return text.split(/[^a-z0-9]+/).filter((token) => token.length >= 4);
+}
+
+function entryFieldText(entry: StoredReportEntry): EntrySearchField[] {
   return [
     { field: "title", text: entry.title, weight: 50 },
     { field: "summary", text: entry.summary, weight: 40 },
@@ -118,29 +139,43 @@ function entryFieldText(entry: StoredReportEntry): Array<{ field: string; text: 
     { field: "frequencyNote", text: entry.frequencyNote ?? "", weight: 20 },
     { field: "sourceGenotype", text: [entry.sourceGenotype, entry.sourcePageKey, entry.sourcePageUrl].join(" "), weight: 28 },
     { field: "classification", text: [entry.entryKind, entry.category, entry.subcategory, entry.evidenceTier, entry.repute, entry.coverage, entry.tone, entry.outcome].join(" "), weight: 18 },
-  ].map((field) => ({ ...field, text: normalize(field.text) }));
+  ].map((field) => {
+    const text = normalize(field.text);
+    return {
+      ...field,
+      text,
+      exactTokens: exactFieldTokens(text),
+      fuzzyTokens: fuzzyFieldTokens(text),
+    };
+  });
 }
 
-function fuzzyFieldMatch(text: string, term: string): boolean {
+function fuzzyFieldMatch(tokens: string[], term: string): boolean {
   if (term.length < 4) return false;
-  return text
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length >= 4)
-    .some((token) => token.includes(term));
+  return tokens.some((token) => token.includes(term));
 }
 
-function fieldIncludesTerm(text: string, term: string): boolean {
+function fieldIncludesTerm(field: EntrySearchField, term: string): boolean {
   if (term.length <= 3) {
-    return text.split(/[^a-z0-9]+/).filter(Boolean).includes(term);
+    return field.exactTokens.has(term);
   }
 
-  return text.includes(term);
+  return field.text.includes(term);
+}
+
+function compareRankedChatEntries(left: RankedChatEntry, right: RankedChatEntry): number {
+  return right.score - left.score
+    || right.entry.sort.severity - left.entry.sort.severity
+    || left.entry.title.localeCompare(right.entry.title);
 }
 
 function scoreEntry(entry: StoredReportEntry, prompt: string, plan: ChatSearchPlan, terms: string[]): { score: number; matchedFields: string[] } {
   const searchText = entry.searchText || "";
   let score = 0;
   const matchedFields = new Set<string>();
+  const normalizedGenes = new Set(entry.genes.map(normalize).filter(Boolean));
+  const normalizedTopics = new Set(entry.topics.map(normalize).filter(Boolean));
+  const normalizedConditions = new Set(entry.conditions.map(normalize).filter(Boolean));
 
   if (plan.query && matchesEntryFilters(entry, { ...DEFAULT_FILTERS, q: plan.query }, entry.category)) {
     score += 42;
@@ -152,19 +187,19 @@ function scoreEntry(entry: StoredReportEntry, prompt: string, plan: ChatSearchPl
     matchedFields.add("markers");
   }
 
-  const geneMatches = matchedValues(entry.genes, plan.genes);
+  const geneMatches = matchedSetValues(normalizedGenes, plan.genes);
   if (geneMatches.length > 0) {
     score += geneMatches.length * RANKING_WEIGHTS.gene;
     matchedFields.add("genes");
   }
 
-  const topicMatches = matchedValues(entry.topics, plan.topics);
+  const topicMatches = matchedSetValues(normalizedTopics, plan.topics);
   if (topicMatches.length > 0) {
     score += topicMatches.length * RANKING_WEIGHTS.topic;
     matchedFields.add("topics");
   }
 
-  const conditionMatches = matchedValues(entry.conditions, plan.conditions);
+  const conditionMatches = matchedSetValues(normalizedConditions, plan.conditions);
   if (conditionMatches.length > 0) {
     score += conditionMatches.length * RANKING_WEIGHTS.condition;
     matchedFields.add("conditions");
@@ -173,15 +208,15 @@ function scoreEntry(entry: StoredReportEntry, prompt: string, plan: ChatSearchPl
   if (plan.evidence.includes(entry.evidenceTier)) score += RANKING_WEIGHTS.evidenceTier;
   if (plan.query && entry.title.toLowerCase().includes(plan.query.toLowerCase())) score += RANKING_WEIGHTS.titleQuery;
 
-  for (const { field, text, weight } of entryFieldText(entry)) {
+  for (const fieldSearch of entryFieldText(entry)) {
     for (const term of terms) {
       if (!term) continue;
-      if (fieldIncludesTerm(text, term)) {
-        score += weight;
-        matchedFields.add(field);
-      } else if (fuzzyFieldMatch(text, term)) {
-        score += Math.max(6, weight / 5);
-        matchedFields.add(field);
+      if (fieldIncludesTerm(fieldSearch, term)) {
+        score += fieldSearch.weight;
+        matchedFields.add(fieldSearch.field);
+      } else if (fuzzyFieldMatch(fieldSearch.fuzzyTokens, term)) {
+        score += Math.max(6, fieldSearch.weight / 5);
+        matchedFields.add(fieldSearch.field);
       }
     }
   }
@@ -249,9 +284,9 @@ function uniqueIds(values: string[]): string[] {
 }
 
 function selectRankedEntries(
-  ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }>,
+  ranked: RankedChatEntry[],
   limit: number,
-): Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> {
+): RankedChatEntry[] {
   if (limit <= 0) return [];
 
   const selected = ranked.slice(0, limit);
@@ -278,11 +313,7 @@ function selectRankedEntries(
     supplementalCount += 1;
   }
 
-  return selected.sort((left, right) =>
-    right.score - left.score ||
-    right.entry.sort.severity - left.entry.sort.severity ||
-    left.entry.title.localeCompare(right.entry.title),
-  );
+  return selected.sort(compareRankedChatEntries);
 }
 
 function preScoreCandidate(candidate: SearchCandidate, plan: ChatSearchPlan): number {
@@ -320,7 +351,7 @@ export async function searchReportEntriesForChat({
   const effectivePlan = compactPlan(plan ?? fallbackPlan(prompt));
   const categories = ALL_CATEGORIES;
   const terms = searchTerms(prompt, effectivePlan);
-  const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
+  const ranked: RankedChatEntry[] = [];
   const seen = new Set<string>();
   const excludedIds = new Set(excludeIds);
 
@@ -364,11 +395,7 @@ export async function searchReportEntriesForChat({
     fallbackScannedAt = performance.now();
   }
 
-  ranked.sort((left, right) =>
-    right.score - left.score ||
-    right.entry.sort.severity - left.entry.sort.severity ||
-    left.entry.title.localeCompare(right.entry.title),
-  );
+  ranked.sort(compareRankedChatEntries);
 
   const effectiveLimit = resolveCandidateGuidedLimit(candidates, ranked.length, limit);
   const selectedRankedEntries = selectRankedEntries(ranked, effectiveLimit);

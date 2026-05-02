@@ -1,6 +1,5 @@
 import type { ExplorerFilters } from "./explorer.js";
-import type { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types.js";
-import type { ChatFollowUpSuggestion } from "../types.js";
+import type { ChatFollowUpSuggestion, ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types.js";
 export type { ChatFollowUpSuggestion, ChatSearchPlan } from "../types.js";
 
 export const CHAT_CONTEXT_VERSION = 1;

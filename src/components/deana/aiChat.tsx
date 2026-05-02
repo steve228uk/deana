@@ -62,8 +62,13 @@ type ChatPanel =
   | { mode: "inspector"; findingId: string; finding: StoredReportEntry | null; isLoading: boolean; error: string | null };
 
 type ChatFollowUpAction =
-  | { kind: "prompt"; title: string; body: string }
-  | { kind: "searchMore"; title: string; body: string; trace: ChatRetrievalTrace };
+  | ({ kind: "prompt" } & ChatFollowUpSuggestion)
+  | ({ kind: "searchMore"; trace: ChatRetrievalTrace } & ChatFollowUpSuggestion);
+
+interface ParsedChatMessage {
+  content: string;
+  followUps: ChatFollowUpSuggestion[];
+}
 
 const entryLinkPrefix = "deana://entry/";
 const entryLinkPattern = new RegExp(`${entryLinkPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[A-Za-z0-9_%~-]+`, "g");
@@ -79,9 +84,17 @@ function messageText(message: UIMessage): string {
     .join("");
 }
 
-function displayMessageText(message: UIMessage): string {
+function parseChatMessage(message: UIMessage): ParsedChatMessage {
   const text = messageText(message);
-  return message.role === "assistant" ? extractChatFollowUps(text).content : text;
+  if (message.role !== "assistant") {
+    return { content: text, followUps: [] };
+  }
+
+  return extractChatFollowUps(text);
+}
+
+function displayMessageText(message: UIMessage): string {
+  return parseChatMessage(message).content;
 }
 
 export function compactChatMessagesForRequest(messages: UIMessage[]): UIMessage[] {
@@ -241,19 +254,22 @@ function restoredContextFindings(messages: StoredChatMessage[]): ChatContextFind
 
 export function searchMoreFollowUpFromTrace(trace: ChatRetrievalTrace | undefined): ChatFollowUpSuggestion | null {
   if (!trace?.retrievalCursor?.hasMore || !trace.searchPlan) return null;
-  const label = trace.searchPlan.query.trim() || "the previous local search";
 
   return {
     title: "Search more findings",
-    body: `Show me more local findings for ${label}.`,
+    body: `Show me more local findings for ${searchPlanLabel(trace.searchPlan)}.`,
   };
 }
 
 function followUpsForMessage(message: UIMessage, storedFollowUps: ChatFollowUpSuggestion[] | undefined): ChatFollowUpSuggestion[] {
   return normalizeChatFollowUps([
     ...(storedFollowUps ?? []),
-    ...extractChatFollowUps(messageText(message)).followUps,
+    ...parseChatMessage(message).followUps,
   ]);
+}
+
+function searchPlanLabel(plan: ChatSearchPlan): string {
+  return plan.query.trim() || "the previous local search";
 }
 
 function buildFollowUpActions({
@@ -535,7 +551,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       .map((value) => Date.parse(value))
       .filter(Number.isFinite);
     let nextCreatedAtTime = Math.max(Date.now(), ...knownTimes) + 1;
-    const assistantParsed = assistantMessage ? extractChatFollowUps(messageText(assistantMessage)) : null;
+    const assistantParsed = assistantMessage ? parseChatMessage(assistantMessage) : null;
     const assistantText = assistantParsed?.content.trim() ?? "";
     const assistantTrace = assistantMessage && assistantText && pendingTraceRef.current ? pendingTraceRef.current : null;
     const assistantFindings = assistantMessage && assistantText && pendingFindingsRef.current ? pendingFindingsRef.current : null;
@@ -546,11 +562,11 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       .filter((message) => {
         if (message.role === "user") return true;
         if (message.role !== "assistant") return false;
-        return Boolean(displayMessageText(message).trim() || messageReasoning(message) || traceByMessageRef.current[message.id] || contextFindingsByMessageRef.current[message.id]?.length);
+        return Boolean(parseChatMessage(message).content.trim() || messageReasoning(message) || traceByMessageRef.current[message.id] || contextFindingsByMessageRef.current[message.id]?.length);
       })
       .map((message) => {
-        const parsedMessage = message.role === "assistant" ? extractChatFollowUps(messageText(message)) : null;
-        const content = parsedMessage?.content ?? messageText(message);
+        const parsedMessage = parseChatMessage(message);
+        const content = parsedMessage.content;
         const existingCreatedAt = createdAtByMessageRef.current[message.id];
         const createdAt = existingCreatedAt ?? new Date(nextCreatedAtTime++).toISOString();
         createdAtByMessageRef.current[message.id] = createdAt;
@@ -664,6 +680,13 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   });
   setMessagesRef.current = setMessages;
   const isBusy = status === "submitted" || status === "streaming";
+  const parsedMessageById = useMemo(() => {
+    return new Map(messages.map((message) => [message.id, parseChatMessage(message)]));
+  }, [messages]);
+  const displayTextForMessage = useCallback(
+    (message: UIMessage) => parsedMessageById.get(message.id)?.content ?? displayMessageText(message),
+    [parsedMessageById],
+  );
   const messageScrollSignal = useMemo(() => messages
     .map((message) => {
       const text = messageText(message);
@@ -723,8 +746,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       applyChatRetrieval(retrieval);
       setPanel({ mode: "findings" });
 
-      const label = plan.query.trim() || "the previous local search";
-      await sendMessage({ text: followUpPrompt ?? `Show me more local findings for ${label}.` });
+      await sendMessage({ text: followUpPrompt ?? `Show me more local findings for ${searchPlanLabel(plan)}.` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not retrieve more local findings.";
       setSearchStatus({ status: "error", message });
@@ -856,8 +878,8 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   }, []);
 
   const linkedEntryIds = useMemo(() => {
-    return linkedEntryIdsFromTextValues(messages.map(displayMessageText));
-  }, [messages]);
+    return linkedEntryIdsFromTextValues(messages.map(displayTextForMessage));
+  }, [displayTextForMessage, messages]);
 
   const entryTitleById = useMemo(() => {
     return buildEntryTitleById({
@@ -937,10 +959,13 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     (entryId: string) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`),
     [],
   );
-  const latestAssistantMessage = messages
-    .slice()
-    .reverse()
-    .find((message) => message.role === "assistant" && displayMessageText(message).trim()) ?? null;
+  const latestAssistantMessage = (() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "assistant" && displayTextForMessage(message).trim()) return message;
+    }
+    return null;
+  })();
   const latestAssistantTrace = latestAssistantMessage ? traceByMessageRef.current[latestAssistantMessage.id] : undefined;
   const followUpActions = isBusy ? [] : buildFollowUpActions({
     message: latestAssistantMessage,
@@ -1003,7 +1028,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
                 <ChatMessage
                   key={message.id}
                   role={message.role}
-                  content={displayMessageText(message)}
+                  content={displayTextForMessage(message)}
                   modelName={messageModel(message)}
                   trace={traceByMessageRef.current[message.id]}
                   interpretedFindingCount={contextFindingsByMessageRef.current[message.id]?.length}

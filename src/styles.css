@@ -1404,6 +1404,21 @@ a { color: inherit; }
     padding-top: 70px;
     padding-bottom: calc(18px + env(safe-area-inset-bottom));
   }
+  .dn-ai-follow-ups {
+    flex-wrap: nowrap;
+    max-width: none;
+    margin-inline: -18px;
+    padding-inline: 18px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .dn-ai-follow-ups::-webkit-scrollbar { display: none; }
+  .dn-ai-follow-ups button {
+    flex: 0 0 auto;
+    max-width: calc(100vw - 36px);
+  }
   .dn-ai-search-card { margin-inline: 18px; }
   .dn-ai-trace__body dl > div { grid-template-columns: 1fr; gap: 2px; }
   .dn-ai-side-panel {
