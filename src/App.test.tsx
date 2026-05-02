@@ -937,6 +937,39 @@ describe("Deana app", () => {
     expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-ai?tab=ai");
   });
 
+  it("shows follow-up prompt suggestions and sends the follow-up body", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
+    storedAiConsents["profile-ai"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+    storedChatThreads = [{
+      id: "thread-follow-up",
+      profileId: "profile-ai",
+      title: "Coverage",
+      createdAt: "2026-04-26T09:00:00.000Z",
+      updatedAt: "2026-04-26T09:00:00.000Z",
+    }];
+    storedChatMessages = [{
+      id: "message-follow-up",
+      threadId: "thread-follow-up",
+      profileId: "profile-ai",
+      role: "assistant",
+      content: [
+        "Coverage is partial for some findings.",
+        '<!-- deana-follow-ups: [{"title":"Explain coverage","body":"What does partial coverage mean in this report?"}] -->',
+      ].join("\n"),
+      createdAt: "2026-04-26T09:01:00.000Z",
+    }];
+
+    renderApp("/explorer/profile-ai?tab=ai");
+
+    expect(await screen.findByText("Coverage is partial for some findings.")).toBeInTheDocument();
+    expect(screen.queryByText(/deana-follow-ups/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Explain coverage" }));
+
+    await waitFor(() => expect(screen.getByText("What does partial coverage mean in this report?")).toBeInTheDocument());
+  });
+
   it("appends another page when the user loads more category results", async () => {
     const user = userEvent.setup();
     storedProfiles = [makePaginatedProfile("profile-5", 55)];

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_FILTERS } from "./explorer";
-import { buildChatContext, mergeChatFindings, MAX_CHAT_CONTEXT_FINDINGS } from "./aiChat";
+import {
+  buildChatContext,
+  extractChatFollowUps,
+  mergeChatFindings,
+  MAX_CHAT_CONTEXT_FINDINGS,
+  normalizeChatFollowUps,
+} from "./aiChat";
 import { makeProfileMeta, makeStoredReportEntries } from "../test/fixtures";
 
 describe("buildChatContext", () => {
@@ -102,5 +108,50 @@ describe("mergeChatFindings", () => {
 
     expect(merged).toHaveLength(MAX_CHAT_CONTEXT_FINDINGS);
     expect(merged.filter((finding) => finding.id === "finding-1")).toHaveLength(1);
+  });
+});
+
+describe("extractChatFollowUps", () => {
+  it("extracts hidden follow-up suggestions and strips the marker from assistant content", () => {
+    const result = extractChatFollowUps([
+      "Here is the answer.",
+      '<!-- deana-follow-ups: [{"title":"Explain coverage","body":"What does coverage mean in this report?"},{"title":"Compare findings","body":"Compare the medical and drug findings in this report."}] -->',
+    ].join("\n"));
+
+    expect(result.content).toBe("Here is the answer.");
+    expect(result.followUps).toEqual([
+      { title: "Explain coverage", body: "What does coverage mean in this report?" },
+      { title: "Compare findings", body: "Compare the medical and drug findings in this report." },
+    ]);
+  });
+
+  it("hides malformed follow-up metadata without returning suggestions", () => {
+    const result = extractChatFollowUps("Answer. <!-- deana-follow-ups: not-json -->");
+
+    expect(result.content).toBe("Answer.");
+    expect(result.followUps).toEqual([]);
+  });
+});
+
+describe("normalizeChatFollowUps", () => {
+  it("trims, deduplicates, and caps follow-up suggestions", () => {
+    const result = normalizeChatFollowUps([
+      { title: "  A useful follow-up title that is longer than the button limit  ", body: "  Explain the first finding.  " },
+      { title: "Duplicate", body: "Explain the first finding." },
+      { title: "Second", body: "Explain the second finding." },
+      { title: "Third", body: "Explain the third finding." },
+      { title: "Fourth", body: "Explain the fourth finding." },
+    ]);
+
+    expect(result).toHaveLength(3);
+    expect(result[0]).toEqual({
+      title: "A useful follow-up title that is longer than",
+      body: "Explain the first finding.",
+    });
+    expect(result.map((followUp) => followUp.title)).toEqual([
+      "A useful follow-up title that is longer than",
+      "Second",
+      "Third",
+    ]);
   });
 });

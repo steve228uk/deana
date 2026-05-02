@@ -1,16 +1,37 @@
 import { DEFAULT_FILTERS, matchesEntryFilters } from "./explorer";
-import { findingToChatContext, type ChatContextFinding, type ChatSearchPlan } from "./aiChat";
+import { findingToChatContext, MAX_CHAT_CONTEXT_FINDINGS, type ChatContextFinding } from "./aiChat";
 import { searchWithFields, waitForIndex, type SearchCandidate } from "./ai/searchIndex";
+import { rankingQualityMultiplier } from "./ai/ranking";
 import { loadReportEntriesByIds, streamReportEntries } from "./storage";
-import type { ChatRetrievalTrace, InsightCategory, StoredReportEntry } from "../types";
+import type { ChatRetrievalTrace, ChatSearchPlan, InsightCategory, StoredReportEntry } from "../types";
 
 const ALL_CATEGORIES: InsightCategory[] = ["medical", "traits", "drug"];
+const MIN_CHAT_SEARCH_FINDINGS = 5;
+const INDEX_CANDIDATE_LIMIT = 180;
+const SUPPLEMENTAL_CONTEXT_LIMIT = 2;
+const RANKING_WEIGHTS = {
+  rsid: 90,
+  gene: 70,
+  topic: 28,
+  condition: 28,
+  evidenceTier: 12,
+  titleQuery: 25,
+} as const;
 
 export interface ChatRetrievalResult {
   plan: ChatSearchPlan;
   findings: ChatContextFinding[];
   resultCount: number;
   trace: ChatRetrievalTrace;
+}
+
+interface ChatRetrievalRequest {
+  profileId: string;
+  prompt: string;
+  plan?: ChatSearchPlan;
+  limit?: number;
+  excludeIds?: string[];
+  offset?: number;
 }
 
 function normalize(value: string): string {
@@ -127,30 +148,30 @@ function scoreEntry(entry: StoredReportEntry, prompt: string, plan: ChatSearchPl
   }
 
   if (hasAnyNeedle(searchText, plan.rsids)) {
-    score += 90;
+    score += RANKING_WEIGHTS.rsid;
     matchedFields.add("markers");
   }
 
   const geneMatches = matchedValues(entry.genes, plan.genes);
   if (geneMatches.length > 0) {
-    score += geneMatches.length * 70;
+    score += geneMatches.length * RANKING_WEIGHTS.gene;
     matchedFields.add("genes");
   }
 
   const topicMatches = matchedValues(entry.topics, plan.topics);
   if (topicMatches.length > 0) {
-    score += topicMatches.length * 28;
+    score += topicMatches.length * RANKING_WEIGHTS.topic;
     matchedFields.add("topics");
   }
 
   const conditionMatches = matchedValues(entry.conditions, plan.conditions);
   if (conditionMatches.length > 0) {
-    score += conditionMatches.length * 28;
+    score += conditionMatches.length * RANKING_WEIGHTS.condition;
     matchedFields.add("conditions");
   }
 
-  if (plan.evidence.includes(entry.evidenceTier)) score += 12;
-  if (plan.query && entry.title.toLowerCase().includes(plan.query.toLowerCase())) score += 25;
+  if (plan.evidence.includes(entry.evidenceTier)) score += RANKING_WEIGHTS.evidenceTier;
+  if (plan.query && entry.title.toLowerCase().includes(plan.query.toLowerCase())) score += RANKING_WEIGHTS.titleQuery;
 
   for (const { field, text, weight } of entryFieldText(entry)) {
     for (const term of terms) {
@@ -172,7 +193,9 @@ function scoreEntry(entry: StoredReportEntry, prompt: string, plan: ChatSearchPl
   }
 
   return {
-    score: score + Math.min(entry.sort.severity, 100) / 100 + Math.min(entry.sort.evidence, 100) / 200,
+    score: (score * rankingQualityMultiplier(entry))
+      + Math.min(entry.sort.severity, 100) / 100
+      + Math.min(entry.sort.evidence, 100) / 200,
     matchedFields: Array.from(matchedFields).sort(),
   };
 }
@@ -199,11 +222,67 @@ function fallbackPlan(prompt: string): ChatSearchPlan {
   };
 }
 
-function resolveLimit(plan: ChatSearchPlan): number {
-  if (plan.rsids.length > 0) return 5;
-  if (plan.genes.length > 0) return 10;
-  if (plan.conditions.length + plan.topics.length > 3) return 15;
-  return 12;
+function isSupplementalContext(entry: StoredReportEntry): boolean {
+  return entry.evidenceTier === "supplementary" || entry.subcategory === "snpedia";
+}
+
+function resolveCandidateGuidedLimit(candidates: SearchCandidate[], rankedCount: number, explicitLimit?: number): number {
+  const maxLimit = Math.min(MAX_CHAT_CONTEXT_FINDINGS, rankedCount);
+  if (explicitLimit !== undefined) return Math.min(explicitLimit, maxLimit);
+  if (maxLimit <= MIN_CHAT_SEARCH_FINDINGS) return maxLimit;
+
+  const topScore = candidates[0]?.score ?? 0;
+  if (topScore <= 0) return Math.min(12, maxLimit);
+
+  const relevantCandidateCount = candidates
+    .slice(0, MAX_CHAT_CONTEXT_FINDINGS)
+    .filter((candidate) => candidate.score >= topScore * 0.35).length;
+
+  return Math.min(
+    maxLimit,
+    Math.max(MIN_CHAT_SEARCH_FINDINGS, relevantCandidateCount),
+  );
+}
+
+function uniqueIds(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function selectRankedEntries(
+  ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }>,
+  limit: number,
+): Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> {
+  if (limit <= 0) return [];
+
+  const selected = ranked.slice(0, limit);
+  const selectedIds = new Set(selected.map(({ entry }) => entry.id));
+  const supplementalTarget = Math.min(SUPPLEMENTAL_CONTEXT_LIMIT, Math.max(1, Math.floor(limit / 6)));
+  let supplementalCount = selected.filter(({ entry }) => isSupplementalContext(entry)).length;
+
+  for (const supplemental of ranked) {
+    if (supplementalCount >= supplementalTarget) break;
+    if (!isSupplementalContext(supplemental.entry) || selectedIds.has(supplemental.entry.id)) continue;
+
+    let replaceIndex = -1;
+    for (let index = selected.length - 1; index >= 0; index -= 1) {
+      if (!isSupplementalContext(selected[index].entry)) {
+        replaceIndex = index;
+        break;
+      }
+    }
+    if (replaceIndex === -1) break;
+
+    selectedIds.delete(selected[replaceIndex].entry.id);
+    selected[replaceIndex] = supplemental;
+    selectedIds.add(supplemental.entry.id);
+    supplementalCount += 1;
+  }
+
+  return selected.sort((left, right) =>
+    right.score - left.score ||
+    right.entry.sort.severity - left.entry.sort.severity ||
+    left.entry.title.localeCompare(right.entry.title),
+  );
 }
 
 function preScoreCandidate(candidate: SearchCandidate, plan: ChatSearchPlan): number {
@@ -214,18 +293,20 @@ function preScoreCandidate(candidate: SearchCandidate, plan: ChatSearchPlan): nu
   const normTitle = candidate.title.toLowerCase();
   let score = 0;
 
-  if (plan.rsids.some((rsid) => normRsids.includes(rsid))) score += 90;
+  if (plan.rsids.some((rsid) => normRsids.includes(rsid))) score += RANKING_WEIGHTS.rsid;
 
   const geneTokens = new Set(normGenes.split(/\s+/).filter(Boolean));
-  score += plan.genes.filter((g) => geneTokens.has(g)).length * 70;
+  score += plan.genes.filter((g) => geneTokens.has(g)).length * RANKING_WEIGHTS.gene;
 
-  score += plan.topics.filter((t) => normTopics.includes(t)).length * 28;
-  score += plan.conditions.filter((c) => normConditions.includes(c)).length * 28;
+  score += plan.topics.filter((t) => normTopics.includes(t)).length * RANKING_WEIGHTS.topic;
+  score += plan.conditions.filter((c) => normConditions.includes(c)).length * RANKING_WEIGHTS.condition;
 
-  if (plan.evidence.includes(candidate.evidenceTier)) score += 12;
-  if (plan.query && normTitle.includes(plan.query.toLowerCase())) score += 25;
+  if (plan.evidence.includes(candidate.evidenceTier)) score += RANKING_WEIGHTS.evidenceTier;
+  if (plan.query && normTitle.includes(plan.query.toLowerCase())) score += RANKING_WEIGHTS.titleQuery;
 
-  return score + Math.min(candidate.sortSeverity, 100) / 100 + Math.min(candidate.sortEvidence, 100) / 200;
+  return (score * rankingQualityMultiplier(candidate))
+    + Math.min(candidate.sortSeverity, 100) / 100
+    + Math.min(candidate.sortEvidence, 100) / 200;
 }
 
 export async function searchReportEntriesForChat({
@@ -233,28 +314,25 @@ export async function searchReportEntriesForChat({
   prompt,
   plan,
   limit,
-}: {
-  profileId: string;
-  prompt: string;
-  plan?: ChatSearchPlan;
-  limit?: number;
-}): Promise<ChatRetrievalResult> {
+  excludeIds = [],
+  offset = 0,
+}: ChatRetrievalRequest): Promise<ChatRetrievalResult> {
   const effectivePlan = compactPlan(plan ?? fallbackPlan(prompt));
   const categories = ALL_CATEGORIES;
   const terms = searchTerms(prompt, effectivePlan);
-  const effectiveLimit = limit ?? resolveLimit(effectivePlan);
   const ranked: Array<{ entry: StoredReportEntry; score: number; matchedFields: string[] }> = [];
   const seen = new Set<string>();
+  const excludedIds = new Set(excludeIds);
 
   const startedAt = performance.now();
   await waitForIndex(profileId);
   const indexReadyAt = performance.now();
 
-  const indexCandidateLimit = Math.max(60, effectiveLimit * 8);
-  const candidates = await searchWithFields(profileId, terms, indexCandidateLimit);
+  const candidates = await searchWithFields(profileId, terms, INDEX_CANDIDATE_LIMIT);
   const indexSearchedAt = performance.now();
 
   const rankEntry = (entry: StoredReportEntry) => {
+    if (excludedIds.has(entry.id)) return;
     if (seen.has(entry.id)) return;
     seen.add(entry.id);
     const { score, matchedFields } = scoreEntry(entry, prompt, effectivePlan, terms);
@@ -263,14 +341,13 @@ export async function searchReportEntriesForChat({
 
   // Pre-score from stored index fields to identify the most relevant candidates,
   // then load full entries from IDB only for those — avoiding large batch reads.
-  const topN = Math.max(15, effectiveLimit * 3);
-  const topIds = candidates
+  const candidateIds = candidates
     .map((c, i) => ({ id: c.id, score: preScoreCandidate(c, effectivePlan), order: i }))
     .sort((a, b) => b.score - a.score || a.order - b.order)
-    .slice(0, topN)
-    .map((c) => c.id);
+    .map((c) => c.id)
+    .filter((id) => !excludedIds.has(id));
 
-  const indexedEntries = await loadReportEntriesByIds(profileId, topIds);
+  const indexedEntries = await loadReportEntriesByIds(profileId, candidateIds);
   const idbReadAt = performance.now();
   for (const entry of indexedEntries) {
     rankEntry(entry);
@@ -293,9 +370,14 @@ export async function searchReportEntriesForChat({
     left.entry.title.localeCompare(right.entry.title),
   );
 
-  const selectedRanked = ranked.slice(0, effectiveLimit);
-  const selected = selectedRanked.map(({ entry }) => findingToChatContext(entry));
+  const effectiveLimit = resolveCandidateGuidedLimit(candidates, ranked.length, limit);
+  const selectedRankedEntries = selectRankedEntries(ranked, effectiveLimit);
+  const selectedFindings = selectedRankedEntries.map(({ entry }) => findingToChatContext(entry));
   const completedAt = performance.now();
+  const selectedIds = selectedRankedEntries.map(({ entry }) => entry.id);
+  const sentFindingIds = uniqueIds([...excludeIds, ...selectedIds]);
+  const remainingCandidateCount = Math.max(0, candidates.length - sentFindingIds.length);
+  const hasMore = remainingCandidateCount > 0 && selectedFindings.length > 0;
   const timingMs = {
     total: Math.round(completedAt - startedAt),
     indexWait: Math.round(indexReadyAt - startedAt),
@@ -307,15 +389,18 @@ export async function searchReportEntriesForChat({
 
   return {
     plan: effectivePlan,
-    findings: selected,
-    resultCount: selected.length,
+    findings: selectedFindings,
+    resultCount: selectedFindings.length,
     trace: {
       searchedAt: new Date().toISOString(),
       scannedCategories: categories,
       searchedTerms: terms,
       relatedTerms: effectivePlan.relatedTerms,
-      resultCount: selected.length,
-      returnedFindings: selectedRanked.map(({ entry, matchedFields }) => ({
+      resultCount: selectedFindings.length,
+      sentCount: selectedFindings.length,
+      candidateWindowCount: candidates.length,
+      remainingCandidateCount,
+      returnedFindings: selectedRankedEntries.map(({ entry, matchedFields }) => ({
         id: entry.id,
         title: entry.title,
         category: entry.category,
@@ -324,6 +409,12 @@ export async function searchReportEntriesForChat({
         sourceNames: entry.sources.map((source) => source.name).slice(0, 5),
       })),
       rationale: effectivePlan.rationale,
+      searchPlan: effectivePlan,
+      retrievalCursor: {
+        hasMore,
+        nextOffset: offset + selectedFindings.length,
+        sentFindingIds,
+      },
       indexCandidateCount: candidates.length,
       usedFallback,
       timingMs,

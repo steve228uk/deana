@@ -11,8 +11,7 @@ import {
   streamReportEntries,
 } from "./storage";
 import { makeSavedProfile } from "../test/fixtures";
-import type { ChatSearchPlan } from "./aiChat";
-import type { InsightCategory, StoredReportEntry } from "../types";
+import type { ChatSearchPlan, InsightCategory, StoredReportEntry } from "../types";
 
 vi.mock("./storage", () => ({
   streamReportEntries: vi.fn(),
@@ -143,6 +142,46 @@ describe("searchReportEntriesForChat", () => {
     expect(result.trace.usedFallback).toBe(false);
   });
 
+  it("uses MiniSearch candidate strength instead of rsID plans to choose the result count", async () => {
+    const template = storedEntries().find((entry) => entry.category === "medical")!;
+    const entries = Array.from({ length: 8 }, (_, index) => withSearchText({
+      ...template,
+      id: `medical-factor-rsid-${index}`,
+      title: `Factor V Leiden context ${index}`,
+      summary: "Factor V Leiden clotting context.",
+      genes: ["F5"],
+      matchedMarkers: [{ rsid: "rs6025", genotype: "CT", chromosome: "1", position: 169519049, gene: "F5" }],
+      sort: {
+        ...template.sort,
+        severity: 100 - index,
+      },
+    }));
+    installEntries(entries);
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "Factor V Leiden rs6025",
+      plan: {
+        query: "Factor V Leiden",
+        categories: ["medical"],
+        genes: ["F5"],
+        rsids: ["rs6025"],
+        topics: [],
+        conditions: ["Factor V Leiden"],
+        relatedTerms: [],
+        evidence: [],
+        rationale: "Search a specific marker.",
+      },
+    });
+
+    expect(result.findings.length).toBeGreaterThan(5);
+    expect(result.findings).toHaveLength(8);
+    expect(result.trace.candidateWindowCount).toBe(8);
+    expect(result.trace.sentCount).toBe(8);
+    expect(result.trace.remainingCandidateCount).toBe(0);
+    expect(result.trace.retrievalCursor?.hasMore).toBe(false);
+  });
+
   it("uses AI-planned related terms to search full finding fields", async () => {
     const template = storedEntries()[0];
     const entry: StoredReportEntry = {
@@ -178,7 +217,7 @@ describe("searchReportEntriesForChat", () => {
     expect(result.trace.usedFallback).toBe(false);
   });
 
-  it("deduplicates repeated streamed report entries before building the Orama index", async () => {
+  it("deduplicates repeated streamed report entries before building the MiniSearch index", async () => {
     const template = storedEntries()[0];
     const entry = withSearchText({
       ...template,
@@ -210,7 +249,7 @@ describe("searchReportEntriesForChat", () => {
     expect(result.trace.usedFallback).toBe(false);
   });
 
-  it("restores a cached Orama index without reloading all report entries", async () => {
+  it("restores a cached MiniSearch index without reloading all report entries", async () => {
     const entries = storedEntries();
     installEntries(entries);
 
@@ -300,9 +339,11 @@ describe("searchReportEntriesForChat", () => {
       ...template,
       id: "local-traits-snpedia-rs2003046-c-c",
       category: "traits",
+      subcategory: "snpedia",
       title: "Normal (higher) risk of Male Pattern Baldness",
       summary: "Normal (higher) risk of Male Pattern Baldness.",
       detail: "Discovered by 23andMe based on customer surveys, and considered preliminary research.",
+      evidenceTier: "supplementary",
       conditions: [
         "Discovered by 23andMe based on customer surveys, and considered preliminary research.",
         "Normal (higher) risk of Male Pattern Baldness.",
@@ -310,6 +351,7 @@ describe("searchReportEntriesForChat", () => {
       genes: [],
       topics: ["SNPedia", "Genotype page"],
       matchedMarkers: [{ rsid: "rs2003046", genotype: "CC", chromosome: "7", position: 123, gene: undefined }],
+      sources: [{ id: "snpedia", name: "SNPedia", url: "https://example.com/snpedia" }],
       sourceNotes: ["SNPedia genotype page: Rs2003046(C;C)."],
     });
     const unrelatedEntry = withSearchText({
@@ -348,6 +390,137 @@ describe("searchReportEntriesForChat", () => {
     });
     expect(result.findings.map((finding) => finding.id)).not.toContain(unrelatedEntry.id);
     expect(result.trace.returnedFindings[0].matchedFields).toContain("title");
+  });
+
+  it("keeps relevant supplementary SNPedia context when primary matches crowd the result set", async () => {
+    const template = storedEntries()[0];
+    const primaryMatches = Array.from({ length: 30 }, (_, index) => withSearchText({
+      ...template,
+      id: `local-traits-primary-baldness-${index}`,
+      category: "traits",
+      title: `Male Pattern Baldness primary context ${index}`,
+      summary: "Male Pattern Baldness context.",
+      detail: "Primary evidence context for pattern baldness.",
+      evidenceTier: "high",
+      genes: ["AR"],
+      topics: ["Trait association"],
+      conditions: ["Male Pattern Baldness"],
+      sources: [{ id: "gwas", name: "GWAS Catalog", url: "https://example.com/gwas" }],
+      matchedMarkers: [{ rsid: `rs${300000 + index}`, genotype: "AA", chromosome: "7", position: 100 + index, gene: "AR" }],
+    }));
+    const snpediaContext = withSearchText({
+      ...template,
+      id: "local-traits-snpedia-baldness-context",
+      category: "traits",
+      subcategory: "snpedia",
+      title: "Male Pattern Baldness SNPedia context",
+      summary: "Male Pattern Baldness genotype context.",
+      detail: "Supplementary consumer-facing SNPedia context.",
+      evidenceTier: "supplementary",
+      genes: [],
+      topics: ["SNPedia", "Genotype page"],
+      conditions: ["Male Pattern Baldness"],
+      sources: [{ id: "snpedia", name: "SNPedia", url: "https://example.com/snpedia" }],
+      matchedMarkers: [{ rsid: "rs2003046", genotype: "CC", chromosome: "7", position: 123, gene: undefined }],
+      sourceNotes: ["SNPedia genotype page: Rs2003046(C;C)."],
+    });
+    installEntries([...primaryMatches, snpediaContext]);
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "show me about baldness",
+      plan: {
+        query: "baldness",
+        categories: ["traits"],
+        genes: [],
+        rsids: [],
+        topics: ["pattern baldness"],
+        conditions: ["male pattern baldness"],
+        relatedTerms: ["baldness", "male pattern baldness"],
+        evidence: [],
+        rationale: "Search locally for baldness context.",
+      },
+    });
+
+    expect(result.findings).toHaveLength(18);
+    expect(result.findings.map((finding) => finding.id)).toContain("local-traits-snpedia-baldness-context");
+    expect(result.trace.candidateWindowCount).toBe(31);
+    expect(result.trace.sentCount).toBe(18);
+    expect(result.trace.remainingCandidateCount).toBe(13);
+    expect(result.trace.retrievalCursor?.hasMore).toBe(true);
+
+    const nextResult = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: result.trace.searchPlan?.query ?? "baldness",
+      plan: result.trace.searchPlan,
+      excludeIds: result.trace.retrievalCursor?.sentFindingIds,
+      offset: result.trace.retrievalCursor?.nextOffset,
+    });
+
+    expect(nextResult.findings.length).toBeGreaterThan(0);
+    expect(nextResult.findings.some((finding) => result.findings.some((previous) => previous.id === finding.id))).toBe(false);
+    expect(nextResult.trace.retrievalCursor?.sentFindingIds.length).toBeGreaterThan(result.trace.retrievalCursor?.sentFindingIds.length ?? 0);
+  });
+
+  it("keeps exact gene and title matches ahead of broad informational matches", async () => {
+    const template = storedEntries()[0];
+    const broadInformational = Array.from({ length: 36 }, (_, index) => withSearchText({
+      ...template,
+      id: `local-medical-apoe-broad-${index}`,
+      category: "medical",
+      title: `General informational note ${index}`,
+      summary: "APOE appears in a broad background note.",
+      detail: "Background evidence mentions APOE without a direct gene finding title.",
+      genes: [],
+      evidenceTier: "emerging",
+      outcome: "informational",
+      repute: "not-set",
+      matchedMarkers: [{ rsid: `rs${100000 + index}`, genotype: "AA", chromosome: "19", position: 100 + index, gene: undefined }],
+      sort: {
+        ...template.sort,
+        severity: 100,
+      },
+    }));
+    const exactMatch = withSearchText({
+      ...template,
+      id: "local-medical-apoe-exact",
+      category: "medical",
+      title: "APOE Alzheimer disease risk context",
+      summary: "APOE genotype context.",
+      genes: ["APOE"],
+      conditions: ["Alzheimer disease"],
+      evidenceTier: "high",
+      outcome: "negative",
+      repute: "bad",
+      matchedMarkers: [{ rsid: "rs429358", genotype: "CT", chromosome: "19", position: 44908684, gene: "APOE" }],
+      sort: {
+        ...template.sort,
+        severity: 1,
+      },
+    });
+    installEntries([...broadInformational, exactMatch]);
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "What does APOE mean for Alzheimer disease?",
+      plan: {
+        query: "APOE Alzheimer",
+        categories: ["medical"],
+        genes: ["APOE"],
+        rsids: [],
+        topics: [],
+        conditions: ["Alzheimer disease"],
+        relatedTerms: ["APOE"],
+        evidence: ["high"],
+        rationale: "Search for APOE Alzheimer context.",
+      },
+    });
+
+    expect(result.findings[0]).toMatchObject({
+      id: "local-medical-apoe-exact",
+      title: "APOE Alzheimer disease risk context",
+    });
+    expect(result.trace.returnedFindings[0].matchedFields).toEqual(expect.arrayContaining(["conditions", "genes", "title"]));
   });
 
   it("does not send unrelated findings when the saved report has no matches", async () => {

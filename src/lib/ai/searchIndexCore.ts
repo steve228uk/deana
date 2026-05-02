@@ -6,21 +6,23 @@ import {
   loadSearchIndexSource,
   saveSearchIndexCache,
 } from "../storage";
-import type { EvidenceTier, StoredReportEntry } from "../../types";
+import { rankingQualityMultiplier } from "./ranking";
+import type { EvidenceTier, FindingOutcome, ReputeStatus, StoredReportEntry } from "../../types";
 import type { ExplorerFilters } from "../explorer";
 
 interface LightEntry {
   id: string;
-  category: string;
+  category: StoredReportEntry["category"];
   title: string;
   genes: string;
   topics: string;
   conditions: string;
   rsids: string;
-  evidenceTier: string;
+  evidenceTier: EvidenceTier;
+  outcome: FindingOutcome;
   sourceNames: string[];
   significance: string;
-  repute: string;
+  repute: ReputeStatus;
   coverage: string;
   publicationBucket: string;
   geneValues: string[];
@@ -37,6 +39,7 @@ interface LightEntry {
 
 export interface SearchCandidate {
   id: string;
+  score: number;
   category: string;
   evidenceTier: EvidenceTier;
   genes: string;
@@ -46,6 +49,8 @@ export interface SearchCandidate {
   title: string;
   sortSeverity: number;
   sortEvidence: number;
+  outcome: FindingOutcome;
+  repute: ReputeStatus;
 }
 
 export interface SearchExplorerEntryIdsRequest {
@@ -81,22 +86,22 @@ export type WorkerResponse =
 const indexes = new Map<string, MiniSearch<LightEntry>>();
 const inFlight = new Map<string, Promise<void>>();
 
-// Version 5: replaced Orama with MiniSearch and added evidence-tier quality filter.
-const SEARCH_INDEX_CACHE_VERSION = 5;
+// Version 7: includes supplementary SNPedia context in the local search index.
+const SEARCH_INDEX_CACHE_VERSION = 7;
 const SEARCH_INDEX_INSERT_BATCH_SIZE = 500;
 
-// Only index entries with meaningful evidence quality. preview/supplementary entries
-// are not surfaced by AI search, so excluding them keeps the index small enough for iOS.
-const INDEXED_EVIDENCE_TIERS = new Set<EvidenceTier>(["high", "moderate", "emerging"]);
+// Search should still find contextual SNPedia and preview records. Ranking
+// penalties keep them below stronger evidence when relevance is comparable.
+const INDEXED_EVIDENCE_TIERS = new Set<EvidenceTier>(["high", "moderate", "emerging", "preview", "supplementary"]);
 
 const SEARCH_INDEX_FIELD_BOOSTS = {
-  rsids: 8,
-  markers: 7,
-  genes: 6,
-  conditions: 5,
-  title: 4,
+  rsids: 12,
+  markers: 10,
+  genes: 8,
+  conditions: 6,
+  title: 6,
   topics: 3,
-  body: 2,
+  body: 1,
 } as const;
 
 const EXPLORER_ARRAY_FILTER_FIELDS: Array<[
@@ -119,7 +124,7 @@ function createSearchIndex(): MiniSearch<LightEntry> {
     storeFields: [
       "id", "category", "evidenceTier", "genes", "topics", "conditions", "rsids",
       "title", "sortSeverity", "sortEvidence", "sortPublications", "sortAlphabetical",
-      "significance", "repute", "coverage", "publicationBucket",
+      "outcome", "significance", "repute", "coverage", "publicationBucket",
       "geneValues", "tagValues", "sourceNames",
     ],
   });
@@ -151,6 +156,7 @@ function toLightEntry(entry: StoredReportEntry): LightEntry {
     conditions: entry.conditions.join(" "),
     rsids: rsids.join(" "),
     evidenceTier: entry.evidenceTier,
+    outcome: entry.outcome,
     sourceNames: entry.sources.map((source) => source.name),
     significance: entry.normalizedClinicalSignificance ?? "",
     repute: entry.repute,
@@ -170,6 +176,7 @@ function toLightEntry(entry: StoredReportEntry): LightEntry {
 function toSearchCandidate(result: SearchResult): SearchCandidate {
   return {
     id: result.id as string,
+    score: result.score,
     category: result.category as string,
     evidenceTier: (result.evidenceTier as EvidenceTier) ?? "supplementary",
     genes: result.genes as string,
@@ -179,6 +186,8 @@ function toSearchCandidate(result: SearchResult): SearchCandidate {
     title: result.title as string,
     sortSeverity: result.sortSeverity as number,
     sortEvidence: result.sortEvidence as number,
+    outcome: (result.outcome as FindingOutcome) ?? "informational",
+    repute: (result.repute as ReputeStatus) ?? "not-set",
   };
 }
 
@@ -194,7 +203,8 @@ function searchDocs(index: MiniSearch<LightEntry>, terms: string[], limit: numbe
   if (!query) return [];
   return index.search(query, {
     boost: SEARCH_INDEX_FIELD_BOOSTS,
-    fuzzy: 0.2,
+    fuzzy: (term) => term.length >= 5 ? 0.2 : false,
+    maxFuzzy: 2,
     prefix: true,
     combineWith: "OR",
   }).slice(0, limit);
@@ -233,6 +243,18 @@ function compareExplorerDocuments(left: SearchResult, right: SearchResult, sort:
         || (right.sortEvidence as number) - (left.sortEvidence as number)
         || (left.title as string).localeCompare(right.title as string);
   }
+}
+
+function qualityMultiplier(result: SearchResult): number {
+  return rankingQualityMultiplier({
+    evidenceTier: result.evidenceTier,
+    outcome: result.outcome,
+    repute: result.repute,
+  });
+}
+
+function explorerRelevanceScore(result: SearchResult): number {
+  return result.score * qualityMultiplier(result);
 }
 
 export async function prewarmSearchIndex(profileId: string): Promise<void> {
@@ -322,14 +344,17 @@ export async function searchExplorerEntryIds({
   const hits = index
     .search(query, {
       boost: SEARCH_INDEX_FIELD_BOOSTS,
-      fuzzy: 0.2,
-      prefix: true,
-      combineWith: "OR",
+      fuzzy: (term) => term.length >= 5 ? 0.2 : false,
+      maxFuzzy: 2,
+      prefix: (term) => term.length >= 3,
+      combineWith: "AND",
       filter: explorerFilter(category, filters),
     })
     .filter((hit) => hit.score > 0)
     .sort((left, right) =>
-      compareExplorerDocuments(left, right, filters.sort) || right.score - left.score,
+      explorerRelevanceScore(right) - explorerRelevanceScore(left)
+        || compareExplorerDocuments(left, right, filters.sort)
+        || (left.title as string).localeCompare(right.title as string),
     );
 
   if (hits.length === 0) return { ids: [], count: 0 };

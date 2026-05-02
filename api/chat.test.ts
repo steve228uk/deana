@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { trimMessagesToRecentWindow } from "./chat.js";
+import { buildSystemPrompt, trimMessagesToRecentWindow } from "./chat.js";
 
 function buildMessages(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -36,5 +36,46 @@ describe("trimMessagesToRecentWindow", () => {
   it("ignores non-object payloads", () => {
     expect(trimMessagesToRecentWindow(null)).toBeNull();
     expect(trimMessagesToRecentWindow("not-an-object")).toBe("not-an-object");
+  });
+});
+
+describe("buildSystemPrompt", () => {
+  it("keeps follow-up suggestions structured and privacy scoped", () => {
+    const prompt = buildSystemPrompt({
+      contextVersion: 1,
+      currentTab: "ai",
+      activeFilters: {
+        q: "",
+        source: "",
+        evidence: [],
+        significance: [],
+        repute: [],
+        coverage: [],
+        publications: [],
+        gene: [],
+        tag: [],
+        sort: "relevance",
+      },
+      report: {
+        provider: "23andMe",
+        build: "GRCh37",
+        markerCount: 10,
+        coverageScore: 90,
+        evidencePackVersion: "test-pack",
+        evidenceStatus: "complete",
+        evidenceMatchedFindings: 1,
+        localEvidenceEntryMatches: 1,
+        warnings: [],
+        categoryCounts: [],
+      },
+      selectedFindingId: null,
+      findings: [],
+    });
+
+    expect(prompt).toContain("<!-- deana-follow-ups:");
+    expect(prompt).toContain("\"title\":\"Short button label\"");
+    expect(prompt).toContain("\"body\":\"Full follow-up prompt to send\"");
+    expect(prompt).toContain("Do not include profile names, uploaded file names, raw DNA");
+    expect(prompt).toContain("browser-local search");
   });
 });
