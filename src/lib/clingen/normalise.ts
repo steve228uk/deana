@@ -17,6 +17,7 @@ export type ClinGenImportedRecord = {
   reportUrl?: string | null;
   lastEvaluatedDate?: string | null;
   publishedDate?: string | null;
+  pmids?: string[];
   raw: Record<string, unknown>;
   fetchedAt: string;
 };

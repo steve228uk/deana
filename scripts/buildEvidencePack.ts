@@ -994,11 +994,16 @@ interface ClinGenClassification {
   diseaseId: string;
   classification: string;
   url: string;
+  pmids?: string[];
 }
 
 function clingenEvidenceTier(classification: string): EvidenceTier {
-  if (classification === "Definitive" || classification === "Strong") return "high";
+  if (isHighConfidenceClinGenClassification(classification)) return "high";
   return "moderate";
+}
+
+function isHighConfidenceClinGenClassification(classification: string): boolean {
+  return classification === "Definitive" || classification === "Strong";
 }
 
 async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promise<EvidencePackRecord[]> {
@@ -1025,6 +1030,7 @@ async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promis
     if (!rsids || rsids.length === 0) continue;
 
     const evidenceLevel = clingenEvidenceTier(cls.classification);
+    const pmids = cls.pmids?.length ? Array.from(new Set(cls.pmids)) : [];
 
     const slug = cls.gene.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     const diseaseSlug = cls.disease.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
@@ -1041,7 +1047,7 @@ async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promis
       title: `${cls.gene} / ${cls.disease} (ClinGen ${cls.classification})`,
       summary: `ClinGen has classified the relationship between ${cls.gene} and ${cls.disease} as ${cls.classification} based on systematic evidence review.`,
       riskSummary: `${cls.gene} variant in a gene with ClinGen ${cls.classification} evidence for ${cls.disease}`,
-      qualityTier: cls.classification === "Definitive" || cls.classification === "Strong" ? "tier-1" : undefined,
+      qualityTier: isHighConfidenceClinGenClassification(cls.classification) ? "tier-1" : undefined,
       detail: `ClinGen ${cls.classification} classification: expert curation found ${cls.classification.toLowerCase()} evidence that ${cls.gene} variants cause ${cls.disease}.`,
       whyItMatters: "ClinGen gene-disease validity classifications reflect the strength of evidence that variants in this gene cause the specified disease, using a rigorous semi-quantitative framework.",
       topics: ["ClinGen", "Gene-disease validity"],
@@ -1052,7 +1058,7 @@ async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promis
       clinicalSignificance: "pathogenic",
       repute: "bad",
       tone: "caution",
-      pmids: [],
+      pmids,
       notes: [
         `ClinGen classification: ${cls.classification}.`,
         ...(cls.diseaseId ? [`Disease identifier: ${cls.diseaseId}.`] : []),

@@ -8,14 +8,15 @@ import {
   importDosageSensitivityCsv,
   importDosageSensitivityFtpTsv,
 } from "../src/lib/clingen/importDosageSensitivity";
-import { importGeneDiseaseValidity } from "../src/lib/clingen/importGeneDiseaseValidity";
+import {
+  INCLUDED_GENE_DISEASE_VALIDITY_CLASSIFICATIONS,
+  importGeneDiseaseValidity,
+} from "../src/lib/clingen/importGeneDiseaseValidity";
 import { importVariantPathogenicity } from "../src/lib/clingen/importVariantPathogenicity";
 import type { ClinGenImportedRecord } from "../src/lib/clingen/normalise";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = path.join(repoRoot, ".evidence-cache", "clingen");
-
-const includedGeneDiseaseClassifications = new Set(["Definitive", "Strong", "Moderate"]);
 
 type ClinGenImportSource =
   | "gene-disease-validity"
@@ -43,6 +44,7 @@ interface LegacyClinGenClassification {
   diseaseId: string;
   classification: string;
   url: string;
+  pmids: string[];
 }
 
 const allSources: ClinGenImportSource[] = [
@@ -94,27 +96,29 @@ function cachePath(fileName: string): string {
 function toLegacyGeneValidity(
   records: ClinGenImportedRecord[],
 ): LegacyClinGenClassification[] {
-  return records
-    .filter((record) =>
-      record.classification
-        ? includedGeneDiseaseClassifications.has(record.classification)
-        : false,
-    )
-    .flatMap((record) => {
-      if (!record.geneSymbol || !record.diseaseLabel || !record.classification) {
-        return [];
-      }
+  const classifications: LegacyClinGenClassification[] = [];
 
-      return [
-        {
-          gene: record.geneSymbol,
-          disease: record.diseaseLabel,
-          diseaseId: record.mondoId ?? "",
-          classification: record.classification,
-          url: record.reportUrl ?? "https://search.clinicalgenome.org/kb/gene-validity",
-        },
-      ];
+  for (const record of records) {
+    if (
+      !record.geneSymbol ||
+      !record.diseaseLabel ||
+      !record.classification ||
+      !INCLUDED_GENE_DISEASE_VALIDITY_CLASSIFICATIONS.has(record.classification)
+    ) {
+      continue;
+    }
+
+    classifications.push({
+      gene: record.geneSymbol,
+      disease: record.diseaseLabel,
+      diseaseId: record.mondoId ?? "",
+      classification: record.classification,
+      url: record.reportUrl ?? "https://search.clinicalgenome.org/kb/gene-validity",
+      pmids: record.pmids ?? [],
     });
+  }
+
+  return classifications;
 }
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {

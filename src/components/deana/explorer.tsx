@@ -645,8 +645,10 @@ export function FindingDetailContent({
     <>
       <p className="dn-eyebrow">Inspector</p>
       <Title id={titleId}>{finding.title}</Title>
-      <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
-      {finding.pharmgkbLevel ? <PharmGkbLevelBadge level={finding.pharmgkbLevel} /> : null}
+      <div className="dn-finding-badges">
+        <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
+        {finding.pharmgkbLevel ? <PharmGkbLevelBadge level={finding.pharmgkbLevel} /> : null}
+      </div>
       {summary ? <div className="dn-inspector__intro">{renderMarkdown(summary)}</div> : null}
       {finding.detail.trim() ? (
         <section>

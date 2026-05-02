@@ -528,7 +528,7 @@ a { color: inherit; }
 .dn-finding-card__snapshot strong { color: var(--dn-forest); font-weight: 600; }
 .dn-finding-card__foot { display: flex; gap: 18px; color: var(--dn-muted); margin-top: 12px; font-size: 0.9rem; flex-wrap: wrap; }
 .dn-finding-card__foot span { display: inline-flex; align-items: center; gap: 6px; }
-.dn-priority-pill { display: inline-flex; border-radius: 999px; padding: 5px 9px; color: var(--dn-clay-dark); background: var(--dn-danger-bg); font-weight: 600; }
+.dn-priority-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 9px; color: var(--dn-clay-dark); background: var(--dn-danger-bg); font-weight: 600; line-height: 1.2; }
 .dn-finding-tone-low .dn-priority-pill,
 .dn-finding-tone-low .dn-finding-card__icon,
 .dn-priority-pill.dn-finding-tone-low { color: var(--dn-forest); background: var(--dn-success-bg); }
@@ -559,7 +559,8 @@ a { color: inherit; }
 .dn-repute-chip--bad { background: var(--dn-danger-bg); color: var(--dn-clay-dark); }
 .dn-repute-chip--good { background: var(--dn-success-bg); color: var(--dn-forest); }
 .dn-repute-chip--mixed { background: #fff1cd; color: #705111; }
-.dn-pgkb-level-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 9px; font-weight: 700; font-size: 0.8em; letter-spacing: 0.02em; }
+.dn-finding-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dn-pgkb-level-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 9px; font-weight: 700; line-height: 1.2; }
 .dn-pgkb-level-badge--1a { background: var(--dn-success-bg); color: var(--dn-forest); }
 .dn-pgkb-level-badge--1b { background: rgba(58, 110, 165, 0.12); color: var(--dn-blue); }
 .dn-pgkb-level-badge--2a { background: rgba(201, 131, 43, 0.14); color: var(--dn-amber); }
