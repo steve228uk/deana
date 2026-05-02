@@ -36,7 +36,7 @@ describe("UploadReportModal", () => {
 });
 
 describe("SupportDeanaModal", () => {
-  it("shows support copy and links to Buy Me a Coffee", async () => {
+  it("shows support copy and links to Ko-fi", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
 
@@ -47,7 +47,8 @@ describe("SupportDeanaModal", () => {
     expect(screen.getByText(/owning their own data, keeping private things private/i)).toBeInTheDocument();
     expect(screen.getByText(/helps pay for the less glamorous bits/i)).toBeInTheDocument();
     expect(screen.queryByText("Stephen Radford")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Buy Me a Coffee/i })).toHaveAttribute(
+    expect(screen.getByText(/Ko-fi helps pay for the less glamorous bits/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Support on Ko-fi/i })).toHaveAttribute(
       "href",
       DEANA_SUPPORT_URL,
     );

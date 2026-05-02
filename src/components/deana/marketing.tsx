@@ -5,7 +5,7 @@ import { DeanaWordmark, Icon } from "./ui";
 export const DEANA_GITHUB_URL = "https://github.com/steve228uk/deana";
 export const DEANA_LICENSE_URL = `${DEANA_GITHUB_URL}/blob/HEAD/LICENSE.md`;
 export const DEANA_SUBREDDIT_URL = "https://www.reddit.com/r/deanadna";
-export const DEANA_SUPPORT_URL = "https://buymeacoffee.com/steve228uk";
+export const DEANA_SUPPORT_URL = "https://ko-fi.com/steve228uk";
 
 export interface SavedReportCard {
   id: string;
@@ -491,16 +491,16 @@ export function SupportDeanaModal({ onClose }: { onClose?: () => void }) {
         </p>
         <div className="dn-support-copy">
           <p>
-            If Deana has been useful to you, buying me a coffee helps pay for the less glamorous bits: hosting,
+            If Deana has been useful to you, Ko-fi helps pay for the less glamorous bits: hosting,
             ongoing development, and the AI tokens used by the optional chat features.
           </p>
           <p>
-            There is no account or subscription. A coffee just helps me keep improving Deana and keep it online.
+            There is no account or subscription. A Ko-fi contribution just helps me keep improving Deana and keep it online.
           </p>
         </div>
         <div className="dn-modal-actions">
           <a className="dn-button dn-button--primary" href={DEANA_SUPPORT_URL} target="_blank" rel="noreferrer">
-            <Icon name="external" /> Buy Me a Coffee
+            <Icon name="heart" /> Support on Ko-fi
           </a>
           <button className="dn-button dn-button--secondary" onClick={onClose}>Close</button>
         </div>
