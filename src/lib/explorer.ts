@@ -58,6 +58,8 @@ type SearchableEntry = {
   outcome?: string;
   confidenceNote?: string;
   disclaimer?: string;
+  pharmgkbLevel?: string;
+  clingenClassification?: string;
   matchedMarkers: ReportEntry["matchedMarkers"];
 };
 
@@ -94,6 +96,8 @@ export function buildEntrySearchText(entry: SearchableEntry): string {
     entry.outcome,
     entry.confidenceNote,
     entry.disclaimer,
+    entry.pharmgkbLevel,
+    entry.clingenClassification,
     ...entry.genes,
     ...entry.topics,
     ...entry.conditions,

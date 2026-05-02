@@ -191,6 +191,64 @@ describe("reportEngine", () => {
     });
   });
 
+  it("extracts legacy ClinGen classifications from local evidence titles", () => {
+    const dna = makeParsedDnaFile();
+    const supplement: EvidenceSupplement = {
+      status: "complete",
+      fetchedAt: "2026-04-25T00:00:00.000Z",
+      attribution: "test",
+      packVersion: EVIDENCE_PACK_VERSION,
+      manifest: null,
+      totalRsids: dna.markerCount,
+      processedRsids: dna.markerCount,
+      matchedRecords: [
+        {
+          record: {
+            id: "clingen-zmynd11-syndromic-complex-neurodevelopmental-disorder",
+            entryId: "local-medical-clingen-zmynd11-syndromic-complex-neurodevelopmental-disorder",
+            sourceId: "clingen",
+            role: "primary",
+            category: "medical",
+            subcategory: "gene-disease-validity",
+            markerIds: ["rs6025"],
+            genes: ["ZMYND11"],
+            title: "ZMYND11 / syndromic complex neurodevelopmental disorder (ClinGen Definitive)",
+            url: "https://search.clinicalgenome.org/kb/gene-validity/test",
+            release: "test",
+            evidenceLevel: "high",
+            clinicalSignificance: "pathogenic",
+            repute: "bad",
+            pmids: ["123", "456"],
+            notes: [
+              "ClinGen classification: Definitive.",
+              "ClinGen classifications reflect published literature and expert panel review.",
+            ],
+          },
+          matchedMarkers: [
+            {
+              rsid: "rs6025",
+              genotype: "CT",
+              chromosome: "1",
+              position: 169519049,
+              gene: "ZMYND11",
+            },
+          ],
+        },
+      ],
+      unmatchedRsids: dna.markerCount - 1,
+      failedItems: [],
+      retries: 0,
+    };
+
+    const report = generateReport(dna, { evidence: supplement });
+    const localEntry = report.entries.find((entry) =>
+      entry.id === "local-medical-clingen-zmynd11-syndromic-complex-neurodevelopmental-disorder"
+    );
+
+    expect(localEntry?.title).toBe("ZMYND11 / syndromic complex neurodevelopmental disorder");
+    expect(localEntry?.clingenClassification).toBe("Definitive");
+  });
+
   it("keeps SNPedia repute and magnitude as structured report fields", () => {
     const dna = makeParsedDnaFile();
     const supplement: EvidenceSupplement = {

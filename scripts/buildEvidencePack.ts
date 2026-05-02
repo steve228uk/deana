@@ -997,6 +997,8 @@ interface ClinGenClassification {
   pmids?: string[];
 }
 
+const CLINGEN_CLASSIFICATION_NOTE_PREFIX = "ClinGen classification:";
+
 function clingenEvidenceTier(classification: string): EvidenceTier {
   if (isHighConfidenceClinGenClassification(classification)) return "high";
   return "moderate";
@@ -1044,10 +1046,11 @@ async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promis
       subcategory: "gene-disease-validity",
       markerIds: rsids.slice(0, 3),
       genes: [cls.gene],
-      title: `${cls.gene} / ${cls.disease} (ClinGen ${cls.classification})`,
+      title: `${cls.gene} / ${cls.disease}`,
       summary: `ClinGen has classified the relationship between ${cls.gene} and ${cls.disease} as ${cls.classification} based on systematic evidence review.`,
       riskSummary: `${cls.gene} variant in a gene with ClinGen ${cls.classification} evidence for ${cls.disease}`,
       qualityTier: isHighConfidenceClinGenClassification(cls.classification) ? "tier-1" : undefined,
+      clingenClassification: cls.classification,
       detail: `ClinGen ${cls.classification} classification: expert curation found ${cls.classification.toLowerCase()} evidence that ${cls.gene} variants cause ${cls.disease}.`,
       whyItMatters: "ClinGen gene-disease validity classifications reflect the strength of evidence that variants in this gene cause the specified disease, using a rigorous semi-quantitative framework.",
       topics: ["ClinGen", "Gene-disease validity"],
@@ -1060,7 +1063,7 @@ async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promis
       tone: "caution",
       pmids,
       notes: [
-        `ClinGen classification: ${cls.classification}.`,
+        `${CLINGEN_CLASSIFICATION_NOTE_PREFIX} ${cls.classification}.`,
         ...(cls.diseaseId ? [`Disease identifier: ${cls.diseaseId}.`] : []),
         "ClinGen classifications reflect published literature and expert panel review; they do not replace diagnostic genetic testing.",
       ],

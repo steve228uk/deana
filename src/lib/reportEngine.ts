@@ -19,9 +19,12 @@ import {
   normalizeConditions,
 } from "./normalization";
 
-export const REPORT_VERSION = 7;
+export const REPORT_VERSION = 8;
 
 type MarkerMap = Map<string, CompactMarker>;
+
+const CLINGEN_CLASSIFICATION_NOTE_PATTERN = /^ClinGen classification:\s*([^.]+)\./i;
+const CLINGEN_TITLE_SUFFIX_PATTERN = /\s*\(ClinGen\s+([^)]+)\)\s*$/i;
 
 function markerMap(markers: CompactMarker[]): MarkerMap {
   const map = new Map<string, CompactMarker>();
@@ -188,6 +191,24 @@ function localEvidenceGenotypeSummary(match: EvidencePackMatch): string {
   return `${genotype}${match.matchedMarkers.map(markerLabel).join(" • ")}`;
 }
 
+function clinGenClassificationForRecord(record: EvidencePackMatch["record"]): string | undefined {
+  if (record.clingenClassification) return record.clingenClassification;
+  const canContainClinGenClassification = record.sourceId === "clingen" || record.subcategory === "gene-disease-validity";
+  if (!canContainClinGenClassification) return undefined;
+
+  for (const note of record.notes) {
+    const noteMatch = CLINGEN_CLASSIFICATION_NOTE_PATTERN.exec(note.trim())?.[1]?.trim();
+    if (noteMatch) return noteMatch;
+  }
+
+  return CLINGEN_TITLE_SUFFIX_PATTERN.exec(record.title)?.[1]?.trim();
+}
+
+function titleWithoutClinGenClassification(title: string, classification?: string): string {
+  if (!classification) return title;
+  return title.replace(CLINGEN_TITLE_SUFFIX_PATTERN, "").trim();
+}
+
 function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntry[] {
   if (!supplement || supplement.status !== "complete") return [];
   const curatedIds = new Set(EVIDENCE_DEFINITIONS.map((definition) => definition.id));
@@ -217,6 +238,8 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
             : record.tone ?? "neutral";
       const repute = record.repute ?? "not-set";
       const outcome = outcomeForTone(tone, repute);
+      const clingenClassification = clinGenClassificationForRecord(record);
+      const title = titleWithoutClinGenClassification(record.title, clingenClassification);
 
       const riskSummary = record.riskSummary;
       const computedSummary =
@@ -240,7 +263,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         entryKind: "local-evidence",
         category,
         subcategory: record.subcategory ?? record.sourceId,
-        title: record.title,
+        title,
         summary,
         detail:
           record.detail ??
@@ -290,12 +313,13 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
                 : record.evidenceLevel === "emerging"
                   ? 2
                   : 1,
-          alphabetical: record.title.toLowerCase(),
+          alphabetical: title.toLowerCase(),
           publications: publicationCount,
         },
         confidenceNote: `Matched locally from evidence pack ${supplement.packVersion}.`,
         disclaimer: "Informational only. Do not use this result alone for diagnosis, treatment, or prescribing decisions.",
         pharmgkbLevel: record.pharmgkbLevel,
+        clingenClassification,
       };
     });
 }

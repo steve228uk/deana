@@ -1125,6 +1125,71 @@ describe("Deana app", () => {
     );
   });
 
+  it("shows ClinGen classifications as card metadata and inspector snapshot content", async () => {
+    const baseProfile = makeSavedProfile({ id: "profile-clingen" });
+    const template = baseProfile.report.entries.find((entry) => entry.category === "medical") ?? baseProfile.report.entries[0];
+    const clingenEntry = {
+      ...template,
+      id: "local-medical-clingen-zmynd11-syndromic-complex-neurodevelopmental-disorder",
+      entryKind: "local-evidence" as const,
+      category: "medical" as const,
+      subcategory: "gene-disease-validity",
+      title: "ZMYND11 / syndromic complex neurodevelopmental disorder",
+      summary:
+        "ClinGen has classified the relationship between ZMYND11 and syndromic complex neurodevelopmental disorder as Definitive based on systematic evidence review.",
+      detail:
+        "ClinGen Definitive classification: expert curation found definitive evidence that ZMYND11 variants cause syndromic complex neurodevelopmental disorder.",
+      matchedMarkers: [
+        {
+          rsid: "rs6025",
+          genotype: "CT",
+          chromosome: "1",
+          position: 169519049,
+          gene: "ZMYND11",
+        },
+      ],
+      genes: ["ZMYND11"],
+      topics: ["ClinGen", "Gene-disease validity"],
+      conditions: ["syndromic complex neurodevelopmental disorder"],
+      sources: [
+        {
+          id: "clingen",
+          name: "ClinGen",
+          url: "https://search.clinicalgenome.org/kb/gene-validity/test",
+        },
+      ],
+      evidenceTier: "high" as const,
+      repute: "bad" as const,
+      publicationCount: 7,
+      publicationBucket: "6-20" as const,
+      clingenClassification: "Definitive",
+    } satisfies SavedProfile["report"]["entries"][number];
+
+    storedProfiles = [{
+      ...baseProfile,
+      report: {
+        ...baseProfile.report,
+        entries: [clingenEntry],
+        tabs: baseProfile.report.tabs.map((tab) =>
+          tab.tab === "medical" || tab.tab === "overview" ? { ...tab, count: 1 } : { ...tab, count: 0 },
+        ),
+      },
+    }];
+
+    renderApp("/explorer/profile-clingen?tab=medical&selected=local-medical-clingen-zmynd11-syndromic-complex-neurodevelopmental-disorder");
+
+    await screen.findByText("Current report");
+    const card = await screen.findByRole("button", { name: /ZMYND11 \/ syndromic complex neurodevelopmental disorder/i });
+    expect(within(card).getByRole("heading")).not.toHaveTextContent("(ClinGen Definitive)");
+    expect(within(card).getByText("ClinGen")).toBeInTheDocument();
+    expect(within(card).getByText("Definitive")).toBeInTheDocument();
+
+    const inspector = screen.getByLabelText("Finding inspector");
+    expect(within(inspector).getByRole("heading", { name: "ZMYND11 / syndromic complex neurodevelopmental disorder" })).toBeInTheDocument();
+    expect(within(inspector).getByText("ClinGen classification")).toBeInTheDocument();
+    expect(within(inspector).getByText("Definitive")).toBeInTheDocument();
+  });
+
   it("renders markdown formatting in the inspector content", async () => {
     const profile = makePaginatedProfile("profile-10", 1);
     storedProfiles = [{

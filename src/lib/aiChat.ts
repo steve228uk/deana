@@ -50,6 +50,8 @@ export interface ChatContextFinding {
   disclaimer: string;
   frequencyNote: string;
   sourceGenotype: string;
+  pharmgkbLevel?: string;
+  clingenClassification?: string;
   publicationCount: number;
   sourceNames: string[];
   sourceUrls: string[];
@@ -228,6 +230,8 @@ export function findingToChatContext(entry: StoredReportEntry): ChatContextFindi
     disclaimer: compactText(entry.disclaimer, 500),
     frequencyNote: compactText(entry.frequencyNote ?? "", 300),
     sourceGenotype: compactText(entry.sourceGenotype ?? "", 120),
+    pharmgkbLevel: compactText(entry.pharmgkbLevel ?? "", 60),
+    clingenClassification: compactText(entry.clingenClassification ?? "", 120),
     publicationCount: entry.publicationCount,
     sourceNames: entry.sources.map((source) => compactText(source.name, 100)).filter(Boolean).slice(0, 5),
     sourceUrls: entry.sources.map((source) => safeSourceUrl(source.url)).filter((url): url is string => Boolean(url)).slice(0, 5),

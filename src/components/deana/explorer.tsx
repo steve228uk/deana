@@ -552,6 +552,7 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
           <span>{entry.sources[0]?.name ?? "Source"}</span>
           <span>{entry.evidenceTier} · {entry.coverage}</span>
           {entry.pharmgkbLevel ? <PharmGkbLevelBadge level={entry.pharmgkbLevel} /> : null}
+          {entry.clingenClassification ? <span>{entry.clingenClassification}</span> : null}
           <span className="dn-priority-pill">{priorityLabel(entry)}</span>
         </div>
         <h2>{entry.title} {firstMarker ? <small>{firstMarker.rsid} ({firstMarker.genotype ?? "n/a"})</small> : null}</h2>
@@ -734,6 +735,12 @@ function EvidenceSnapshot({ finding }: { finding: StoredReportEntry }) {
           <div>
             <dt>Source genotype</dt>
             <dd>{finding.sourceGenotype}</dd>
+          </div>
+        ) : null}
+        {finding.clingenClassification ? (
+          <div>
+            <dt>ClinGen classification</dt>
+            <dd>{finding.clingenClassification}</dd>
           </div>
         ) : null}
         <div>
