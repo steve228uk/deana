@@ -25,6 +25,7 @@ vi.mock("./storage", () => ({
 }));
 
 let cachedSearchIndex: unknown = null;
+const lowMemoryBudgetLimit = 125_000;
 
 function storedEntries(): StoredReportEntry[] {
   const profile = makeSavedProfile({ id: "profile-ai-search" });
@@ -36,6 +37,8 @@ function storedEntries(): StoredReportEntry[] {
 }
 
 function installEntries(entries: StoredReportEntry[]) {
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+
   vi.mocked(loadSearchIndexSource).mockImplementation(async (profileId: string) => ({
     metadata: {
       reportVersion: 1,
@@ -62,9 +65,12 @@ function installEntries(entries: StoredReportEntry[]) {
   });
 
   vi.mocked(loadReportEntriesByIds).mockImplementation(async (profileId: string, ids: string[]) => {
-    const selected = [] as StoredReportEntry[];
-    for await (const entry of streamReportEntries(profileId)) {
-      if (ids.includes(entry.id)) selected.push(entry);
+    const selected: StoredReportEntry[] = [];
+    for (const id of ids) {
+      const entry = entryById.get(id);
+      if (entry && (entry.profileId === profileId || profileId === "profile-ai-search")) {
+        selected.push(entry);
+      }
     }
     return selected;
   });
@@ -599,20 +605,27 @@ describe("searchReportEntriesForChat", () => {
       maxTouchPoints: 5,
     });
     const template = storedEntries()[0];
-    const entries: StoredReportEntry[] = Array.from({ length: 125_001 }, (_, index) => ({
+    const targetIndex = lowMemoryBudgetLimit;
+    const entries: StoredReportEntry[] = Array.from({ length: lowMemoryBudgetLimit + 1 }, (_, index) => ({
       ...template,
       id: `local-medical-budget-${index}`,
       category: "medical",
-      title: index === 125_000 ? "Budget fallback Factor V finding" : `Budget filler ${index}`,
-      summary: index === 125_000 ? "Factor V Leiden direct scan result." : "Unrelated budget filler.",
-      detail: index === 125_000 ? "The direct IndexedDB scan should still find F5." : "Unrelated budget filler.",
-      genes: index === 125_000 ? ["F5"] : ["GENE"],
+      title: index === targetIndex ? "Budget fallback Factor V finding" : `Budget filler ${index}`,
+      summary: index === targetIndex ? "Factor V Leiden direct scan result." : "Unrelated budget filler.",
+      detail: index === targetIndex ? "The direct IndexedDB scan should still find F5." : "Unrelated budget filler.",
+      genes: index === targetIndex ? ["F5"] : ["GENE"],
       evidenceTier: "high",
-      matchedMarkers: [{ rsid: `rs${700000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: index === 125_000 ? "F5" : "GENE" }],
+      matchedMarkers: [{ rsid: `rs${700000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: index === targetIndex ? "F5" : "GENE" }],
       searchText: "",
     }));
-    entries[125_000] = withSearchText(entries[125_000]);
+    entries[targetIndex] = withSearchText(entries[targetIndex]);
     installEntries(entries);
+    vi.mocked(loadCategoryPage).mockResolvedValueOnce({
+      entries: [entries[targetIndex]],
+      nextCursor: null,
+      totalLoaded: 1,
+      hasMore: false,
+    });
 
     const result = await searchReportEntriesForChat({
       profileId: "profile-ai-search",
@@ -631,7 +644,7 @@ describe("searchReportEntriesForChat", () => {
     });
 
     expect(result.findings[0]).toMatchObject({
-      id: "local-medical-budget-125000",
+      id: `local-medical-budget-${targetIndex}`,
       title: "Budget fallback Factor V finding",
     });
     expect(result.trace.usedFallback).toBe(true);
@@ -640,6 +653,70 @@ describe("searchReportEntriesForChat", () => {
     expect(result.trace.candidateWindowCount).toBe(1);
     expect(streamReportEntries).not.toHaveBeenCalled();
     expect(saveSearchIndexCache).not.toHaveBeenCalled();
+  });
+
+  it("preserves retrieval pagination when memory budget fallback has more local matches", async () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
+    const template = storedEntries()[0];
+    const fallbackMatchCount = 31;
+    const fallbackMatches = Array.from({ length: fallbackMatchCount }, (_, index) => withSearchText({
+      ...template,
+      id: `local-medical-budget-page-${index}`,
+      category: "medical",
+      title: `Budget fallback pagination finding ${index}`,
+      summary: "Factor V Leiden pagination fallback result.",
+      detail: "Factor V Leiden local fallback result.",
+      genes: ["F5"],
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${800000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "F5" }],
+    }));
+    const fillerEntries: StoredReportEntry[] = Array.from({ length: lowMemoryBudgetLimit + 1 - fallbackMatchCount }, (_, index) => ({
+      ...template,
+      id: `local-medical-budget-pagination-filler-${index}`,
+      category: "medical",
+      title: `Budget pagination filler ${index}`,
+      summary: "Unrelated budget pagination filler.",
+      detail: "Unrelated budget pagination filler.",
+      genes: ["GENE"],
+      evidenceTier: "high",
+      matchedMarkers: [{ rsid: `rs${900000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
+      searchText: "",
+    }));
+    installEntries([...fallbackMatches, ...fillerEntries]);
+    vi.mocked(loadCategoryPage).mockResolvedValueOnce({
+      entries: fallbackMatches,
+      nextCursor: null,
+      totalLoaded: fallbackMatches.length,
+      hasMore: false,
+    });
+
+    const result = await searchReportEntriesForChat({
+      profileId: "profile-ai-search",
+      prompt: "Factor V Leiden",
+      plan: {
+        query: "Factor V Leiden",
+        categories: ["medical"],
+        genes: ["F5"],
+        rsids: [],
+        topics: [],
+        conditions: [],
+        relatedTerms: [],
+        evidence: ["high"],
+        rationale: "Search for Factor V.",
+      },
+    });
+
+    expect(result.trace.usedFallback).toBe(true);
+    expect(result.trace.fallbackReason).toBe("memory-budget");
+    expect(result.trace.candidateWindowCount).toBe(fallbackMatchCount);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.findings.length).toBeLessThan(fallbackMatchCount);
+    expect(result.trace.remainingCandidateCount).toBe(fallbackMatchCount - result.findings.length);
+    expect(result.trace.retrievalCursor?.hasMore).toBe(true);
   });
 });
 

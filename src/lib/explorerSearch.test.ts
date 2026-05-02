@@ -25,6 +25,7 @@ vi.mock("./storage", () => ({
 
 let entries: StoredReportEntry[] = [];
 let cachedSearchIndex: unknown = null;
+const lowMemoryBudgetLimit = 125_000;
 
 function storedEntries(): StoredReportEntry[] {
   const profile = makeSavedProfile({ id: "profile-explorer-search" });
@@ -402,18 +403,19 @@ describe("loadExplorerPage", () => {
       maxTouchPoints: 5,
     });
     const template = storedEntries()[0];
-    const oversizedEntries: StoredReportEntry[] = Array.from({ length: 125_001 }, (_, index) => ({
+    const targetIndex = lowMemoryBudgetLimit;
+    const oversizedEntries: StoredReportEntry[] = Array.from({ length: lowMemoryBudgetLimit + 1 }, (_, index) => ({
       ...template,
       id: `medical-budget-${index}`,
       category: "medical",
       title: `Budget entry ${index}`,
-      summary: index === 125_000 ? "Direct database fallback phrase." : "Unrelated budget entry.",
+      summary: index === targetIndex ? "Direct database fallback phrase." : "Unrelated budget entry.",
       evidenceTier: "high",
       matchedMarkers: [{ rsid: `rs${900000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
       searchText: "",
     }));
     const directPage = {
-      entries: [oversizedEntries[125_000]],
+      entries: [oversizedEntries[targetIndex]],
       nextCursor: null,
       totalLoaded: 1,
       hasMore: false,
@@ -446,12 +448,13 @@ describe("loadExplorerPage", () => {
       deviceMemory: 8,
     });
     const template = storedEntries()[0];
-    const entries = Array.from({ length: 30_001 }, (_, index) => withSearchText({
+    const desktopTargetIndex = 30_000;
+    const entries = Array.from({ length: desktopTargetIndex + 1 }, (_, index) => withSearchText({
       ...template,
       id: `medical-desktop-budget-${index}`,
       category: "medical",
-      title: index === 30_000 ? "Desktop MiniSearch phrase" : `Desktop budget entry ${index}`,
-      summary: index === 30_000 ? "Desktop MiniSearch phrase." : "Unrelated desktop budget entry.",
+      title: index === desktopTargetIndex ? "Desktop MiniSearch phrase" : `Desktop budget entry ${index}`,
+      summary: index === desktopTargetIndex ? "Desktop MiniSearch phrase." : "Unrelated desktop budget entry.",
       evidenceTier: "high",
       matchedMarkers: [{ rsid: `rs${800000 + index}`, genotype: "AA", chromosome: "1", position: index, gene: "GENE" }],
     }));
@@ -464,10 +467,10 @@ describe("loadExplorerPage", () => {
     });
 
     expect(loadCategoryPage).not.toHaveBeenCalled();
-    expect(loadReportEntriesByIds).toHaveBeenCalledWith("profile-explorer-search", ["medical-desktop-budget-30000"]);
-    expect(page.entries.map((entry) => entry.id)).toEqual(["medical-desktop-budget-30000"]);
+    expect(loadReportEntriesByIds).toHaveBeenCalledWith("profile-explorer-search", [`medical-desktop-budget-${desktopTargetIndex}`]);
+    expect(page.entries.map((entry) => entry.id)).toEqual([`medical-desktop-budget-${desktopTargetIndex}`]);
     expect(saveSearchIndexCache).toHaveBeenCalledWith(expect.objectContaining({
-      documentCount: 30_001,
+      documentCount: desktopTargetIndex + 1,
     }));
   });
 

@@ -8,9 +8,11 @@ import type { ChatRetrievalTrace, ChatSearchPlan, InsightCategory, StoredReportE
 const ALL_CATEGORIES: InsightCategory[] = ["medical", "traits", "drug"];
 const MIN_CHAT_SEARCH_FINDINGS = 5;
 const INDEX_CANDIDATE_LIMIT = 180;
-const FALLBACK_QUERY_LIMIT = 8;
-const FALLBACK_PAGE_SIZE = 60;
-const FALLBACK_MAX_PAGES_PER_QUERY = 3;
+const FALLBACK_SEARCH_BOUNDS = {
+  queryLimit: 8,
+  pageSize: 60,
+  maxPagesPerQuery: 3,
+} as const;
 const SUPPLEMENTAL_CONTEXT_LIMIT = 2;
 const RANKING_WEIGHTS = {
   rsid: 90,
@@ -373,33 +375,49 @@ function fallbackSearchQueries(prompt: string, plan: ChatSearchPlan): string[] {
     ...plan.topics,
     ...plan.relatedTerms,
     prompt,
-  ]).slice(0, FALLBACK_QUERY_LIMIT);
+  ]).slice(0, FALLBACK_SEARCH_BOUNDS.queryLimit);
 }
 
-async function loadFallbackReportEntries(
+function addFallbackPageEntries(
+  seenEntryIds: Set<string>,
+  entries: StoredReportEntry[],
+  excludedIds: Set<string>,
+  onEntry: (entry: StoredReportEntry) => void,
+): boolean {
+  for (const entry of entries) {
+    if (excludedIds.has(entry.id) || seenEntryIds.has(entry.id)) continue;
+    seenEntryIds.add(entry.id);
+    onEntry(entry);
+    if (seenEntryIds.size >= INDEX_CANDIDATE_LIMIT) return true;
+  }
+
+  return false;
+}
+
+async function loadFallbackReportEntryCount(
   profileId: string,
   prompt: string,
   plan: ChatSearchPlan,
   excludedIds: Set<string>,
-): Promise<StoredReportEntry[]> {
-  const entriesById = new Map<string, StoredReportEntry>();
+  onEntry: (entry: StoredReportEntry) => void,
+): Promise<number> {
+  const seenEntryIds = new Set<string>();
   const categories = plan.categories.length > 0 ? plan.categories : ALL_CATEGORIES;
 
   for (const query of fallbackSearchQueries(prompt, plan)) {
     for (const category of categories) {
       let cursor: string | null = null;
-      for (let pageCount = 0; pageCount < FALLBACK_MAX_PAGES_PER_QUERY; pageCount += 1) {
+      for (let pageCount = 0; pageCount < FALLBACK_SEARCH_BOUNDS.maxPagesPerQuery; pageCount += 1) {
         const page = await loadCategoryPage({
           profileId,
           category,
           filters: { ...DEFAULT_FILTERS, q: query },
           cursor,
-          pageSize: FALLBACK_PAGE_SIZE,
+          pageSize: FALLBACK_SEARCH_BOUNDS.pageSize,
         });
 
-        for (const entry of page.entries) {
-          if (!excludedIds.has(entry.id)) entriesById.set(entry.id, entry);
-          if (entriesById.size >= INDEX_CANDIDATE_LIMIT) return [...entriesById.values()];
+        if (addFallbackPageEntries(seenEntryIds, page.entries, excludedIds, onEntry)) {
+          return seenEntryIds.size;
         }
 
         if (!page.nextCursor) break;
@@ -408,7 +426,7 @@ async function loadFallbackReportEntries(
     }
   }
 
-  return [...entriesById.values()];
+  return seenEntryIds.size;
 }
 
 export async function searchReportEntriesForChat({
@@ -459,11 +477,18 @@ export async function searchReportEntriesForChat({
 
   // Pre-score from stored index fields to identify the most relevant candidates,
   // then load full entries from IDB only for those — avoiding large batch reads.
-  const candidateIds = candidates
-    .map((c, i) => ({ id: c.id, score: preScoreCandidate(c, effectivePlan), order: i }))
+  const candidateScores: Array<{ id: string; score: number; order: number }> = [];
+  candidates.forEach((candidate, order) => {
+    if (excludedIds.has(candidate.id)) return;
+    candidateScores.push({
+      id: candidate.id,
+      score: preScoreCandidate(candidate, effectivePlan),
+      order,
+    });
+  });
+  const candidateIds = candidateScores
     .sort((a, b) => b.score - a.score || a.order - b.order)
-    .map((c) => c.id)
-    .filter((id) => !excludedIds.has(id));
+    .map((candidate) => candidate.id);
 
   const indexedEntries = candidateIds.length > 0
     ? await loadReportEntriesByIds(profileId, candidateIds)
@@ -474,16 +499,13 @@ export async function searchReportEntriesForChat({
   }
   const indexedScoredAt = performance.now();
 
-  // Fallback: full scan when the index is unavailable or found no candidates.
+  // Fallback: bounded IndexedDB category-page search when the index is unavailable or empty.
   const usedFallback = !isIndexReady || candidates.length === 0;
   if (usedFallback && !fallbackReason) fallbackReason = isIndexReady ? "no-index-candidates" : "unavailable";
-  let fallbackEntries: StoredReportEntry[] = [];
+  let fallbackEntryCount = 0;
   let fallbackScannedAt = indexedScoredAt;
   if (usedFallback) {
-    fallbackEntries = await loadFallbackReportEntries(profileId, prompt, effectivePlan, excludedIds);
-    for (const entry of fallbackEntries) {
-      rankEntry(entry);
-    }
+    fallbackEntryCount = await loadFallbackReportEntryCount(profileId, prompt, effectivePlan, excludedIds, rankEntry);
     fallbackScannedAt = performance.now();
   }
 
@@ -495,8 +517,10 @@ export async function searchReportEntriesForChat({
   const completedAt = performance.now();
   const selectedIds = selectedRankedEntries.map(({ entry }) => entry.id);
   const sentFindingIds = uniqueIds([...excludeIds, ...selectedIds]);
-  const candidateWindowCount = candidates.length > 0 ? candidates.length : fallbackEntries.length;
-  const remainingCandidateCount = candidates.length > 0 ? Math.max(0, candidates.length - sentFindingIds.length) : 0;
+  const candidateWindowCount = usedFallback ? fallbackEntryCount : candidates.length;
+  const remainingCandidateCount = usedFallback
+    ? Math.max(0, fallbackEntryCount - selectedFindings.length)
+    : Math.max(0, candidates.length - sentFindingIds.length);
   const hasMore = remainingCandidateCount > 0 && selectedFindings.length > 0;
   const timingMs = {
     total: Math.round(completedAt - startedAt),

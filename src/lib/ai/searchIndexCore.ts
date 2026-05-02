@@ -396,6 +396,9 @@ export async function prewarmSearchIndex(profileId: string): Promise<SearchIndex
       try {
         const documents = cached.rawData as LightEntry[];
         if (Array.isArray(documents) && documents.length > 0) {
+          if (documents.length > budget.maxDocuments) {
+            return setIndexStatus(profileId, memoryBudgetSkipStatus(budget, documents.length, 0)!);
+          }
           const textBytes = documents.reduce((total, document) => total + documentTextBytes(document), 0);
           const budgetStatus = memoryBudgetSkipStatus(budget, documents.length, textBytes);
           if (budgetStatus) {
