@@ -6,7 +6,7 @@ import {
   loadSearchIndexSource,
   saveSearchIndexCache,
 } from "../storage";
-import { rankingQualityMultiplier } from "./ranking";
+import { rankingQualityMultiplier } from "../ranking";
 import type { EvidenceTier, FindingOutcome, ReputeStatus, StoredReportEntry } from "../../types";
 import type { ExplorerFilters } from "../explorer";
 
@@ -32,6 +32,7 @@ interface LightEntry {
   // Sort fields stored with the document but outside the search fields,
   // so MiniSearch does not build index entries for them.
   sortSeverity: number;
+  sortRank: number;
   sortEvidence: number;
   sortPublications: number;
   sortAlphabetical: string;
@@ -95,8 +96,8 @@ const indexes = new Map<string, MiniSearch<LightEntry>>();
 const indexStatuses = new Map<string, SearchIndexStatus>();
 const inFlight = new Map<string, Promise<SearchIndexStatus>>();
 
-// Version 8: prunes low-signal supplementary records and uses memory budgets.
-const SEARCH_INDEX_CACHE_VERSION = 8;
+// Version 10: invalidates cached ranks after source-aware validity scoring changes.
+const SEARCH_INDEX_CACHE_VERSION = 10;
 const SEARCH_INDEX_INSERT_BATCH_SIZE = 500;
 const LOW_MEMORY_MAX_DOCUMENTS = 125_000;
 const LOW_MEMORY_MAX_TEXT_BYTES = 64 * 1024 * 1024;
@@ -147,7 +148,7 @@ function createSearchIndex(): MiniSearch<LightEntry> {
     fields: ["title", "genes", "topics", "conditions", "rsids", "markers", "body"],
     storeFields: [
       "id", "category", "evidenceTier", "genes", "topics", "conditions", "rsids",
-      "title", "sortSeverity", "sortEvidence", "sortPublications", "sortAlphabetical",
+      "title", "sortSeverity", "sortRank", "sortEvidence", "sortPublications", "sortAlphabetical",
       "outcome", "significance", "repute", "coverage", "publicationBucket",
       "geneValues", "tagValues", "sourceNames",
     ],
@@ -282,6 +283,7 @@ function toLightEntry(entry: StoredReportEntry): LightEntry {
     tagValues: [...entry.topics, ...entry.conditions],
     markers: markerParts.join(" "),
     body,
+    sortRank: entry.sort.rank,
     sortSeverity: entry.sort.severity,
     sortEvidence: entry.sort.evidence,
     sortPublications: entry.sort.publications,
@@ -352,6 +354,8 @@ function explorerFilter(category: StoredReportEntry["category"], filters: Explor
 
 function compareExplorerDocuments(left: SearchResult, right: SearchResult, sort: ExplorerFilters["sort"]): number {
   switch (sort) {
+    case "rank":
+      return compareByRankThenTitle(left, right);
     case "alphabetical":
       return (left.sortAlphabetical as string).localeCompare(right.sortAlphabetical as string);
     case "publications":
@@ -367,6 +371,18 @@ function compareExplorerDocuments(left: SearchResult, right: SearchResult, sort:
         || (right.sortEvidence as number) - (left.sortEvidence as number)
         || (left.title as string).localeCompare(right.title as string);
   }
+}
+
+function compareByRankThenTitle(left: SearchResult, right: SearchResult): number {
+  return (right.sortRank as number) - (left.sortRank as number)
+    || (right.sortSeverity as number) - (left.sortSeverity as number)
+    || (right.sortEvidence as number) - (left.sortEvidence as number)
+    || (left.title as string).localeCompare(right.title as string);
+}
+
+function compareRankSearchFallback(left: SearchResult, right: SearchResult): number {
+  return (right.sortRank as number) - (left.sortRank as number)
+    || (left.title as string).localeCompare(right.title as string);
 }
 
 function qualityMultiplier(result: SearchResult): number {
@@ -493,16 +509,20 @@ export async function searchExplorerEntryIds({
       filter: explorerFilter(category, filters),
     })
     .filter((hit) => hit.score > 0)
+    .map((hit) => ({
+      hit,
+      relevanceScore: explorerRelevanceScore(hit),
+    }))
     .sort((left, right) =>
-      explorerRelevanceScore(right) - explorerRelevanceScore(left)
-        || compareExplorerDocuments(left, right, filters.sort)
-        || (left.title as string).localeCompare(right.title as string),
+      right.relevanceScore - left.relevanceScore
+        || compareExplorerDocuments(left.hit, right.hit, filters.sort)
+        || compareRankSearchFallback(left.hit, right.hit),
     );
 
   if (hits.length === 0) return { ids: [], count: 0, indexStatus };
 
   return {
-    ids: hits.slice(offset, offset + limit).map((hit) => hit.id as string),
+    ids: hits.slice(offset, offset + limit).map(({ hit }) => hit.id as string),
     count: hits.length,
     indexStatus,
   };

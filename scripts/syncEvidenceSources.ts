@@ -9,7 +9,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const cacheRoot = path.join(repoRoot, ".evidence-cache");
 
 interface SourceConfig {
-  id: "clinvar" | "gwas";
+  id: "clinvar" | "clinvar-citations" | "gwas" | "gwas-studies";
   url: string | null;
   path: string;
   required: boolean;
@@ -18,12 +18,14 @@ interface SourceConfig {
 interface Options {
   force: boolean;
   gwasUrl: string | null;
+  gwasStudiesUrl: string | null;
 }
 
 function parseOptions(argv: string[]): Options {
   const options: Options = {
     force: false,
     gwasUrl: process.env.GWAS_ASSOCIATIONS_URL ?? null,
+    gwasStudiesUrl: process.env.GWAS_STUDIES_URL ?? null,
   };
 
   for (const arg of argv) {
@@ -33,6 +35,10 @@ function parseOptions(argv: string[]): Options {
     }
     if (arg.startsWith("--gwas-url=")) {
       options.gwasUrl = arg.slice("--gwas-url=".length);
+      continue;
+    }
+    if (arg.startsWith("--gwas-studies-url=")) {
+      options.gwasStudiesUrl = arg.slice("--gwas-studies-url=".length);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
@@ -50,9 +56,21 @@ function sources(options: Options): SourceConfig[] {
       required: true,
     },
     {
+      id: "clinvar-citations",
+      url: "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/var_citations.txt",
+      path: path.join(cacheRoot, "clinvar", "var_citations.txt"),
+      required: false,
+    },
+    {
       id: "gwas",
       url: options.gwasUrl,
       path: path.join(cacheRoot, "gwas", "associations.tsv"),
+      required: false,
+    },
+    {
+      id: "gwas-studies",
+      url: options.gwasStudiesUrl,
+      path: path.join(cacheRoot, "gwas", "studies.tsv"),
       required: false,
     },
   ];
@@ -60,19 +78,32 @@ function sources(options: Options): SourceConfig[] {
 
 function isZipSource(source: SourceConfig, response: Response): boolean {
   return (
-    source.id === "gwas" &&
+    (source.id === "gwas" || source.id === "gwas-studies") &&
     (source.url?.toLowerCase().endsWith(".zip") ||
       response.headers.get("content-type")?.toLowerCase().includes("zip") === true)
   );
 }
 
-function extractGwasAssociationsZip(source: SourceConfig, bytes: Uint8Array): Uint8Array {
+function extractGwasZip(source: SourceConfig, bytes: Uint8Array): Uint8Array {
   const entries = unzipSync(bytes);
+  const pattern = source.id === "gwas-studies" ? /studies/i : /associations/i;
   return findZipTextEntry(
     entries,
-    /associations/i,
-    `${source.id} ZIP did not contain an associations TSV/TXT file.`,
+    pattern,
+    `${source.id} ZIP did not contain the expected TSV/TXT file.`,
   );
+}
+
+function skipReasonForSource(sourceId: SourceConfig["id"]): string {
+  switch (sourceId) {
+    case "gwas":
+      return "Set GWAS_ASSOCIATIONS_URL or pass --gwas-url=... for a current GWAS Catalog association TSV.";
+    case "gwas-studies":
+      return "Set GWAS_STUDIES_URL or pass --gwas-studies-url=... for optional GWAS Catalog studies metadata.";
+    case "clinvar":
+    case "clinvar-citations":
+      return "No URL configured.";
+  }
 }
 
 async function download(source: SourceConfig, force: boolean): Promise<object> {
@@ -80,9 +111,7 @@ async function download(source: SourceConfig, force: boolean): Promise<object> {
     return {
       id: source.id,
       status: "skipped",
-      reason: source.id === "gwas"
-        ? "Set GWAS_ASSOCIATIONS_URL or pass --gwas-url=... for a current GWAS Catalog association TSV."
-        : "No URL configured.",
+      reason: skipReasonForSource(source.id),
     };
   }
 
@@ -111,7 +140,7 @@ async function download(source: SourceConfig, force: boolean): Promise<object> {
 
   const responseBytes = new Uint8Array(await response.arrayBuffer());
   const bytes = isZipSource(source, response)
-    ? extractGwasAssociationsZip(source, responseBytes)
+    ? extractGwasZip(source, responseBytes)
     : responseBytes;
 
   await mkdir(path.dirname(source.path), { recursive: true });

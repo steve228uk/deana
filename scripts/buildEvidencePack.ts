@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
@@ -25,7 +25,9 @@ const cacheRoot = path.join(repoRoot, ".evidence-cache");
 const packRoot = path.join(repoRoot, "public", "evidence-packs");
 const sourceCacheFiles = {
   clinvar: path.join(cacheRoot, "clinvar", "variant_summary.txt.gz"),
+  clinvarCitations: path.join(cacheRoot, "clinvar", "var_citations.txt"),
   gwas: path.join(cacheRoot, "gwas", "associations.tsv"),
+  gwasStudies: path.join(cacheRoot, "gwas", "studies.tsv"),
   snpedia: path.join(cacheRoot, "snpedia", "pages.json"),
   cpicVariants: path.join(cacheRoot, "cpic", "variants.json"),
   cpicPairs: path.join(cacheRoot, "cpic", "pairs.json"),
@@ -49,9 +51,17 @@ function dbsnpSourceReady(build: GenomeBuild): boolean {
   const source = dbsnpSources[build];
   return existsSync(source.path) && existsSync(`${source.path}.complete`);
 }
+const currentPackVersion = (() => {
+  const evidencePackFile = path.join(repoRoot, "src", "lib", "evidencePack.ts");
+  if (!existsSync(evidencePackFile)) return null;
+  const match = readFileSync(evidencePackFile, "utf8").match(/export const EVIDENCE_PACK_VERSION = "([^"]+)";/);
+  return match?.[1] ?? null;
+})();
+
 const defaultVersion = (() => {
   const now = new Date();
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-core`;
+  const baseVersion = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-core`;
+  return currentPackVersion?.startsWith(baseVersion) ? currentPackVersion : baseVersion;
 })();
 
 const attribution =
@@ -151,8 +161,8 @@ function parseOptions(argv: string[]): Options {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  if (!/^\d{4}-\d{2}-core$/.test(options.version)) {
-    throw new Error(`Evidence-pack version must match YYYY-MM-core: ${options.version}`);
+  if (!/^\d{4}-\d{2}-core(?:-\d+)?$/.test(options.version)) {
+    throw new Error(`Evidence-pack version must match YYYY-MM-core or YYYY-MM-core-N: ${options.version}`);
   }
 
   return options;
@@ -352,6 +362,71 @@ function includeClinvar(significance: string, reviewStatus: string): boolean {
   return /pathogenic|risk factor|drug response|affects|association|protective|conflicting/i.test(lower);
 }
 
+export function clinvarStarsForReviewStatus(reviewStatus: string): number {
+  const normalized = reviewStatus.trim().toLowerCase();
+  if (/practice guideline/.test(normalized)) return 4;
+  if (/reviewed by expert panel/.test(normalized)) return 3;
+  if (/criteria provided, multiple submitters, no conflicts/.test(normalized)) return 2;
+  if (/criteria provided, single submitter/.test(normalized)) return 1;
+  return 0;
+}
+
+function pmidsFromCitationRow(row: Record<string, string>): string[] {
+  const explicit = [
+    column(row, ["PubMed ID", "PubMedID", "PMID", "pmid"]),
+    column(row, ["citation_id", "CitationID", "Citation ID"]),
+  ].filter(Boolean);
+  const text = explicit.length > 0 ? explicit.join(" ") : Object.values(row).join(" ");
+  const pmids = new Set(extractPmids(text));
+  for (const match of text.matchAll(/\b\d{6,9}\b/g)) {
+    pmids.add(match[0]);
+  }
+  return Array.from(pmids);
+}
+
+function clinvarCitationLookupIds(row: Record<string, string>, fallbackLookupId = ""): string[] {
+  const ids = [
+    column(row, ["VariationID", "Variation ID", "variation_id"]) || fallbackLookupId,
+    column(row, ["AlleleID", "Allele ID", "allele_id"]),
+  ].filter(Boolean);
+  return Array.from(new Set(ids.flatMap((value) => value.split(/[;,|]/).map((id) => id.trim()).filter(Boolean))));
+}
+
+function clinvarCitationPmidsForRow(
+  row: Record<string, string>,
+  citationPmids: Map<string, string[]>,
+  fallbackLookupId = "",
+): string[] {
+  const pmids = new Set(extractPmids(column(row, ["OtherIDs"])));
+  for (const lookupId of clinvarCitationLookupIds(row, fallbackLookupId)) {
+    for (const pmid of citationPmids.get(lookupId) ?? []) {
+      pmids.add(pmid);
+    }
+  }
+  return Array.from(pmids).sort();
+}
+
+async function readClinvarCitationPmids(): Promise<Map<string, string[]>> {
+  const sourceFile = sourceCacheFiles.clinvarCitations;
+  const citationMap = new Map<string, Set<string>>();
+  if (!existsSync(sourceFile)) return new Map();
+
+  for await (const row of tsvRows(sourceFile)) {
+    const pmids = pmidsFromCitationRow(row);
+    if (pmids.length === 0) continue;
+    for (const lookupId of clinvarCitationLookupIds(row)) {
+      const existing = citationMap.get(lookupId);
+      if (existing) {
+        for (const pmid of pmids) existing.add(pmid);
+      } else {
+        citationMap.set(lookupId, new Set(pmids));
+      }
+    }
+  }
+
+  return new Map(Array.from(citationMap, ([variationId, pmids]) => [variationId, Array.from(pmids).sort()]));
+}
+
 function cleanCondition(value: string): string | null {
   const cleaned = value.trim();
   if (!cleaned || /^not (provided|specified)$/i.test(cleaned) || /^see cases$/i.test(cleaned)) return null;
@@ -391,7 +466,7 @@ function plainClinvarTitle(gene: string, significance: string, conditions: strin
 }
 
 
-function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
+function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, string[]>): EvidencePackRecord | null {
   const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
   if (!rawRsid || rawRsid === "-1") return null;
   const rsid = normalizeRsid(rawRsid.startsWith("rs") ? rawRsid : `rs${rawRsid}`);
@@ -409,7 +484,8 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
   const condition = primaryCondition(traits, "the reported condition");
   const riskAllele = singleBaseAllele(column(row, ["AlternateAlleleVCF", "AlternateAllele"]));
   const title = plainClinvarTitle(gene, significance, traits, category);
-  const pmids = extractPmids(column(row, ["OtherIDs"]));
+  const reviewStars = clinvarStarsForReviewStatus(reviewStatus);
+  const pmids = clinvarCitationPmidsForRow(row, citationPmids, variationId);
   const numSubmitters = column(row, ["NumberSubmitters"]);
   const lastEvaluated = column(row, ["LastEvaluated"]);
 
@@ -444,9 +520,12 @@ function clinvarRecord(row: Record<string, string>): EvidencePackRecord | null {
       ? riskSummaryForClinvar(gene, significance, condition)
       : undefined,
     qualityTier: /reviewed by expert panel|practice guideline/i.test(reviewStatus) ? "tier-1" : undefined,
+    clinvarReviewStatus: reviewStatus || undefined,
+    clinvarStars: reviewStars,
     pmids,
     notes: [
       `Review status: ${reviewStatus || "not supplied"}.`,
+      `ClinVar review stars: ${reviewStars}.`,
       ...(submitterNote ? [submitterNote] : []),
       ...(lastEvaluated && lastEvaluated !== "-" ? [`Last evaluated: ${lastEvaluated}.`] : []),
       ...(riskAllele ? [`Reported alternate allele: ${riskAllele}.`] : []),
@@ -476,7 +555,40 @@ function normalizeGwasUrl(raw: string): string {
   return raw.startsWith("http") ? raw : `https://${raw}`;
 }
 
-function gwasRecords(row: Record<string, string>, index: number): EvidencePackRecord[] {
+interface GwasStudyMetadata {
+  fullSummaryStats?: boolean;
+}
+
+function parseBooleanish(value: string): boolean | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (/^(yes|y|true|1|available|full)$/i.test(normalized)) return true;
+  if (/^(no|n|false|0|not available)$/i.test(normalized)) return false;
+  return undefined;
+}
+
+async function readGwasStudyMetadata(): Promise<Map<string, GwasStudyMetadata>> {
+  const sourceFile = sourceCacheFiles.gwasStudies;
+  const studies = new Map<string, GwasStudyMetadata>();
+  if (!existsSync(sourceFile)) return studies;
+
+  for await (const row of tsvRows(sourceFile)) {
+    const accession = column(row, ["STUDY ACCESSION", "Study Accession", "ACCESSION"]);
+    if (!accession) continue;
+    studies.set(accession, {
+      fullSummaryStats: parseBooleanish(column(row, [
+        "FULL SUMMARY STATISTICS",
+        "FULL P-VALUE SET",
+        "SUMMARY STATISTICS",
+        "Summary statistics",
+      ])),
+    });
+  }
+
+  return studies;
+}
+
+function gwasRecords(row: Record<string, string>, index: number, studyMetadata: Map<string, GwasStudyMetadata>): EvidencePackRecord[] {
   if (!includeGwas(row)) return [];
   const rsids = extractRsids([
     column(row, ["SNPS", "SNP_ID_CURRENT", "SNP_ID"]),
@@ -495,10 +607,12 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
   const orBeta = Number(orBetaRaw);
   const ci = column(row, ["95% CI (TEXT)"]);
   const sampleSize = column(row, ["INITIAL SAMPLE SIZE"]);
+  const replicationSampleSize = column(row, ["REPLICATION SAMPLE SIZE"]);
   const firstAuthor = column(row, ["FIRST AUTHOR"]);
   const journal = column(row, ["JOURNAL"]);
   const date = column(row, ["DATE"]);
   const studyAccession = column(row, ["STUDY ACCESSION"]);
+  const metadata = studyAccession ? studyMetadata.get(studyAccession) : undefined;
   const riskAlleleFreq = column(row, ["RISK ALLELE FREQUENCY"]);
 
   const genes = Array.from(new Set(
@@ -516,6 +630,9 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
   if (sampleSize) {
     detailParts.push(`Initial sample: ${sampleSize}.`);
   }
+  if (replicationSampleSize) {
+    detailParts.push(`Replication sample: ${replicationSampleSize}.`);
+  }
 
   const citationNote = [firstAuthor, journal, date].filter(Boolean).join(", ");
   const notes: string[] = [
@@ -530,7 +647,7 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
       ? `Risk allele frequency in study: ${riskAlleleFreq}`
       : undefined;
 
-  const isTier1Gwas = pValue <= 1e-10 && Boolean(column(row, ["REPLICATION SAMPLE SIZE"])) && Number.isFinite(orBeta);
+  const isTier1Gwas = pValue <= 1e-10 && Boolean(replicationSampleSize) && Number.isFinite(orBeta);
   const gwasRiskSummary = isTier1Gwas ? riskSummaryForGwas(genes[0] ?? mappedGene, trait, orBeta, ci) : undefined;
 
   return rsids.map((rsid) => ({
@@ -555,6 +672,13 @@ function gwasRecords(row: Record<string, string>, index: number): EvidencePackRe
     clinicalSignificance: "trait-association",
     repute: Number.isFinite(orBeta) ? gwasRepute(orBeta) : "not-set",
     riskAllele,
+    gwasPValue: pValue,
+    gwasEffect: Number.isFinite(orBeta) ? orBeta : null,
+    gwasHasReplication: Boolean(replicationSampleSize),
+    gwasInitialSampleSize: sampleSize || undefined,
+    gwasReplicationSampleSize: replicationSampleSize || undefined,
+    gwasStudyAccession: studyAccession || undefined,
+    gwasFullSummaryStats: metadata?.fullSummaryStats,
     riskSummary: gwasRiskSummary,
     qualityTier: isTier1Gwas ? "tier-1" : undefined,
     pmids: pmid ? [pmid] : [],
@@ -721,7 +845,7 @@ async function buildSnpediaRecords(): Promise<EvidencePackRecord[]> {
 }
 
 
-async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
+async function buildDefinitionRecords(citationPmids: Map<string, string[]>): Promise<EvidencePackRecord[]> {
   const clinvarFile = sourceCacheFiles.clinvar;
   const gwasFile = sourceCacheFiles.gwas;
 
@@ -747,9 +871,10 @@ async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
       if (!defId) continue;
       const data = defData.get(defId)!;
       data.sourceIds.add("clinvar");
-      for (const pmid of extractPmids(column(row, ["OtherIDs"]))) data.pmids.add(pmid);
+      for (const pmid of clinvarCitationPmidsForRow(row, citationPmids)) data.pmids.add(pmid);
       const reviewStatus = column(row, ["ReviewStatus"]);
       if (reviewStatus) data.notes.add(`ClinVar review status: ${reviewStatus}.`);
+      data.notes.add(`ClinVar review stars: ${clinvarStarsForReviewStatus(reviewStatus)}.`);
     }
   }
 
@@ -803,13 +928,13 @@ async function buildDefinitionRecords(): Promise<EvidencePackRecord[]> {
   return records;
 }
 
-async function buildClinvarRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
+async function buildClinvarRecords(maxRecords: number, citationPmids: Map<string, string[]>): Promise<EvidencePackRecord[]> {
   const sourceFile = sourceCacheFiles.clinvar;
   if (!existsSync(sourceFile)) return [];
 
   const records: EvidencePackRecord[] = [];
   for await (const row of tsvRows(sourceFile)) {
-    const record = clinvarRecord(row);
+    const record = clinvarRecord(row, citationPmids);
     if (!record) continue;
     records.push(record);
     if (records.length >= maxRecords) break;
@@ -817,7 +942,7 @@ async function buildClinvarRecords(maxRecords: number): Promise<EvidencePackReco
   return records;
 }
 
-async function buildGwasRecords(maxRecords: number): Promise<EvidencePackRecord[]> {
+async function buildGwasRecords(maxRecords: number, studyMetadata: Map<string, GwasStudyMetadata>): Promise<EvidencePackRecord[]> {
   const sourceFile = sourceCacheFiles.gwas;
   if (!existsSync(sourceFile)) return [];
 
@@ -827,7 +952,7 @@ async function buildGwasRecords(maxRecords: number): Promise<EvidencePackRecord[
   let rowIndex = 0;
   for await (const row of tsvRows(sourceFile)) {
     rowIndex += 1;
-    for (const record of gwasRecords(row, rowIndex)) {
+    for (const record of gwasRecords(row, rowIndex, studyMetadata)) {
       const key = `${record.markerIds[0]}|${record.conditions[0] ?? ""}`;
       if (!seen.has(key)) seen.set(key, record);
     }
@@ -845,6 +970,7 @@ interface CpicPair {
   genesymbol: string;
   drugname: string;
   level: string;
+  levelStatus?: string;
 }
 
 async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
@@ -872,6 +998,7 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
     const drugs = Array.from(new Set(genePairs.map((p) => p.drugname))).slice(0, 4);
     const topPair = genePairs[0];
     const level = topPair.level;
+    const levelStatus = topPair.levelStatus;
     const evidenceLevel: EvidenceTier = level === "A" ? "high" : "moderate";
     const functionNote = variant.function ? `Variant function: ${variant.function}.` : null;
 
@@ -888,6 +1015,8 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
       summary: `${rsid} affects ${gene} function and is relevant to ${drugs.slice(0, 2).join(" and ")} dosing per CPIC level ${level} guidelines.`,
       riskSummary: `${gene} variant with altered function (${variant.function ?? "see guideline"}) — ${drugs[0]} dosing may require adjustment`,
       qualityTier: level === "A" ? "tier-1" : undefined,
+      cpicLevel: level,
+      cpicLevelStatus: levelStatus || undefined,
       detail: `CPIC level ${level} guideline covers ${gene} and ${drugs.join(", ")}.`,
       whyItMatters: "CPIC guidelines provide evidence-based recommendations for adjusting drug therapy based on pharmacogenomic results.",
       topics: ["CPIC", "Drug response", "Pharmacogenomics"],
@@ -901,6 +1030,7 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
       pmids: [],
       notes: [
         `CPIC level ${level} guideline.`,
+        ...(levelStatus ? [`CPIC level status: ${levelStatus}.`] : []),
         ...(functionNote ? [functionNote] : []),
         "Consumer arrays may not cover all alleles needed for a complete CPIC phenotype call.",
         "Medication changes require clinical review and confirmatory testing.",
@@ -1096,7 +1226,9 @@ async function writeIfChanged(filePath: string, text: string, check: boolean): P
 async function sourceChecksums(): Promise<Record<string, string | null>> {
   const sources: Record<string, string> = {
     clinvar: sourceCacheFiles.clinvar,
+    "clinvar-citations": sourceCacheFiles.clinvarCitations,
     gwas: sourceCacheFiles.gwas,
+    "gwas-studies": sourceCacheFiles.gwasStudies,
     snpedia: sourceCacheFiles.snpedia,
     cpic: sourceCacheFiles.cpicVariants,
     pharmgkb: sourceCacheFiles.pharmgkb,
@@ -1121,10 +1253,14 @@ function replaceVersionConstant(source: string, exportName: string, version: str
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const targetDir = path.join(packRoot, options.version);
+  const [clinvarCitationPmids, gwasStudyMetadata] = await Promise.all([
+    readClinvarCitationPmids(),
+    readGwasStudyMetadata(),
+  ]);
   const [definitionRecords, clinvarRecords, gwasRecords, snpediaRecords, cpicRecords, pharmgkbRecords] = await Promise.all([
-    buildDefinitionRecords(),
-    buildClinvarRecords(options.maxClinvarRecords),
-    buildGwasRecords(options.maxGwasRecords),
+    buildDefinitionRecords(clinvarCitationPmids),
+    buildClinvarRecords(options.maxClinvarRecords, clinvarCitationPmids),
+    buildGwasRecords(options.maxGwasRecords, gwasStudyMetadata),
     buildSnpediaRecords(),
     buildCpicRecords(),
     buildPharmgkbRecords(),

@@ -12,7 +12,8 @@ import {
   ReportEntry,
 } from "../types";
 import { normalizeClinicalSignificance } from "./normalization";
-export const EVIDENCE_PACK_VERSION = "2026-05-core";
+import { calculateFindingRank, evidenceTierSortValue } from "./ranking";
+export const EVIDENCE_PACK_VERSION = "2026-05-core-1";
 
 export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
   clinvar: {
@@ -862,6 +863,7 @@ export function createEntryFromDefinition(
   evidence?: EvidenceSupplement,
 ): ReportEntry {
   const evaluation = definition.evaluate(map);
+  const outcome = outcomeFromEvaluation(evaluation);
   const evidenceMatches =
     evidence?.status === "complete"
       ? evidence.matchedRecords.filter((match) => match.record.entryId === definition.id)
@@ -873,6 +875,12 @@ export function createEntryFromDefinition(
   const frequencyNote =
     evidenceMatches.map((match) => match.record.frequencyNote).find(Boolean) ?? definition.frequencyNote;
   const normalizedClinicalSignificance = normalizeClinicalSignificance(definition.clinicalSignificance);
+  const clinvarStars = Math.max(0, ...evidenceMatches.map((match) => match.record.clinvarStars ?? 0));
+  const clinvarReviewStatus = evidenceMatches.map((match) => match.record.clinvarReviewStatus).find(Boolean);
+  const clingenClassification = evidenceMatches.map((match) => match.record.clingenClassification).find(Boolean);
+  const pharmgkbLevel = evidenceMatches.map((match) => match.record.pharmgkbLevel).find(Boolean);
+  const cpicLevel = evidenceMatches.map((match) => match.record.cpicLevel).find(Boolean);
+  const cpicLevelStatus = evidenceMatches.map((match) => match.record.cpicLevelStatus).find(Boolean);
 
   return {
     id: definition.id,
@@ -907,17 +915,26 @@ export function createEntryFromDefinition(
     frequencyNote,
     coverage: evaluation.coverage,
     tone: evaluation.tone,
-    outcome: outcomeFromEvaluation(evaluation),
+    outcome,
     sort: {
+      rank: calculateFindingRank({
+        evidenceTier: definition.evidenceTier,
+        outcome,
+        repute: definition.repute,
+        coverage: evaluation.coverage,
+        publicationCount,
+        clinvarStars: clinvarStars > 0 ? clinvarStars : undefined,
+        clingenClassification,
+        pharmgkbLevel,
+        cpicLevel,
+        cpicLevelStatus,
+        clinicalSignificance: definition.clinicalSignificance,
+        normalizedClinicalSignificance,
+        sources: sourceEntries(definition.sourceIds, evidenceMatches),
+        matchedMarkers: evaluation.matchedMarkers,
+      }),
       severity: severityForDefinition(definition, evaluation),
-      evidence:
-        definition.evidenceTier === "high"
-          ? 4
-          : definition.evidenceTier === "moderate"
-            ? 3
-            : definition.evidenceTier === "emerging"
-              ? 2
-              : 1,
+      evidence: evidenceTierSortValue(definition.evidenceTier),
       alphabetical: definition.title.toLowerCase(),
       publications: publicationCount,
     },
@@ -925,6 +942,12 @@ export function createEntryFromDefinition(
       ? `${evaluation.confidenceNote} Source context came from local evidence pack ${evidence?.packVersion}.`
       : evaluation.confidenceNote,
     disclaimer: combinedDisclaimer(definition.sourceIds),
+    pharmgkbLevel,
+    cpicLevel,
+    cpicLevelStatus,
+    clingenClassification,
+    clinvarReviewStatus,
+    clinvarStars: clinvarStars > 0 ? clinvarStars : undefined,
   };
 }
 

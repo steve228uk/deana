@@ -23,7 +23,7 @@ export const DEFAULT_FILTERS: ExplorerFilters = {
   publications: [],
   gene: [],
   tag: [],
-  sort: "severity",
+  sort: "rank",
 };
 
 type SearchableEntry = {
@@ -204,6 +204,11 @@ export function compareEntries(
   sort: ExplorerFilters["sort"],
 ): number {
   switch (sort) {
+    case "rank":
+      return right.sort.rank - left.sort.rank
+        || right.sort.severity - left.sort.severity
+        || right.sort.evidence - left.sort.evidence
+        || left.title.localeCompare(right.title);
     case "alphabetical":
       return left.sort.alphabetical.localeCompare(right.sort.alphabetical);
     case "publications":

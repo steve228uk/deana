@@ -26,11 +26,12 @@ const AI_CONSENT_STORE = "ai_consent";
 const AI_CHAT_THREAD_STORE = "ai_chat_threads";
 const AI_CHAT_MESSAGE_STORE = "ai_chat_messages";
 const SEARCH_INDEX_CACHE_STORE = "search_index_cache";
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 const PAGE_SIZE = 50;
 
 const ENTRY_PROFILE_INDEX = "profileId";
 const ENTRY_CATEGORY_ID_INDEX = "profileCategoryId";
+const ENTRY_RANK_INDEX = "profileCategoryRank";
 const ENTRY_SEVERITY_INDEX = "profileCategorySeverity";
 const ENTRY_EVIDENCE_INDEX = "profileCategoryEvidence";
 const ENTRY_PUBLICATIONS_INDEX = "profileCategoryPublications";
@@ -42,6 +43,7 @@ const CHAT_MESSAGE_THREAD_INDEX = "threadId";
 const CHAT_MESSAGE_THREAD_CREATED_INDEX = "threadCreatedAt";
 
 type SortIndexName =
+  | typeof ENTRY_RANK_INDEX
   | typeof ENTRY_SEVERITY_INDEX
   | typeof ENTRY_EVIDENCE_INDEX
   | typeof ENTRY_PUBLICATIONS_INDEX
@@ -123,6 +125,34 @@ function hasRequiredObjectStores(db: IDBDatabase): boolean {
   return REQUIRED_OBJECT_STORES.every((storeName) => db.objectStoreNames.contains(storeName));
 }
 
+function ensureReportEntryIndexes(entryStore: IDBObjectStore): void {
+  if (!entryStore.indexNames.contains(ENTRY_PROFILE_INDEX)) {
+    entryStore.createIndex(ENTRY_PROFILE_INDEX, "profileId", { unique: false });
+  }
+  if (!entryStore.indexNames.contains(ENTRY_CATEGORY_ID_INDEX)) {
+    entryStore.createIndex(ENTRY_CATEGORY_ID_INDEX, ["profileId", "category", "id"], { unique: false });
+  }
+  if (!entryStore.indexNames.contains(ENTRY_RANK_INDEX)) {
+    entryStore.createIndex(ENTRY_RANK_INDEX, ["profileId", "category", "sort.rank", "sort.severity", "sort.evidence", "id"], {
+      unique: false,
+    });
+  }
+  if (!entryStore.indexNames.contains(ENTRY_SEVERITY_INDEX)) {
+    entryStore.createIndex(ENTRY_SEVERITY_INDEX, ["profileId", "category", "sort.severity", "id"], { unique: false });
+  }
+  if (!entryStore.indexNames.contains(ENTRY_EVIDENCE_INDEX)) {
+    entryStore.createIndex(ENTRY_EVIDENCE_INDEX, ["profileId", "category", "sort.evidence", "id"], { unique: false });
+  }
+  if (!entryStore.indexNames.contains(ENTRY_PUBLICATIONS_INDEX)) {
+    entryStore.createIndex(ENTRY_PUBLICATIONS_INDEX, ["profileId", "category", "sort.publications", "id"], { unique: false });
+  }
+  if (!entryStore.indexNames.contains(ENTRY_ALPHABETICAL_INDEX)) {
+    entryStore.createIndex(ENTRY_ALPHABETICAL_INDEX, ["profileId", "category", "sort.alphabetical", "id"], {
+      unique: false,
+    });
+  }
+}
+
 function openDb(version = DB_VERSION, canRepairMissingStores = true): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, version);
@@ -145,14 +175,9 @@ function openDb(version = DB_VERSION, canRepairMissingStores = true): Promise<ID
 
       if (!db.objectStoreNames.contains(REPORT_ENTRY_STORE)) {
         const entryStore = db.createObjectStore(REPORT_ENTRY_STORE, { keyPath: ["profileId", "id"] });
-        entryStore.createIndex(ENTRY_PROFILE_INDEX, "profileId", { unique: false });
-        entryStore.createIndex(ENTRY_CATEGORY_ID_INDEX, ["profileId", "category", "id"], { unique: false });
-        entryStore.createIndex(ENTRY_SEVERITY_INDEX, ["profileId", "category", "sort.severity", "id"], { unique: false });
-        entryStore.createIndex(ENTRY_EVIDENCE_INDEX, ["profileId", "category", "sort.evidence", "id"], { unique: false });
-        entryStore.createIndex(ENTRY_PUBLICATIONS_INDEX, ["profileId", "category", "sort.publications", "id"], { unique: false });
-        entryStore.createIndex(ENTRY_ALPHABETICAL_INDEX, ["profileId", "category", "sort.alphabetical", "id"], {
-          unique: false,
-        });
+        ensureReportEntryIndexes(entryStore);
+      } else if (event.oldVersion > 0 && event.oldVersion < 7) {
+        ensureReportEntryIndexes(transaction.objectStore(REPORT_ENTRY_STORE));
       }
 
       if (!db.objectStoreNames.contains(AI_CONSENT_STORE)) {
@@ -204,6 +229,7 @@ function openDb(version = DB_VERSION, canRepairMissingStores = true): Promise<ID
 function hasCurrentReportShape(profile: SavedProfile): boolean {
   return Boolean(
     profile.report?.entries?.every((entry) => entry.entryKind && entry.outcome && entry.normalizedClinicalSignificance !== undefined) &&
+      profile.report.entries.every((entry) => typeof entry.sort?.rank === "number") &&
       !profile.report?.tabs?.some((tab) => (tab.tab as string) === "other") &&
       profile.report?.facets?.clinicalSignificanceLabels &&
       typeof profile.report?.overview?.localEvidenceEntryMatches === "number" &&
@@ -374,6 +400,8 @@ function decodeCursor(value: string | null | undefined): PageCursorPayload | nul
 
 function indexForSort(sort: ExplorerFilters["sort"]): { name: SortIndexName; direction: IDBCursorDirection } {
   switch (sort) {
+    case "rank":
+      return { name: ENTRY_RANK_INDEX, direction: "prev" };
     case "alphabetical":
       return { name: ENTRY_ALPHABETICAL_INDEX, direction: "next" };
     case "publications":

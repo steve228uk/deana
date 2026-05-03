@@ -25,6 +25,29 @@ describe("profile storage normalization", () => {
     expect(normalized.report.overview.evidencePackVersion).toBe("legacy-pack");
   });
 
+  it("regenerates current-version profiles that are missing rank sort fields", () => {
+    const profile = makeSavedProfile();
+    const entryWithoutRank = {
+      ...profile.report.entries[0],
+      sort: {
+        severity: profile.report.entries[0].sort.severity,
+        evidence: profile.report.entries[0].sort.evidence,
+        alphabetical: profile.report.entries[0].sort.alphabetical,
+        publications: profile.report.entries[0].sort.publications,
+      },
+    };
+    const normalized = ensureCurrentProfile({
+      ...profile,
+      report: {
+        ...profile.report,
+        entries: [entryWithoutRank as typeof profile.report.entries[number]],
+      },
+    });
+
+    expect(normalized.report.entries[0].sort.rank).toEqual(expect.any(Number));
+    expect(normalized.report.entries.length).toBeGreaterThan(1);
+  });
+
   it("strips heavyweight evidence match records from profile metadata supplements", () => {
     const dna = makeParsedDnaFile();
     const supplement: EvidenceSupplement = {
