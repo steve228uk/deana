@@ -1668,6 +1668,7 @@ function ChatSidePanel({
           finding={panel.finding}
           emptyTitle={panel.isLoading ? "Loading marker" : "Marker unavailable"}
           unavailableRsid={!panel.isLoading && !panel.marker ? panel.rsid : null}
+          showHeader={false}
           onOpenFinding={onOpenMarkerFinding}
           onBackToMarker={onBackToMarker}
         />

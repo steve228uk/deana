@@ -644,6 +644,7 @@ export function MarkerInspector({
   emptyDescription = "Choose a marker to review genotype details and linked report findings.",
   unavailableRsid,
   ariaLabel = "Marker inspector",
+  showHeader = true,
   onOpenFinding,
   onBackToMarker,
   onAskAiAboutMarker,
@@ -655,6 +656,7 @@ export function MarkerInspector({
   emptyDescription?: string;
   unavailableRsid?: string | null;
   ariaLabel?: string;
+  showHeader?: boolean;
   onOpenFinding?: (entryId: string) => void;
   onBackToMarker?: () => void;
   onAskAiAboutMarker?: (marker: StoredMarkerSummary) => void;
@@ -666,9 +668,9 @@ export function MarkerInspector({
   if (!marker) {
     return (
       <aside ref={inspectorRef} className="dn-inspector dn-marker-inspector" aria-label={ariaLabel}>
-        <div className="dn-ai-side-panel__header">
+        {showHeader ? <div className="dn-ai-side-panel__header">
           <h2>Marker</h2>
-        </div>
+        </div> : null}
         <div className="dn-marker-inspector__body">
           <h2>{unavailableRsid ? "Marker unavailable" : emptyTitle}</h2>
           <p>{unavailableRsid ? `${unavailableRsid} is not present in this uploaded DNA profile.` : emptyDescription}</p>
@@ -699,14 +701,14 @@ export function MarkerInspector({
 
   return (
     <aside ref={inspectorRef} className="dn-inspector dn-marker-inspector" aria-label={ariaLabel}>
-      <div className="dn-ai-side-panel__header">
+      {showHeader ? <div className="dn-ai-side-panel__header">
         <h2>Marker</h2>
         {onAskAiAboutMarker ? (
           <button className="dn-button dn-button--secondary dn-marker-header-ai-button" type="button" onClick={() => onAskAiAboutMarker(marker)}>
             <Icon name="spark" /> Ask AI
           </button>
         ) : null}
-      </div>
+      </div> : null}
       <div className="dn-marker-inspector__body">
         <h2>{marker.rsid}</h2>
         <dl className="dn-evidence-snapshot">
