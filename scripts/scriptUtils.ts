@@ -48,6 +48,16 @@ export function findZipTextEntry(
   return match[1];
 }
 
+export function findOptionalZipTextEntry(
+  entries: Record<string, Uint8Array>,
+  namePattern: RegExp,
+): Uint8Array | null {
+  const match = Object.entries(entries).find(([name]) =>
+    namePattern.test(name) && /\.(tsv|txt)$/i.test(name),
+  );
+  return match ? match[1] : null;
+}
+
 export function runCli(importMetaUrl: string, main: () => Promise<void>): void {
   if (importMetaUrl !== `file://${process.argv[1]}`) return;
 

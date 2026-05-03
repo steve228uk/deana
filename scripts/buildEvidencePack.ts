@@ -1054,6 +1054,7 @@ interface PharmGkbAnnotation {
   significance: string;
   pmids: string[];
   url: string;
+  riskAllele?: string | null;
 }
 
 function pharmgkbEvidenceTier(level: string): EvidenceTier {
@@ -1082,6 +1083,8 @@ async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
     const tone: InsightTone = isToxicity ? "caution" : isEfficacy ? "good" : "neutral";
     const repute: ReputeStatus = isToxicity ? "bad" : isEfficacy ? "good" : "not-set";
 
+    const riskAllele = ann.riskAllele ?? undefined;
+
     records.push({
       id: `pharmgkb-${ann.variantId}-${rsid}`,
       entryId: `local-drug-pharmgkb-${ann.variantId}`,
@@ -1091,6 +1094,7 @@ async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
       subcategory: "pharmacogenomics",
       markerIds: [rsid],
       genes: ann.gene ? [ann.gene] : [],
+      riskAllele,
       title: `${ann.gene || rsid} / ${drugs[0] ?? "drug response"}`,
       summary: `PharmGKB level ${ann.evidenceLevel} annotation links ${rsid} to ${ann.phenotypeCategory.toLowerCase()} with ${drugs.slice(0, 2).join(" and ")}.`,
       riskSummary: evidenceLevel === "high" || evidenceLevel === "moderate"
