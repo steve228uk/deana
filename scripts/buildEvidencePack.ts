@@ -964,6 +964,7 @@ interface CpicVariant {
   rsid: string;
   genesymbol: string;
   function: string | null;
+  variantAllele?: string | null;
 }
 
 interface CpicPair {
@@ -1001,6 +1002,7 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
     const levelStatus = topPair.levelStatus;
     const evidenceLevel: EvidenceTier = level === "A" ? "high" : "moderate";
     const functionNote = variant.function ? `Variant function: ${variant.function}.` : null;
+    const riskAllele = variant.variantAllele ?? undefined;
 
     records.push({
       id: `cpic-${rsid}-${gene.toLowerCase()}`,
@@ -1011,8 +1013,9 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
       subcategory: "pharmacogenomics",
       markerIds: [rsid],
       genes: [gene],
+      riskAllele,
       title: `${gene} pharmacogenomic variant — ${drugs[0]} context (CPIC)`,
-      summary: `${rsid} affects ${gene} function and is relevant to ${drugs.slice(0, 2).join(" and ")} dosing per CPIC level ${level} guidelines.`,
+      summary: `${rsid} is a pharmacogenomic variant in ${gene} relevant to ${drugs.slice(0, 2).join(" and ")} dosing per CPIC level ${level} guidelines.`,
       riskSummary: `${gene} variant with altered function (${variant.function ?? "see guideline"}) — ${drugs[0]} dosing may require adjustment`,
       qualityTier: level === "A" ? "tier-1" : undefined,
       cpicLevel: level,

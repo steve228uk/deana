@@ -13,6 +13,7 @@ interface RawCpicVariant {
   rsid: string | null;
   genesymbol: string;
   function: string | null;
+  variantAllele: string | null;
 }
 
 interface RawCpicPair {
@@ -49,8 +50,9 @@ async function fetchVariants(): Promise<RawCpicVariant[]> {
       `${apiBase}/allele_definition?select=genesymbol,name,allele_location_value(*,sequence_location(dbsnpid))&limit=5000`,
       jsonHeaders,
     );
-    const seen = new Set<string>();
-    const variants: RawCpicVariant[] = [];
+    // Collect all variant alleles seen per rsid+gene so we can detect multi-allelic
+    // positions (where different named alleles define different bases at the same rsid).
+    const allelesByKey = new Map<string, { rsid: string; gene: string; alleles: Set<string> }>();
     for (const allele of raw) {
       const gene = String(allele.genesymbol ?? "");
       if (!gene) continue;
@@ -61,12 +63,25 @@ async function fetchVariants(): Promise<RawCpicVariant[]> {
         if (!seqLoc || typeof seqLoc !== "object") continue;
         const rsid = String((seqLoc as Record<string, unknown>).dbsnpid ?? "");
         if (!rsid.startsWith("rs")) continue;
+        const raw_allele = String((loc as Record<string, unknown>).variantallele ?? "").trim().toUpperCase();
         const key = `${rsid}|${gene}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          variants.push({ rsid, genesymbol: gene, function: null });
+        const existing = allelesByKey.get(key);
+        if (existing) {
+          if (raw_allele) existing.alleles.add(raw_allele);
+        } else {
+          allelesByKey.set(key, { rsid, gene, alleles: raw_allele ? new Set([raw_allele]) : new Set() });
         }
       }
+    }
+
+    const variants: RawCpicVariant[] = [];
+    for (const { rsid, gene, alleles } of allelesByKey.values()) {
+      // Only set variantAllele when a single unambiguous single-base allele defines this position.
+      // Multi-allelic positions get null so the matcher falls back to any-genotype rather than
+      // filtering on the wrong allele.
+      const singleAllele = alleles.size === 1 ? [...alleles][0] : null;
+      const variantAllele = singleAllele && /^[ACGT]$/.test(singleAllele) ? singleAllele : null;
+      variants.push({ rsid, genesymbol: gene, function: null, variantAllele });
     }
     return variants;
   } catch {
