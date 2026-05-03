@@ -1,7 +1,10 @@
 import {
   clearSearchIndex,
+  loadMarkerSummary,
+  prewarmMarkerIndex,
   prewarmSearchIndex,
   queryCandidateIds,
+  searchMarkerPage,
   searchExplorerEntryIds,
   searchWithFields,
   waitForIndex,
@@ -25,6 +28,21 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       case "searchExplorer": {
         const result = await searchExplorerEntryIds(event.data.payload);
         self.postMessage({ type: "searchExplorer", requestId, result } satisfies WorkerResponse);
+        break;
+      }
+      case "prewarmMarkers": {
+        const status = await prewarmMarkerIndex(event.data.profileId);
+        self.postMessage({ type: "prewarmMarkers", requestId, status } satisfies WorkerResponse);
+        break;
+      }
+      case "searchMarkers": {
+        const result = await searchMarkerPage(event.data.payload);
+        self.postMessage({ type: "searchMarkers", requestId, result } satisfies WorkerResponse);
+        break;
+      }
+      case "loadMarker": {
+        const result = await loadMarkerSummary(event.data.profileId, event.data.rsid);
+        self.postMessage({ type: "loadMarker", requestId, result } satisfies WorkerResponse);
         break;
       }
       case "searchWithFields": {

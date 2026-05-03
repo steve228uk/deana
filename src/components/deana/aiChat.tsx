@@ -33,8 +33,9 @@ import {
   saveChatMessages,
   saveChatThread,
 } from "../../lib/storage";
-import type { ChatRetrievalTrace, ChatSearchPlan, ExplorerTab, ProfileMeta, StoredChatMessage, StoredChatThread, StoredReportEntry } from "../../types";
-import { FindingInspector } from "./explorer";
+import { loadMarkerSummary } from "../../lib/ai/searchIndex";
+import type { ChatRetrievalTrace, ChatSearchPlan, ExplorerTab, ProfileMeta, StoredChatMessage, StoredChatThread, StoredMarkerSummary, StoredReportEntry } from "../../types";
+import { FindingInspector, MarkerInspector } from "./explorer";
 import { Icon } from "./ui";
 
 interface ExplorerAiChatProps {
@@ -43,6 +44,8 @@ interface ExplorerAiChatProps {
   filters: ExplorerFilters;
   visibleEntries: StoredReportEntry[];
   selectedEntry: StoredReportEntry | null;
+  pendingPrompt?: string | null;
+  onPendingPromptConsumed?: () => void;
 }
 
 const markdownSchema = {
@@ -61,7 +64,8 @@ export type SearchStatus =
 
 type ChatPanel =
   | { mode: "findings" }
-  | { mode: "inspector"; findingId: string; finding: StoredReportEntry | null; isLoading: boolean; error: string | null };
+  | { mode: "inspector"; findingId: string; finding: StoredReportEntry | null; isLoading: boolean; error: string | null }
+  | { mode: "marker"; rsid: string; marker: StoredMarkerSummary | null; finding: StoredReportEntry | null; isLoading: boolean; error: string | null };
 
 type ChatFollowUpAction =
   | ({ kind: "prompt" } & ChatFollowUpSuggestion)
@@ -74,6 +78,9 @@ interface ParsedChatMessage {
 
 const entryLinkPrefix = "deana://entry/";
 const entryLinkPattern = new RegExp(`${entryLinkPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[A-Za-z0-9_%~-]+`, "g");
+const markerLinkPrefix = "deana://marker/";
+const markerLinkPattern = new RegExp(`${markerLinkPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}rs\\d+`, "gi");
+const deanaLinkPattern = new RegExp(`${entryLinkPattern.source}|${markerLinkPattern.source}`, "gi");
 const showDebugModelName = import.meta.env.DEV;
 const noSavedReportFindingsMessage = "No saved report findings matched this local browser search.";
 const compactAiLayoutQuery = "(max-width: 980px)";
@@ -213,6 +220,12 @@ function entryIdFromHref(href: string | undefined): string | null {
   return decodeURIComponent(href.slice(entryLinkPrefix.length));
 }
 
+function markerRsidFromHref(href: string | undefined): string | null {
+  if (!href?.toLowerCase().startsWith(markerLinkPrefix)) return null;
+  const rsid = decodeURIComponent(href.slice(markerLinkPrefix.length)).trim();
+  return /^rs\d+$/i.test(rsid) ? rsid : null;
+}
+
 function linkedEntryIdsFromTextValues(values: string[]): string[] {
   const ids = new Set<string>();
   values.forEach((value) => {
@@ -222,6 +235,15 @@ function linkedEntryIdsFromTextValues(values: string[]): string[] {
     }
   });
   return Array.from(ids).sort();
+}
+
+function linkifyBareDeanaLinks(value: string): string {
+  return value.replace(new RegExp(deanaLinkPattern.source, deanaLinkPattern.flags), (href: string, offset: number, fullText: string) => {
+    const previous = fullText[offset - 1];
+    const next = fullText[offset + href.length];
+    if (previous === "(" || previous === "<" || next === ">") return href;
+    return `<${href}>`;
+  });
 }
 
 function textFromChildren(children: ReactNode): string {
@@ -241,6 +263,14 @@ function entryChipLabel(href: string, children: ReactNode, entryTitleById: Map<s
   return children;
 }
 
+function DeanaLinkChip({ children, onClick }: { children: ReactNode; onClick: () => void }) {
+  return (
+    <button className="dn-ai-entry-chip" type="button" onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
 function EntryChip({
   href,
   children,
@@ -253,9 +283,32 @@ function EntryChip({
   onOpenEntry: (href: string) => void;
 }) {
   return (
-    <button className="dn-ai-entry-chip" type="button" onClick={() => onOpenEntry(href)}>
+    <DeanaLinkChip onClick={() => onOpenEntry(href)}>
       {entryChipLabel(href, children, entryTitleById)}
-    </button>
+    </DeanaLinkChip>
+  );
+}
+
+function markerChipLabel(href: string, children: ReactNode): ReactNode {
+  const rsid = markerRsidFromHref(href);
+  const childText = textFromChildren(children).trim();
+  if (childText === href) return rsid ?? "Marker";
+  return children;
+}
+
+function MarkerChip({
+  href,
+  children,
+  onOpenMarker,
+}: {
+  href: string;
+  children: ReactNode;
+  onOpenMarker: (href: string) => void;
+}) {
+  return (
+    <DeanaLinkChip onClick={() => onOpenMarker(href)}>
+      {markerChipLabel(href, children)}
+    </DeanaLinkChip>
   );
 }
 
@@ -364,6 +417,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const isActiveThreadSavedRef = useRef(false);
   const pendingSendRef = useRef<string | null>(null);
   const [hasConsented, setHasConsented] = useState(false);
+  const [isChatStateReady, setIsChatStateReady] = useState(false);
   const [threads, setThreads] = useState<StoredChatThread[]>([]);
   const [activeThread, setActiveThread] = useState<StoredChatThread | null>(null);
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
@@ -386,6 +440,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   const attemptedEntryTitleIdsRef = useRef<Set<string>>(new Set());
   const entryTitleByIdRef = useRef<Map<string, string>>(new Map());
   const openEntryPanelRef = useRef<(href: string | undefined) => void | Promise<void>>(() => undefined);
+  const openMarkerPanelRef = useRef<(href: string | undefined) => void | Promise<void>>(() => undefined);
   latestPropsRef.current = props;
   activeThreadRef.current = activeThread;
 
@@ -396,6 +451,7 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
 
   useEffect(() => {
     let isMounted = true;
+    setIsChatStateReady(false);
 
     async function loadState() {
       const consent = await loadAiConsent(props.profile.id);
@@ -409,12 +465,16 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       const storedThreads = await loadChatThreads(props.profile.id);
       if (!isMounted) return;
       setThreads(storedThreads);
-      if (!hasValidConsent) return;
+      if (!hasValidConsent) {
+        setIsChatStateReady(true);
+        return;
+      }
       if (storedThreads[0]) {
         await selectThread(storedThreads[0], false);
       } else {
         startDraftThread({ clearInput: false, focus: false, closeList: false });
       }
+      if (isMounted) setIsChatStateReady(true);
     }
 
     void loadState();
@@ -500,13 +560,15 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     clearInput = true,
     focus = true,
     closeList = true,
+    forceNew = false,
   }: {
     clearInput?: boolean;
     focus?: boolean;
     closeList?: boolean;
+    forceNew?: boolean;
   } = {}): StoredChatThread {
     const currentThread = activeThreadRef.current;
-    if (currentThread && !isActiveThreadSavedRef.current && messages.length === 0) {
+    if (!forceNew && currentThread && !isActiveThreadSavedRef.current && messages.length === 0) {
       if (clearInput) setInput("");
       if (closeList) setIsThreadListOpen(false);
       if (focus) focusComposerSoon();
@@ -754,6 +816,14 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   }, [activeThread?.id]);
 
   useEffect(() => {
+    const prompt = props.pendingPrompt?.trim();
+    if (!prompt || !hasConsented || !isChatStateReady || isBusy) return;
+    props.onPendingPromptConsumed?.();
+    pendingSendRef.current = prompt;
+    startDraftThread({ clearInput: true, focus: false, closeList: true, forceNew: true });
+  }, [hasConsented, isBusy, isChatStateReady, props.pendingPrompt]);
+
+  useEffect(() => {
     const node = messagesRef.current;
     if (!node) return;
     const frameId = window.requestAnimationFrame(() => {
@@ -924,6 +994,22 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
   }, [loadChatEntry]);
   openEntryPanelRef.current = openEntryPanel;
 
+  const openMarkerPanel = useCallback(async (href: string | undefined) => {
+    const rsid = markerRsidFromHref(href);
+    if (!rsid) return;
+    setPanel({ mode: "marker", rsid, marker: null, finding: null, isLoading: true, error: null });
+    const marker = await loadMarkerSummary(latestPropsRef.current.profile.id, rsid);
+    setPanel({
+      mode: "marker",
+      rsid,
+      marker,
+      finding: null,
+      isLoading: false,
+      error: marker ? null : "This marker is not present in the uploaded DNA profile.",
+    });
+  }, []);
+  openMarkerPanelRef.current = openMarkerPanel;
+
   const openFindingsPanel = useCallback(() => {
     setPanel({ mode: "findings" });
   }, []);
@@ -974,6 +1060,14 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
         );
       }
 
+      if (markerRsidFromHref(href)) {
+        return (
+          <MarkerChip href={href ?? ""} onOpenMarker={(markerHref) => void openMarkerPanelRef.current(markerHref)}>
+            {children}
+          </MarkerChip>
+        );
+      }
+
       if (!href?.startsWith("https://")) {
         return <>{children}</>;
       }
@@ -988,16 +1082,25 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
       const value = String(children);
       const nodes: Array<string | JSX.Element> = [];
       let lastIndex = 0;
+      const inlineDeanaLinkPattern = new RegExp(deanaLinkPattern.source, deanaLinkPattern.flags);
 
-      for (const match of value.matchAll(entryLinkPattern)) {
+      for (const match of value.matchAll(inlineDeanaLinkPattern)) {
         const href = match[0];
         const index = match.index ?? 0;
         if (index > lastIndex) nodes.push(value.slice(lastIndex, index));
-        nodes.push(
-          <EntryChip key={`${href}-${index}`} href={href} entryTitleById={entryTitleByIdRef.current} onOpenEntry={(entryHref) => void openEntryPanelRef.current(entryHref)}>
-            {href}
-          </EntryChip>,
-        );
+        if (entryIdFromHref(href)) {
+          nodes.push(
+            <EntryChip key={`${href}-${index}`} href={href} entryTitleById={entryTitleByIdRef.current} onOpenEntry={(entryHref) => void openEntryPanelRef.current(entryHref)}>
+              {href}
+            </EntryChip>,
+          );
+        } else {
+          nodes.push(
+            <MarkerChip key={`${href}-${index}`} href={href} onOpenMarker={(markerHref) => void openMarkerPanelRef.current(markerHref)}>
+              {href}
+            </MarkerChip>,
+          );
+        }
         lastIndex = index + href.length;
       }
 
@@ -1010,6 +1113,18 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
     (entryId: string) => void openEntryPanel(`deana://entry/${encodeURIComponent(entryId)}`),
     [],
   );
+  const handleOpenMarkerFinding = useCallback(async (entryId: string) => {
+    if (!panel || panel.mode !== "marker") return;
+    const currentPanel = panel;
+    setPanel({ ...currentPanel, finding: null, isLoading: true, error: null });
+    const finding = await loadChatEntry(entryId);
+    setPanel({
+      ...currentPanel,
+      finding,
+      isLoading: false,
+      error: finding ? null : "This finding is no longer available in the saved report.",
+    });
+  }, [loadChatEntry, panel]);
   const latestAssistantMessage = (() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
@@ -1142,6 +1257,10 @@ export function ExplorerAiChat(props: ExplorerAiChatProps) {
           onClose={() => setPanel(null)}
           onBack={() => setPanel({ mode: "findings" })}
           onOpenEntry={handleOpenEntry}
+          onOpenMarkerFinding={(entryId) => void handleOpenMarkerFinding(entryId)}
+          onBackToMarker={() => {
+            if (panel?.mode === "marker") setPanel({ ...panel, finding: null });
+          }}
           onShowMoreFindings={handleShowMoreFindings}
           isLoadingMoreFindings={isLoadingMoreFindings}
         />
@@ -1459,6 +1578,8 @@ function ChatSidePanel({
   onClose,
   onBack,
   onOpenEntry,
+  onOpenMarkerFinding,
+  onBackToMarker,
   onShowMoreFindings,
   isLoadingMoreFindings,
 }: {
@@ -1468,6 +1589,8 @@ function ChatSidePanel({
   onClose: () => void;
   onBack: () => void;
   onOpenEntry: (entryId: string) => void;
+  onOpenMarkerFinding: (entryId: string) => void;
+  onBackToMarker: () => void;
   onShowMoreFindings: (trace: ChatRetrievalTrace) => void;
   isLoadingMoreFindings: boolean;
 }) {
@@ -1479,13 +1602,13 @@ function ChatSidePanel({
   const uniqueFindings = Array.from(new Map(findings.map((finding) => [finding.id, finding])).values());
 
   return (
-    <aside className={`dn-ai-side-panel ${panel.mode === "inspector" ? "is-inspector" : ""}`} aria-label={panel.mode === "findings" ? "Chat findings" : "Chat inspector"}>
+    <aside className={`dn-ai-side-panel ${panel.mode !== "findings" ? "is-inspector" : ""}`} aria-label={panel.mode === "findings" ? "Chat findings" : "Chat inspector"}>
       <div className="dn-ai-side-panel__header">
         {panel.mode === "inspector" ? (
           <button className="dn-button dn-button--secondary" type="button" onClick={onBack}>
             <Icon name="chevronLeft" /> Back
           </button>
-        ) : <h2>Findings</h2>}
+        ) : <h2>{panel.mode === "marker" ? "Marker" : "Findings"}</h2>}
         <button className="dn-icon-button" type="button" aria-label="Close panel" onClick={onClose}><Icon name="x" /></button>
       </div>
 
@@ -1526,7 +1649,7 @@ function ChatSidePanel({
             <p className="dn-ai-panel-empty">No report findings have been searched in this chat yet.</p>
           )}
         </div>
-      ) : (
+      ) : panel.mode === "inspector" ? (
         <FindingInspector
           finding={panel.finding}
           emptyTitle={panel.isLoading ? "Loading finding" : "Finding unavailable"}
@@ -1537,6 +1660,16 @@ function ChatSidePanel({
               <div className="dn-ai-error" role="alert"><Icon name="alert" /> {panel.error}</div>
             ) : undefined
           }
+          showHeader={false}
+        />
+      ) : (
+        <MarkerInspector
+          marker={panel.marker}
+          finding={panel.finding}
+          emptyTitle={panel.isLoading ? "Loading marker" : "Marker unavailable"}
+          unavailableRsid={!panel.isLoading && !panel.marker ? panel.rsid : null}
+          onOpenFinding={onOpenMarkerFinding}
+          onBackToMarker={onBackToMarker}
         />
       )}
     </aside>
@@ -1586,7 +1719,7 @@ const ChatMessage = memo(function ChatMessage({
           components={components}
           urlTransform={(url) => url}
         >
-          {content}
+          {linkifyBareDeanaLinks(content)}
         </ReactMarkdown>
       ) : null}
       {role === "assistant" && trace ? (

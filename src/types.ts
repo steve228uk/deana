@@ -18,7 +18,7 @@ export type ProviderName =
 export type GenomeBuild = "GRCh37" | "GRCh38";
 export const INSIGHT_CATEGORIES = ["medical", "traits", "drug"] as const;
 export type InsightCategory = (typeof INSIGHT_CATEGORIES)[number];
-export type ExplorerTab = "overview" | "medical" | "traits" | "drug" | "ai";
+export type ExplorerTab = "overview" | "medical" | "traits" | "drug" | "markers" | "ai";
 export type InsightTone = "neutral" | "good" | "caution";
 export type FindingOutcome = "negative" | "positive" | "informational" | "missing";
 export type CoverageStatus = "full" | "partial" | "missing";
@@ -489,6 +489,26 @@ export interface StoredChatMessage {
 
 export interface ExplorerPage {
   entries: StoredReportEntry[];
+  nextCursor: string | null;
+  totalLoaded: number;
+  hasMore: boolean;
+}
+
+export interface StoredMarkerSummary {
+  rsid: string;
+  chromosome: string;
+  position: number;
+  genotype: string;
+  genes: string[];
+  findingIds: string[];
+  findingTitles: string[];
+  findingCount: number;
+}
+
+export type MarkerSort = "findings" | "rsid" | "location" | "raw";
+
+export interface MarkerExplorerPage {
+  markers: StoredMarkerSummary[];
   nextCursor: string | null;
   totalLoaded: number;
   hasMore: boolean;
