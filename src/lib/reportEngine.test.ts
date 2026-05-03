@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ensureCurrentProfile } from "./storage";
 import { EVIDENCE_PACK_VERSION, SOURCE_LIBRARY } from "./evidencePack";
-import { generateReport, REPORT_VERSION } from "./reportEngine";
+import { buildCategoryFacets, buildFacets, generateReport, REPORT_VERSION } from "./reportEngine";
 import { makeParsedDnaFile, makeSavedProfile } from "../test/fixtures";
 import type { EvidenceSupplement } from "../types";
 
@@ -16,6 +16,9 @@ describe("reportEngine", () => {
     expect(report.facets.sources).toContain("ClinVar");
     expect(report.facets.genes).toContain("APOE");
     expect(report.facets.clinicalSignificanceLabels["risk-context"]).toBe("Risk context");
+    expect(report.categoryFacets.medical.sources).toContain("ClinVar");
+    expect(report.categoryFacets.medical.genes).toContain("APOE");
+    expect(report.categoryFacets.drug.genes).not.toContain("APOE");
     expect(report.entries[0]).toMatchObject({
       id: expect.any(String),
       category: expect.any(String),
@@ -29,6 +32,7 @@ describe("reportEngine", () => {
   });
 
   it("regenerates legacy saved profiles to the current report version", () => {
+    const emptyFacets = buildFacets([]);
     const legacyProfile = makeSavedProfile({
       reportVersion: 1,
       evidencePackVersion: "legacy-pack",
@@ -56,18 +60,8 @@ describe("reportEngine", () => {
         },
         tabs: [],
         entries: [],
-        facets: {
-          sources: [],
-          evidenceTiers: [],
-          coverages: [],
-          reputes: [],
-          clinicalSignificances: [],
-          clinicalSignificanceLabels: {},
-          genes: [],
-          tags: [],
-          conditions: [],
-          publicationBuckets: [],
-        },
+        facets: emptyFacets,
+        categoryFacets: buildCategoryFacets([]),
       },
     });
 

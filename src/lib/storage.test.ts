@@ -48,6 +48,22 @@ describe("profile storage normalization", () => {
     expect(normalized.report.entries.length).toBeGreaterThan(1);
   });
 
+  it("regenerates current-version profiles that are missing category facets", () => {
+    const profile = makeSavedProfile();
+    const legacyProfile = {
+      ...profile,
+      report: {
+        ...profile.report,
+        categoryFacets: undefined,
+      },
+    } as unknown as typeof profile;
+    const normalized = ensureCurrentProfile(legacyProfile);
+
+    expect(normalized.report.categoryFacets.medical.sources.length).toBeGreaterThan(0);
+    expect(normalized.report.categoryFacets.medical.genes).toContain("APOE");
+    expect(normalized.report.categoryFacets.drug.genes).not.toContain("APOE");
+  });
+
   it("strips heavyweight evidence match records from profile metadata supplements", () => {
     const dna = makeParsedDnaFile();
     const supplement: EvidenceSupplement = {

@@ -11,6 +11,7 @@ import { ExplorerAiChat } from "../components/deana/aiChat";
 import {
   DEFAULT_FILTERS,
   ExplorerFilters,
+  SORT_FILTER_OPTIONS,
   matchesEntryFilters,
 } from "../lib/explorer";
 import {
@@ -20,7 +21,7 @@ import {
 import { loadExplorerPage } from "../lib/explorerSearch";
 import { EVIDENCE_PACK_VERSION } from "../lib/evidencePack";
 import { prewarmSearchIndex } from "../lib/ai/searchIndex";
-import { ExplorerTab, ProfileMeta, ReportEntry, StoredReportEntry } from "../types";
+import { ExplorerTab, InsightCategory, ProfileMeta, ReportFacets, StoredReportEntry } from "../types";
 
 interface ExplorerScreenProps {
   isLibraryReady: boolean;
@@ -30,6 +31,7 @@ const PAGE_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 300;
 const MULTI_FILTER_KEYS = ["evidence", "significance", "repute", "coverage", "publications", "gene", "tag"] as const;
 const RESET_FILTER_KEYS = ["q", "source", "sort", ...MULTI_FILTER_KEYS] as const;
+const SORT_FILTER_VALUES = new Set(SORT_FILTER_OPTIONS.map(([value]) => value));
 
 function formatFilters(searchParams: URLSearchParams): ExplorerFilters {
   const multiValue = (key: (typeof MULTI_FILTER_KEYS)[number]): string[] => {
@@ -56,7 +58,11 @@ function formatFilters(searchParams: URLSearchParams): ExplorerFilters {
   };
 }
 
-function categoryForTab(tab: ExplorerTab): ReportEntry["category"] | undefined {
+function filterSearchKey(searchParams: URLSearchParams): string {
+  return RESET_FILTER_KEYS.map((key) => `${key}=${searchParams.getAll(key).join(",")}`).join("&");
+}
+
+function categoryForTab(tab: ExplorerTab): InsightCategory | undefined {
   if (tab === "medical") return "medical";
   if (tab === "traits") return "traits";
   if (tab === "drug") return "drug";
@@ -121,6 +127,30 @@ function resetFilterPatch(): Partial<Record<string, null>> {
   return Object.fromEntries([...RESET_FILTER_KEYS, "selected"].map((key) => [key, null]));
 }
 
+function sanitizeFilterPatch(filters: ExplorerFilters, facets: ReportFacets): Partial<Record<string, string | string[] | null>> {
+  const patch: Partial<Record<string, string | string[] | null>> = {};
+  const keepKnownValues = (key: (typeof MULTI_FILTER_KEYS)[number], allowedValues: string[]) => {
+    const allowed = new Set(allowedValues);
+    const current = filters[key];
+    const next = current.filter((value) => allowed.has(value));
+    if (next.length !== current.length) {
+      patch[key] = next.length > 0 ? next : null;
+    }
+  };
+
+  if (filters.source && !facets.sources.includes(filters.source)) patch.source = null;
+  if (!SORT_FILTER_VALUES.has(filters.sort)) patch.sort = null;
+  keepKnownValues("evidence", facets.evidenceTiers);
+  keepKnownValues("significance", facets.clinicalSignificances);
+  keepKnownValues("repute", facets.reputes);
+  keepKnownValues("coverage", facets.coverages);
+  keepKnownValues("publications", facets.publicationBuckets);
+  keepKnownValues("gene", facets.genes);
+  keepKnownValues("tag", [...facets.tags, ...facets.conditions]);
+
+  return patch;
+}
+
 function scheduleSearchIndexPrewarm(profileId: string): () => void {
   let cancelled = false;
   const run = () => {
@@ -174,23 +204,14 @@ export function ExplorerScreen({
   const { profileId } = useParams<{ profileId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(() => Boolean(searchParams.get("selected")));
   const [isProfileLoading, setIsProfileLoading] = useState(true);
-  const [isPageLoading, setIsPageLoading] = useState(false);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [profile, setProfile] = useState<ProfileMeta | null>(null);
-  const [visibleEntries, setVisibleEntries] = useState<StoredReportEntry[]>([]);
-  const [pageCursor, setPageCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [selectedEntryFallback, setSelectedEntryFallback] = useState<StoredReportEntry | null>(null);
   const [isAiEnabled, setIsAiEnabled] = useState<boolean | null>(null);
 
-  const searchKey = searchParams.toString();
-  const tab = useMemo(() => normalizeTab(searchParams.get("tab")), [searchKey]);
-  const filters = useMemo(() => formatFilters(searchParams), [searchKey]);
-  const [searchInput, setSearchInput] = useState(filters.q);
+  const filterKey = useMemo(() => filterSearchKey(searchParams), [searchParams]);
+  const tab = useMemo(() => normalizeTab(searchParams.get("tab")), [searchParams]);
+  const filters = useMemo(() => formatFilters(searchParams), [filterKey]);
   const category = categoryForTab(tab);
-  const selectedEntryId = searchParams.get("selected") ?? "";
   const evidencePackStatus = getEvidencePackStatus(profile);
 
   useEffect(() => {
@@ -210,12 +231,6 @@ export function ExplorerScreen({
       updateSearchParams(searchParams, { tab: "overview", selected: null }, setSearchParams);
     }
   }, [isAiEnabled, searchParams, setSearchParams, tab]);
-
-  useEffect(() => {
-    if (!selectedEntryId) {
-      setIsMobileSheetOpen(false);
-    }
-  }, [selectedEntryId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -246,103 +261,6 @@ export function ExplorerScreen({
     return scheduleSearchIndexPrewarm(profile.id);
   }, [profile?.id]);
 
-  useEffect(() => {
-    setSearchInput(filters.q);
-  }, [filters.q, profile?.id, tab]);
-
-  useEffect(() => {
-    if (searchInput === filters.q) return;
-
-    const handle = setTimeout(() => {
-      commitSearchInput(searchInput);
-    }, SEARCH_DEBOUNCE_MS);
-
-    return () => clearTimeout(handle);
-  }, [filters.q, searchInput, searchParams, setSearchParams]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!profile || !category) {
-      startTransition(() => {
-        setVisibleEntries([]);
-        setPageCursor(null);
-        setHasMore(false);
-      });
-      return;
-    }
-
-    setIsPageLoading(true);
-
-    void loadExplorerPage({
-      profileId: profile.id,
-      category,
-      filters,
-      pageSize: PAGE_SIZE,
-    })
-      .then((page) => {
-        if (cancelled) return;
-        startTransition(() => {
-          setVisibleEntries(page.entries);
-          setPageCursor(page.nextCursor);
-          setHasMore(page.hasMore);
-          setSelectedEntryFallback(null);
-        });
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setIsPageLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [category, filters, profile]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!profile || !category || !selectedEntryId) {
-      startTransition(() => {
-        setSelectedEntryFallback(null);
-      });
-      return;
-    }
-
-    if (visibleEntries.some((entry) => entry.id === selectedEntryId)) {
-      startTransition(() => {
-        setSelectedEntryFallback(null);
-      });
-      return;
-    }
-
-    void loadReportEntry(profile.id, selectedEntryId).then((entry) => {
-      if (cancelled) return;
-      startTransition(() => {
-        setSelectedEntryFallback(
-          entry &&
-            matchesEntryFilters(entry, filters, category)
-            ? entry
-            : null,
-        );
-      });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [category, filters, profile, selectedEntryId, visibleEntries]);
-
-  const selectedEntry = useMemo(() => {
-    return visibleEntries.find((entry) => entry.id === selectedEntryId) ?? selectedEntryFallback;
-  }, [selectedEntryFallback, selectedEntryId, visibleEntries]);
-
-  useEffect(() => {
-    if (!category || tab === "overview") return;
-    if (selectedEntryId || visibleEntries.length === 0) return;
-    updateSearchParams(searchParams, { selected: visibleEntries[0].id }, setSearchParams);
-  }, [category, searchParams, selectedEntryId, setSearchParams, tab, visibleEntries]);
-
   if (!isLibraryReady || isProfileLoading) {
     return (
       <main className="dn-loading-screen" aria-live="polite" aria-busy="true">
@@ -359,60 +277,12 @@ export function ExplorerScreen({
 
   function setTab(nextTab: ExplorerTab) {
     if (nextTab === "ai" && isAiEnabled !== true) return;
-    setIsMobileSheetOpen(false);
+    if (nextTab === tab) return;
     updateSearchParams(
       searchParams,
-      { tab: nextTab, selected: nextTab === "overview" || nextTab === "ai" ? null : "" },
+      { ...resetFilterPatch(), tab: nextTab },
       setSearchParams,
     );
-  }
-
-  function setFilter<K extends keyof ExplorerFilters>(key: K, value: ExplorerFilters[K]) {
-    setIsMobileSheetOpen(false);
-    updateSearchParams(searchParams, { [key]: value || null, selected: null }, setSearchParams);
-  }
-
-  function setSearchFilter(value: string) {
-    setIsMobileSheetOpen(false);
-    setSearchInput(value);
-  }
-
-  function commitSearchInput(value: string) {
-    updateSearchParams(searchParams, { q: value || null, selected: null }, setSearchParams);
-  }
-
-  function resetFilters() {
-    setIsMobileSheetOpen(false);
-    setSearchInput("");
-    updateSearchParams(searchParams, resetFilterPatch(), setSearchParams);
-  }
-
-  function selectCategoryEntry(id: string) {
-    setIsMobileSheetOpen(true);
-    updateSearchParams(searchParams, { selected: id }, setSearchParams);
-  }
-
-  async function handleLoadMore() {
-    if (!profile || !category || !pageCursor || isLoadingMore) return;
-
-    setIsLoadingMore(true);
-    try {
-      const page = await loadExplorerPage({
-        profileId: profile.id,
-        category,
-        filters,
-        cursor: pageCursor,
-        pageSize: PAGE_SIZE,
-      });
-
-      startTransition(() => {
-        setVisibleEntries((current) => [...current, ...page.entries]);
-        setPageCursor(page.nextCursor);
-        setHasMore(page.hasMore);
-      });
-    } finally {
-      setIsLoadingMore(false);
-    }
   }
 
   return (
@@ -438,32 +308,227 @@ export function ExplorerScreen({
         <ExplorerAiChat
           profile={profile}
           currentTab={tab}
-          filters={filters}
-          visibleEntries={visibleEntries}
-          selectedEntry={selectedEntry}
+          filters={DEFAULT_FILTERS}
+          visibleEntries={[]}
+          selectedEntry={null}
         />
       ) : tab === "ai" ? (
         <OverviewContent profile={profile} onExploreCategory={setTab} />
-      ) : (
-        <CategoryExplorerContent
-          activeTab={tab}
+      ) : category ? (
+        <CategoryExplorerPane
+          key={`${profile.id}:${category}`}
+          activeTab={category}
           profile={profile}
+          facets={profile.report.categoryFacets[category]}
           filters={filters}
-          entries={visibleEntries}
-          selectedEntry={selectedEntry}
-          isLoading={isPageLoading}
-          hasMore={hasMore}
-          isLoadingMore={isLoadingMore}
-          isMobileSheetOpen={isMobileSheetOpen}
-          searchValue={searchInput}
-          onFilterChange={setFilter}
-          onSearchChange={setSearchFilter}
-          onResetFilters={resetFilters}
-          onSelectEntry={selectCategoryEntry}
-          onCloseMobileSheet={() => setIsMobileSheetOpen(false)}
-          onLoadMore={() => void handleLoadMore()}
+          searchParams={searchParams}
+          setSearchParams={setSearchParams}
         />
-      )}
+      ) : null}
     </ExplorerShell>
+  );
+}
+
+function CategoryExplorerPane({
+  activeTab,
+  profile,
+  facets,
+  filters,
+  searchParams,
+  setSearchParams,
+}: {
+  activeTab: InsightCategory;
+  profile: ProfileMeta;
+  facets: ReportFacets;
+  filters: ExplorerFilters;
+  searchParams: URLSearchParams;
+  setSearchParams: ReturnType<typeof useSearchParams>[1];
+}) {
+  const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(() => Boolean(searchParams.get("selected")));
+  const [isPageLoading, setIsPageLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [visibleEntries, setVisibleEntries] = useState<StoredReportEntry[]>([]);
+  const [pageCursor, setPageCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [selectedEntryFallback, setSelectedEntryFallback] = useState<StoredReportEntry | null>(null);
+  const [searchInput, setSearchInput] = useState(filters.q);
+  const selectedEntryId = searchParams.get("selected") ?? "";
+  const sanitizedFilterPatch = useMemo(
+    () => sanitizeFilterPatch(filters, facets),
+    [
+      facets,
+      filters.source,
+      filters.evidence,
+      filters.significance,
+      filters.repute,
+      filters.coverage,
+      filters.publications,
+      filters.gene,
+      filters.tag,
+      filters.sort,
+    ],
+  );
+
+  useEffect(() => {
+    if (Object.keys(sanitizedFilterPatch).length === 0) return;
+    updateSearchParams(searchParams, { ...sanitizedFilterPatch, selected: null }, setSearchParams);
+  }, [sanitizedFilterPatch, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (!selectedEntryId) {
+      setIsMobileSheetOpen(false);
+    }
+  }, [selectedEntryId]);
+
+  useEffect(() => {
+    setSearchInput(filters.q);
+  }, [filters.q, profile.id, activeTab]);
+
+  useEffect(() => {
+    if (searchInput === filters.q) return;
+
+    const handle = setTimeout(() => {
+      updateSearchParams(searchParams, { q: searchInput || null, selected: null }, setSearchParams);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(handle);
+  }, [filters.q, searchInput, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setIsPageLoading(true);
+
+    void loadExplorerPage({
+      profileId: profile.id,
+      category: activeTab,
+      filters,
+      pageSize: PAGE_SIZE,
+    })
+      .then((page) => {
+        if (cancelled) return;
+        startTransition(() => {
+          setVisibleEntries(page.entries);
+          setPageCursor(page.nextCursor);
+          setHasMore(page.hasMore);
+          setSelectedEntryFallback(null);
+        });
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsPageLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, filters, profile.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedEntryId) {
+      startTransition(() => {
+        setSelectedEntryFallback(null);
+      });
+      return;
+    }
+
+    if (visibleEntries.some((entry) => entry.id === selectedEntryId)) {
+      startTransition(() => {
+        setSelectedEntryFallback(null);
+      });
+      return;
+    }
+
+    void loadReportEntry(profile.id, selectedEntryId).then((entry) => {
+      if (cancelled) return;
+      startTransition(() => {
+        setSelectedEntryFallback(
+          entry &&
+            matchesEntryFilters(entry, filters, activeTab)
+            ? entry
+            : null,
+        );
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, filters, profile.id, selectedEntryId, visibleEntries]);
+
+  const selectedEntry = useMemo(() => {
+    return visibleEntries.find((entry) => entry.id === selectedEntryId) ?? selectedEntryFallback;
+  }, [selectedEntryFallback, selectedEntryId, visibleEntries]);
+
+  useEffect(() => {
+    if (selectedEntryId || visibleEntries.length === 0) return;
+    updateSearchParams(searchParams, { selected: visibleEntries[0].id }, setSearchParams);
+  }, [searchParams, selectedEntryId, setSearchParams, visibleEntries]);
+
+  function setFilter<K extends keyof ExplorerFilters>(key: K, value: ExplorerFilters[K]) {
+    setIsMobileSheetOpen(false);
+    updateSearchParams(searchParams, { [key]: value || null, selected: null }, setSearchParams);
+  }
+
+  function setSearchFilter(value: string) {
+    setIsMobileSheetOpen(false);
+    setSearchInput(value);
+  }
+
+  function resetFilters() {
+    setIsMobileSheetOpen(false);
+    setSearchInput("");
+    updateSearchParams(searchParams, resetFilterPatch(), setSearchParams);
+  }
+
+  function selectCategoryEntry(id: string) {
+    setIsMobileSheetOpen(true);
+    updateSearchParams(searchParams, { selected: id }, setSearchParams);
+  }
+
+  async function handleLoadMore() {
+    if (!pageCursor || isLoadingMore) return;
+
+    setIsLoadingMore(true);
+    try {
+      const page = await loadExplorerPage({
+        profileId: profile.id,
+        category: activeTab,
+        filters,
+        cursor: pageCursor,
+        pageSize: PAGE_SIZE,
+      });
+
+      startTransition(() => {
+        setVisibleEntries((current) => [...current, ...page.entries]);
+        setPageCursor(page.nextCursor);
+        setHasMore(page.hasMore);
+      });
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }
+
+  return (
+    <CategoryExplorerContent
+      activeTab={activeTab}
+      facets={facets}
+      filters={filters}
+      entries={visibleEntries}
+      selectedEntry={selectedEntry}
+      isLoading={isPageLoading}
+      hasMore={hasMore}
+      isLoadingMore={isLoadingMore}
+      isMobileSheetOpen={isMobileSheetOpen}
+      searchValue={searchInput}
+      onFilterChange={setFilter}
+      onSearchChange={setSearchFilter}
+      onResetFilters={resetFilters}
+      onSelectEntry={selectCategoryEntry}
+      onCloseMobileSheet={() => setIsMobileSheetOpen(false)}
+      onLoadMore={() => void handleLoadMore()}
+    />
   );
 }

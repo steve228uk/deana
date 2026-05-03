@@ -25,9 +25,10 @@ import {
 import { EVIDENCE_PACK_VERSION } from "./lib/evidencePack";
 import { prewarmSearchIndex, searchExplorerEntryIds, waitForIndex } from "./lib/ai/searchIndex";
 import { ExplorerFilters, buildEntrySearchText, compareEntries, matchesEntryFilters } from "./lib/explorer";
+import { buildCategoryFacets, buildFacets } from "./lib/reportEngine";
 import {
   makeParsedDnaFile,
-  makeProfileMeta,
+  makeProfileMetaFromProfile,
   makeProfileSummary,
   makeSavedProfile,
 } from "./test/fixtures";
@@ -191,23 +192,7 @@ function profileSummaryFromProfile(profile: SavedProfile): SavedProfileSummary {
 }
 
 function profileMetaFromProfile(profile: SavedProfile): ProfileMeta {
-  return makeProfileMeta({
-    id: profile.id,
-    name: profile.name,
-    fileName: profile.fileName,
-    createdAt: profile.createdAt,
-    dna: profile.dna,
-    supplements: profile.supplements,
-    reportVersion: profile.reportVersion,
-    evidencePackVersion: profile.evidencePackVersion,
-    report: {
-      reportVersion: profile.report.reportVersion,
-      evidencePackVersion: profile.report.evidencePackVersion,
-      overview: profile.report.overview,
-      tabs: profile.report.tabs,
-      facets: profile.report.facets,
-    },
-  });
+  return makeProfileMetaFromProfile(profile);
 }
 
 function storedEntriesFromProfile(profile: SavedProfile): StoredReportEntry[] {
@@ -352,21 +337,56 @@ function makePaginatedProfile(id: string, count: number): SavedProfile {
     },
   }));
 
+  return withReportEntries(profile, medicalEntries, { medical: count, traits: 0, drug: 0 });
+}
+
+function makeTabFacetProfile(id: string): SavedProfile {
+  const profile = makeSavedProfile({ id });
+  const medicalTemplate = profile.report.entries.find((entry) => entry.category === "medical") ?? profile.report.entries[0];
+  const drugTemplate = profile.report.entries.find((entry) => entry.category === "drug") ?? profile.report.entries[0];
+  const entries: SavedProfile["report"]["entries"] = [
+    {
+      ...medicalTemplate,
+      id: "medical-only-facet",
+      category: "medical",
+      title: "Medical only facet",
+      sources: [{ id: "medical-only", name: "Medical Only Source", url: "https://example.com/medical" }],
+      genes: ["MEDGENE"],
+      topics: ["Medical topic"],
+      conditions: ["Medical condition"],
+    },
+    {
+      ...drugTemplate,
+      id: "drug-only-facet",
+      category: "drug",
+      title: "Drug only facet",
+      sources: [{ id: "drug-only", name: "Drug Only Source", url: "https://example.com/drug" }],
+      genes: ["DRUGGENE"],
+      topics: ["Drug topic"],
+      conditions: ["Drug condition"],
+    },
+  ];
+
+  return withReportEntries(profile, entries, { medical: 1, traits: 0, drug: 1 });
+}
+
+function withReportEntries(
+  profile: SavedProfile,
+  entries: SavedProfile["report"]["entries"],
+  counts: { medical: number; traits: number; drug: number },
+): SavedProfile {
   return {
     ...profile,
     report: {
       ...profile.report,
-      entries: medicalEntries,
-      tabs: profile.report.tabs.map((tab) =>
-        tab.tab === "medical"
-          ? { ...tab, count }
-          : tab.tab === "overview"
-            ? { ...tab, count }
-            : { ...tab, count: 0 },
-      ),
-      facets: {
-        ...profile.report.facets,
-      },
+      entries,
+      tabs: profile.report.tabs.map((tab) => {
+        if (tab.tab === "overview") return { ...tab, count: counts.medical + counts.traits + counts.drug };
+        if (tab.tab === "medical" || tab.tab === "traits" || tab.tab === "drug") return { ...tab, count: counts[tab.tab] };
+        return { ...tab, count: 0 };
+      }),
+      facets: buildFacets(entries),
+      categoryFacets: buildCategoryFacets(entries),
     },
   };
 }
@@ -735,6 +755,58 @@ describe("Deana app", () => {
     );
   });
 
+  it("clears tab-scoped filters when switching category tabs", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeTabFacetProfile("profile-tab-filter-reset")];
+
+    renderApp("/explorer/profile-tab-filter-reset?tab=medical");
+
+    await screen.findByText("Current report");
+    await user.selectOptions(screen.getByLabelText("Source"), "Medical Only Source");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toContain("source=Medical+Only+Source"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Drug response" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toContain("tab=drug"),
+    );
+    expect(screen.getByTestId("location").textContent).not.toContain("source=");
+    await waitFor(() =>
+      expect(vi.mocked(loadCategoryPage).mock.calls.some(([request]) =>
+        request.category === "drug" &&
+        request.filters.source === "" &&
+        request.filters.evidence.length === 0 &&
+        request.filters.sort === "rank",
+      )).toBe(true),
+    );
+  });
+
+  it("renders only the facet options for the active category tab", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeTabFacetProfile("profile-category-facets")];
+
+    renderApp("/explorer/profile-category-facets?tab=medical");
+
+    await screen.findByText("Current report");
+    const medicalSource = screen.getByLabelText("Source");
+    expect(within(medicalSource).getByRole("option", { name: "Medical Only Source" })).toBeInTheDocument();
+    expect(within(medicalSource).queryByRole("option", { name: "Drug Only Source" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("MEDGENE").length).toBeGreaterThan(0);
+    expect(screen.queryByText("DRUGGENE")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Drug response" }));
+    await screen.findByText("Drug response explorer");
+
+    const drugSource = screen.getByLabelText("Source");
+    expect(within(drugSource).getByRole("option", { name: "Drug Only Source" })).toBeInTheDocument();
+    expect(within(drugSource).queryByRole("option", { name: "Medical Only Source" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("DRUGGENE").length).toBeGreaterThan(0);
+    expect(screen.queryByText("MEDGENE")).not.toBeInTheDocument();
+  });
+
   it("gates AI chat behind explicit consent without making a request on tab open", async () => {
     const user = userEvent.setup();
     storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
@@ -1001,6 +1073,24 @@ describe("Deana app", () => {
 
     expect(await screen.findByText("55 visible results")).toBeInTheDocument();
     expect(screen.getByText("Medical finding 55")).toBeInTheDocument();
+  });
+
+  it("mounts a fresh category list with top scroll when switching tabs", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeTabFacetProfile("profile-tab-remount")];
+
+    const { container } = renderApp("/explorer/profile-tab-remount?tab=medical");
+
+    await screen.findByText("Current report");
+    const medicalPanel = container.querySelector(".dn-finding-list-panel") as HTMLElement;
+    medicalPanel.scrollTop = 180;
+
+    await user.click(screen.getByRole("button", { name: "Drug response" }));
+    await screen.findByText("Drug response explorer");
+
+    const drugPanel = container.querySelector(".dn-finding-list-panel") as HTMLElement;
+    expect(drugPanel).not.toBe(medicalPanel);
+    expect(drugPanel.scrollTop).toBe(0);
   });
 
   it("loads the selected entry for the inspector even when it is not in the first page", async () => {
