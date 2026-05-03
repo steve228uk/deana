@@ -57,6 +57,7 @@ function installEntries(nextEntries: StoredReportEntry[]) {
       evidencePackVersion: "test",
       reportParsedAt: "2026-04-25T00:00:00.000Z",
     },
+    markers: [],
     entries: entries.filter((entry) => entry.profileId === profileId),
   }));
   vi.mocked(loadSearchIndexCache).mockImplementation(async () => cachedSearchIndex as Awaited<ReturnType<typeof loadSearchIndexCache>>);

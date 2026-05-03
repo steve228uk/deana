@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type DependencyList, type ReactNode, type RefObject } from "react";
 import { SORT_FILTER_OPTIONS, type ExplorerFilters } from "../../lib/explorer";
-import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, ReportFacets, StoredReportEntry } from "../../types";
+import type { ExplorerTab, InsightCategory, MarkerSort, ProfileMeta, ReportEntry, ReportFacets, StoredMarkerSummary, StoredReportEntry } from "../../types";
 import { DEANA_GITHUB_URL, PrivacyModal, SupportDeanaModal } from "./marketing";
 import { DeanaWordmark, Icon, IconName } from "./ui";
 
@@ -19,6 +19,14 @@ const tabs: Array<{ id: ExplorerTab; label: string }> = [
   { id: "medical", label: "Medical" },
   { id: "traits", label: "Traits" },
   { id: "drug", label: "Drug response" },
+  { id: "markers", label: "Markers" },
+];
+
+export const MARKER_SORT_OPTIONS: Array<[MarkerSort, string]> = [
+  ["findings", "Most findings"],
+  ["rsid", "rsID"],
+  ["location", "Location"],
+  ["raw", "Raw file order"],
 ];
 
 const iconByTab: Record<ExplorerTab, IconName> = {
@@ -27,6 +35,7 @@ const iconByTab: Record<ExplorerTab, IconName> = {
   medical: "heart",
   traits: "leaf",
   drug: "pill",
+  markers: "dna",
 };
 const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = tabs.map((tab) => ({
   ...tab,
@@ -323,6 +332,7 @@ export function CategoryExplorerContent({
   onResetFilters,
   onSelectEntry,
   onCloseMobileSheet,
+  onAskAiAboutFinding,
   onLoadMore,
 }: {
   activeTab: InsightCategory;
@@ -340,6 +350,7 @@ export function CategoryExplorerContent({
   onResetFilters: () => void;
   onSelectEntry: (id: string) => void;
   onCloseMobileSheet: () => void;
+  onAskAiAboutFinding?: (finding: StoredReportEntry) => void;
   onLoadMore: () => void;
 }) {
   const [areFiltersCollapsed, setAreFiltersCollapsed] = useState(false);
@@ -363,7 +374,7 @@ export function CategoryExplorerContent({
   useScrollTopOnChange(listPanelRef, []);
 
   return (
-    <main className={`dn-category-screen ${areFiltersCollapsed ? "is-filter-collapsed" : ""}`}>
+    <main className={`dn-category-screen ${areFiltersCollapsed ? "is-filter-collapsed" : ""}`} aria-busy={isLoading}>
       <aside className={`dn-filter-sidebar ${areFiltersCollapsed ? "is-collapsed" : ""}`} aria-label="Filters">
         {areFiltersCollapsed ? (
           <button
@@ -432,8 +443,9 @@ export function CategoryExplorerContent({
         ) : null}
       </section>
 
-      <FindingInspector finding={selectedEntry} />
-      {selectedEntry && isMobileSheetOpen ? <MobileFindingSheet finding={selectedEntry} onClose={onCloseMobileSheet} /> : null}
+      <FindingInspector finding={selectedEntry} onAskAi={onAskAiAboutFinding} />
+      {isLoading ? <TabLoadingOverlay /> : null}
+      {selectedEntry && isMobileSheetOpen ? <MobileFindingSheet finding={selectedEntry} onClose={onCloseMobileSheet} onAskAi={onAskAiAboutFinding} /> : null}
       {isMobileFiltersOpen ? (
         <div className="dn-modal-backdrop" role="presentation" onClick={() => setIsMobileFiltersOpen(false)}>
           <section
@@ -464,6 +476,314 @@ export function CategoryExplorerContent({
         </div>
       ) : null}
     </main>
+  );
+}
+
+export function MarkersExplorerContent({
+  markers,
+  selectedMarker,
+  selectedFinding,
+  isLoading,
+  hasMore,
+  isLoadingMore,
+  isMobileSheetOpen,
+  searchValue,
+  sortValue,
+  onSearchChange,
+  onSortChange,
+  onSelectMarker,
+  onCloseMobileSheet,
+  onAskAiAboutMarker,
+  onAskAiAboutFinding,
+  onOpenFinding,
+  onBackToMarker,
+  onLoadMore,
+}: {
+  markers: StoredMarkerSummary[];
+  selectedMarker: StoredMarkerSummary | null;
+  selectedFinding: StoredReportEntry | null;
+  isLoading: boolean;
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  isMobileSheetOpen: boolean;
+  searchValue: string;
+  sortValue: MarkerSort;
+  onSearchChange: (value: string) => void;
+  onSortChange: (value: MarkerSort) => void;
+  onSelectMarker: (rsid: string) => void;
+  onCloseMobileSheet: () => void;
+  onAskAiAboutMarker?: (marker: StoredMarkerSummary) => void;
+  onAskAiAboutFinding?: (finding: StoredReportEntry) => void;
+  onOpenFinding: (entryId: string) => void;
+  onBackToMarker: () => void;
+  onLoadMore: () => void;
+}) {
+  const listPanelRef = useRef<HTMLElement | null>(null);
+  useScrollTopOnChange(listPanelRef, []);
+
+  return (
+    <main className="dn-marker-screen" aria-busy={isLoading}>
+      <section ref={listPanelRef} className="dn-finding-list-panel dn-marker-list-panel">
+        <div className="dn-category-title-row">
+          <div>
+            <h1>Markers</h1>
+            <p>{isLoading ? "Loading..." : `${markers.length.toLocaleString()} visible markers${hasMore ? "+" : ""}`}</p>
+          </div>
+        </div>
+        <div className="dn-marker-toolbar">
+          <label className="dn-field dn-field--search dn-marker-search">
+            <span>Search</span>
+            <div><Icon name="search" /><input value={searchValue} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search rsID, genotype, gene, or finding..." /></div>
+          </label>
+          <FilterSelect label="Sort" value={sortValue} onChange={(value) => onSortChange(value as MarkerSort)} options={MARKER_SORT_OPTIONS} />
+        </div>
+
+        <div className="dn-finding-list">
+          {markers.map((marker) => (
+            <MarkerCard
+              key={marker.rsid}
+              marker={marker}
+              selected={marker.rsid.toLowerCase() === selectedMarker?.rsid.toLowerCase()}
+              onSelect={onSelectMarker}
+            />
+          ))}
+          {markers.length === 0 && !isLoading ? (
+            <div className="dn-empty-state">
+              <h2>No matching marker</h2>
+              <p>Try another rsID, genotype, gene, or finding term.</p>
+            </div>
+          ) : null}
+        </div>
+
+        {hasMore ? (
+          <div className="dn-result-footer">
+            <button className="dn-button dn-button--secondary" onClick={onLoadMore} disabled={isLoadingMore}>
+              {isLoadingMore ? "Loading more..." : "Load more"}
+            </button>
+          </div>
+        ) : null}
+      </section>
+
+      <MarkerInspector
+        marker={selectedMarker}
+        finding={selectedFinding}
+        onOpenFinding={onOpenFinding}
+        onBackToMarker={onBackToMarker}
+        onAskAiAboutMarker={onAskAiAboutMarker}
+        onAskAiAboutFinding={onAskAiAboutFinding}
+      />
+      {isLoading ? <TabLoadingOverlay /> : null}
+      {selectedMarker && isMobileSheetOpen ? (
+        <MobileMarkerSheet
+          marker={selectedMarker}
+          finding={selectedFinding}
+          onClose={onCloseMobileSheet}
+          onOpenFinding={onOpenFinding}
+          onBackToMarker={onBackToMarker}
+          onAskAiAboutMarker={onAskAiAboutMarker}
+          onAskAiAboutFinding={onAskAiAboutFinding}
+        />
+      ) : null}
+    </main>
+  );
+}
+
+function TabLoadingOverlay() {
+  return (
+    <div className="dn-tab-loading-overlay" aria-live="polite">
+      <div className="dn-loading-indicator" role="status">
+        <span className="dn-screen-reader-text">Loading tab data</span>
+      </div>
+    </div>
+  );
+}
+
+function markerLocation(marker: StoredMarkerSummary): string {
+  return marker.position > 0 ? `${marker.chromosome}:${marker.position.toLocaleString()}` : marker.chromosome;
+}
+
+function findingCountLabel(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "finding" : "findings"}`;
+}
+
+function snpediaMarkerUrl(rsid: string): string {
+  const numeric = rsid.trim().replace(/^rs/i, "");
+  return `https://www.snpedia.com/index.php/Rs${encodeURIComponent(numeric)}`;
+}
+
+const MarkerCard = memo(function MarkerCard({
+  marker,
+  selected,
+  onSelect,
+}: {
+  marker: StoredMarkerSummary;
+  selected?: boolean;
+  onSelect: (rsid: string) => void;
+}) {
+  return (
+    <button className={`dn-raw-marker-card ${selected ? "is-selected" : ""}`} onClick={() => onSelect(marker.rsid)}>
+      <span className="dn-finding-card__icon"><Icon name="dna" /></span>
+      <div className="dn-finding-card__main">
+        <div className="dn-finding-card__meta">
+          <span>{marker.genotype || "n/a"}</span>
+          <span>{markerLocation(marker)}</span>
+          <span>{findingCountLabel(marker.findingCount)}</span>
+        </div>
+        <h2>{marker.rsid}</h2>
+        {marker.genes.length > 0 ? <p>{marker.genes.slice(0, 8).join(", ")}</p> : <p>No linked report findings.</p>}
+      </div>
+      <Icon name="external" />
+    </button>
+  );
+});
+
+export function MarkerInspector({
+  marker,
+  finding,
+  emptyTitle = "Select a marker",
+  emptyDescription = "Choose a marker to review genotype details and linked report findings.",
+  unavailableRsid,
+  ariaLabel = "Marker inspector",
+  onOpenFinding,
+  onBackToMarker,
+  onAskAiAboutMarker,
+  onAskAiAboutFinding,
+}: {
+  marker: StoredMarkerSummary | null;
+  finding?: StoredReportEntry | null;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  unavailableRsid?: string | null;
+  ariaLabel?: string;
+  onOpenFinding?: (entryId: string) => void;
+  onBackToMarker?: () => void;
+  onAskAiAboutMarker?: (marker: StoredMarkerSummary) => void;
+  onAskAiAboutFinding?: (finding: StoredReportEntry) => void;
+}) {
+  const inspectorRef = useRef<HTMLElement | null>(null);
+  useScrollTopOnChange(inspectorRef, [marker?.rsid, finding?.id, unavailableRsid]);
+
+  if (!marker) {
+    return (
+      <aside ref={inspectorRef} className="dn-inspector dn-marker-inspector" aria-label={ariaLabel}>
+        <div className="dn-ai-side-panel__header">
+          <h2>Marker</h2>
+        </div>
+        <div className="dn-marker-inspector__body">
+          <h2>{unavailableRsid ? "Marker unavailable" : emptyTitle}</h2>
+          <p>{unavailableRsid ? `${unavailableRsid} is not present in this uploaded DNA profile.` : emptyDescription}</p>
+        </div>
+      </aside>
+    );
+  }
+
+  if (finding) {
+    return (
+      <aside ref={inspectorRef} className="dn-inspector dn-marker-inspector" aria-label={ariaLabel}>
+        <div className="dn-ai-side-panel__header">
+          <button className="dn-button dn-button--secondary" type="button" onClick={onBackToMarker}>
+            <Icon name="chevronLeft" /> Back
+          </button>
+          {onAskAiAboutFinding ? (
+            <button className="dn-button dn-button--secondary dn-marker-header-ai-button" type="button" onClick={() => onAskAiAboutFinding(finding)}>
+              <Icon name="spark" /> Ask AI
+            </button>
+          ) : null}
+        </div>
+        <div className="dn-marker-inspector__body">
+          <FindingDetailContent finding={finding} titleLevel="h2" showEyebrow={false} />
+        </div>
+      </aside>
+    );
+  }
+
+  return (
+    <aside ref={inspectorRef} className="dn-inspector dn-marker-inspector" aria-label={ariaLabel}>
+      <div className="dn-ai-side-panel__header">
+        <h2>Marker</h2>
+        {onAskAiAboutMarker ? (
+          <button className="dn-button dn-button--secondary dn-marker-header-ai-button" type="button" onClick={() => onAskAiAboutMarker(marker)}>
+            <Icon name="spark" /> Ask AI
+          </button>
+        ) : null}
+      </div>
+      <div className="dn-marker-inspector__body">
+        <h2>{marker.rsid}</h2>
+        <dl className="dn-evidence-snapshot">
+          <div><dt>Genotype</dt><dd>{marker.genotype || "n/a"}</dd></div>
+          <div><dt>Location</dt><dd>{markerLocation(marker)}</dd></div>
+          <div><dt>Findings</dt><dd>{findingCountLabel(marker.findingCount)}</dd></div>
+          {marker.genes.length > 0 ? <div><dt>Genes</dt><dd>{marker.genes.join(", ")}</dd></div> : null}
+        </dl>
+        <section>
+          <h3>External marker source</h3>
+          <div className="dn-source-link-list">
+            <a href={snpediaMarkerUrl(marker.rsid)} target="_blank" rel="noreferrer">
+              <span>SNPedia</span>
+              <small>{marker.rsid}</small>
+              <Icon name="external" />
+            </a>
+          </div>
+        </section>
+        <section>
+          <h3>Linked findings</h3>
+          {marker.findingIds.length > 0 ? (
+            <div className="dn-ai-finding-list dn-marker-linked-findings">
+              {marker.findingIds.map((entryId, index) => (
+                <button type="button" key={entryId} onClick={() => onOpenFinding?.(entryId)}>
+                  <strong>{marker.findingTitles[index] ?? entryId}</strong>
+                  <span>{entryId}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p>No report findings currently reference this marker.</p>
+          )}
+        </section>
+        <div className="dn-callout dn-callout--success"><Icon name="lock" /> Private by design. Your DNA stays on this device.</div>
+      </div>
+    </aside>
+  );
+}
+
+function MobileMarkerSheet({
+  marker,
+  finding,
+  onClose,
+  onOpenFinding,
+  onBackToMarker,
+  onAskAiAboutMarker,
+  onAskAiAboutFinding,
+}: {
+  marker: StoredMarkerSummary;
+  finding: StoredReportEntry | null;
+  onClose: () => void;
+  onOpenFinding: (entryId: string) => void;
+  onBackToMarker: () => void;
+  onAskAiAboutMarker?: (marker: StoredMarkerSummary) => void;
+  onAskAiAboutFinding?: (finding: StoredReportEntry) => void;
+}) {
+  return (
+    <div className="dn-mobile-sheet-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="dn-mobile-sheet dn-mobile-marker-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Marker details"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button className="dn-icon-button dn-modal-close" aria-label="Close" onClick={onClose}><Icon name="x" /></button>
+        <MarkerInspector
+          ariaLabel="Mobile marker inspector"
+          marker={marker}
+          finding={finding}
+          onOpenFinding={onOpenFinding}
+          onBackToMarker={onBackToMarker}
+          onAskAiAboutMarker={onAskAiAboutMarker}
+          onAskAiAboutFinding={onAskAiAboutFinding}
+        />
+      </section>
+    </div>
   );
 }
 
@@ -602,33 +922,53 @@ export function FindingInspector({
   emptyTitle = "Select a finding",
   emptyDescription = "Choose a result to review genotype context, evidence, warnings, and source links.",
   emptyContent,
+  onAskAi,
+  showHeader = true,
 }: {
   finding: StoredReportEntry | null;
   emptyTitle?: string;
   emptyDescription?: string;
   emptyContent?: ReactNode;
+  onAskAi?: (finding: StoredReportEntry) => void;
+  showHeader?: boolean;
 }) {
   const inspectorRef = useRef<HTMLElement | null>(null);
   useScrollTopOnChange(inspectorRef, [finding?.id]);
 
+  const header = showHeader ? (
+    <div className="dn-ai-side-panel__header">
+      <h2>Inspector</h2>
+      {finding && onAskAi ? (
+        <button className="dn-button dn-button--secondary dn-marker-header-ai-button" type="button" onClick={() => onAskAi(finding)}>
+          <Icon name="spark" /> Ask AI
+        </button>
+      ) : null}
+    </div>
+  ) : null;
+
   if (!finding) {
     return (
-      <aside ref={inspectorRef} className="dn-inspector" aria-label="Finding inspector">
-        <p className="dn-eyebrow">Inspector</p>
-        <h2>{emptyTitle}</h2>
-        {emptyContent ?? <p>{emptyDescription}</p>}
+      <aside ref={inspectorRef} className={`dn-inspector ${showHeader ? "dn-finding-inspector" : ""}`} aria-label="Finding inspector">
+        {header}
+        <div className={showHeader ? "dn-finding-inspector__body" : undefined}>
+          <h2>{emptyTitle}</h2>
+          {emptyContent ?? <p>{emptyDescription}</p>}
+        </div>
       </aside>
     );
   }
 
   return (
-    <aside ref={inspectorRef} className="dn-inspector" aria-label="Finding inspector">
-      <FindingDetailContent finding={finding} titleLevel="h2" />
+    <aside ref={inspectorRef} className={`dn-inspector ${showHeader ? "dn-finding-inspector" : ""}`} aria-label="Finding inspector">
+      {header}
+      <div className={showHeader ? "dn-finding-inspector__body" : undefined}>
+        <FindingDetailContent finding={finding} titleLevel="h2" onAskAi={showHeader ? undefined : onAskAi} showEyebrow={!showHeader} />
+      </div>
     </aside>
   );
 }
 
-function MobileFindingSheet({ finding, onClose }: { finding: StoredReportEntry; onClose: () => void }) {
+function MobileFindingSheet({ finding, onClose, onAskAi }: { finding: StoredReportEntry; onClose: () => void; onAskAi?: (finding: StoredReportEntry) => void }) {
   function handleClose() {
     onClose();
   }
@@ -636,14 +976,24 @@ function MobileFindingSheet({ finding, onClose }: { finding: StoredReportEntry; 
   return (
     <div className="dn-mobile-sheet-backdrop" role="presentation" onClick={handleClose}>
       <section
-        className="dn-mobile-sheet"
+        className="dn-mobile-sheet dn-mobile-finding-sheet"
         role="dialog"
         aria-modal="true"
         aria-labelledby="mobile-finding-title"
         onClick={(event) => event.stopPropagation()}
       >
         <button className="dn-icon-button dn-modal-close" aria-label="Close" onClick={handleClose}><Icon name="x" /></button>
-        <FindingDetailContent finding={finding} titleId="mobile-finding-title" titleLevel="h1" />
+        <div className="dn-ai-side-panel__header">
+          <h2>Inspector</h2>
+          {onAskAi ? (
+            <button className="dn-button dn-button--secondary dn-marker-header-ai-button" type="button" onClick={() => onAskAi(finding)}>
+              <Icon name="spark" /> Ask AI
+            </button>
+          ) : null}
+        </div>
+        <div className="dn-finding-inspector__body">
+          <FindingDetailContent finding={finding} titleId="mobile-finding-title" titleLevel="h1" showEyebrow={false} />
+        </div>
       </section>
     </div>
   );
@@ -653,17 +1003,21 @@ export function FindingDetailContent({
   finding,
   titleId,
   titleLevel,
+  onAskAi,
+  showEyebrow = true,
 }: {
   finding: StoredReportEntry;
   titleId?: string;
   titleLevel: "h1" | "h2";
+  onAskAi?: (finding: StoredReportEntry) => void;
+  showEyebrow?: boolean;
 }) {
   const Title = titleLevel;
   const summary = summaryUnlessTitle(finding.summary, finding.title);
 
   return (
     <>
-      <p className="dn-eyebrow">Inspector</p>
+      {showEyebrow ? <p className="dn-eyebrow">Inspector</p> : null}
       <Title id={titleId}>{finding.title}</Title>
       <div className="dn-finding-badges">
         <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
@@ -671,6 +1025,11 @@ export function FindingDetailContent({
         {finding.pharmgkbLevel ? <PharmGkbLevelBadge level={finding.pharmgkbLevel} /> : null}
         {finding.cpicLevel ? <span>CPIC level {finding.cpicLevel}</span> : null}
       </div>
+      {onAskAi ? (
+        <button className="dn-button dn-button--primary dn-inspector-ai-button" type="button" onClick={() => onAskAi(finding)}>
+          <Icon name="spark" /> Ask AI about this
+        </button>
+      ) : null}
       {summary ? <div className="dn-inspector__intro">{renderMarkdown(summary)}</div> : null}
       {finding.detail.trim() ? (
         <section>
@@ -1038,7 +1397,7 @@ function labelForTab(tab: ExplorerTab): string {
 }
 
 function titleForTab(tab: InsightCategory): string {
-  return tab === "drug" ? "Drug response explorer" : `${labelForTab(tab)} explorer`;
+  return labelForTab(tab);
 }
 
 function iconForTab(tab: ExplorerTab): IconName {

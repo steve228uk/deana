@@ -3,19 +3,25 @@ import type {
   SearchExplorerEntryIdsRequest,
   SearchExplorerEntryIdsResult,
   SearchIndexStatus,
+  SearchMarkerPageRequest,
+  SearchMarkerPageResult,
   WorkerRequest,
   WorkerResponse,
 } from "./searchIndexCore";
 import {
   clearSearchIndex as clearDirect,
+  loadMarkerSummary as loadMarkerSummaryDirect,
+  prewarmMarkerIndex as prewarmMarkerDirect,
   prewarmSearchIndex as prewarmDirect,
   queryCandidateIds as queryCandidateIdsDirect,
+  searchMarkerPage as searchMarkerPageDirect,
   searchExplorerEntryIds as searchExplorerEntryIdsDirect,
   searchWithFields as searchWithFieldsDirect,
   waitForIndex as waitForIndexDirect,
 } from "./searchIndexCore";
+import type { StoredMarkerSummary } from "../../types";
 
-export type { SearchCandidate, SearchExplorerEntryIdsResult, SearchIndexStatus };
+export type { SearchCandidate, SearchExplorerEntryIdsResult, SearchIndexStatus, SearchMarkerPageResult };
 
 // ---- Worker client ----
 // All MiniSearch operations run in a dedicated worker to isolate memory from the
@@ -84,8 +90,23 @@ function sendToWorker<T>(w: Worker, message: WorkerRequest): Promise<T> {
   });
 }
 
+function buildStatusRequestMessage(
+  type: "prewarm" | "waitForIndex" | "prewarmMarkers",
+  requestId: string,
+  profileId: string,
+): WorkerRequest {
+  switch (type) {
+    case "prewarm":
+      return { type: "prewarm", requestId, profileId };
+    case "prewarmMarkers":
+      return { type: "prewarmMarkers", requestId, profileId };
+    case "waitForIndex":
+      return { type: "waitForIndex", requestId, profileId };
+  }
+}
+
 async function sendStatusRequest(
-  type: "prewarm" | "waitForIndex",
+  type: "prewarm" | "waitForIndex" | "prewarmMarkers",
   profileId: string,
   runDirect: (profileId: string) => Promise<SearchIndexStatus>,
 ): Promise<SearchIndexStatus> {
@@ -99,13 +120,11 @@ async function sendStatusRequest(
   }
 
   const requestId = String(++requestCounter);
-  const message: WorkerRequest = type === "prewarm"
-    ? { type: "prewarm", requestId, profileId }
-    : { type: "waitForIndex", requestId, profileId };
+  const message = buildStatusRequestMessage(type, requestId, profileId);
 
   try {
     const response = await sendToWorker<{
-      type: "prewarm" | "waitForIndex";
+      type: "prewarm" | "waitForIndex" | "prewarmMarkers";
       requestId: string;
       status: SearchIndexStatus;
     }>(w, message);
@@ -156,6 +175,34 @@ export async function searchExplorerEntryIds(
   const response = await sendToWorker<{ type: "searchExplorer"; requestId: string; result: SearchExplorerEntryIdsResult }>(
     w,
     { type: "searchExplorer", requestId, payload: request },
+  );
+  return response.result;
+}
+
+export async function prewarmMarkerIndex(profileId: string): Promise<SearchIndexStatus> {
+  return sendStatusRequest("prewarmMarkers", profileId, prewarmMarkerDirect);
+}
+
+export async function searchMarkerPage(
+  request: SearchMarkerPageRequest,
+): Promise<SearchMarkerPageResult> {
+  const w = getWorker();
+  if (!w) return searchMarkerPageDirect(request);
+  const requestId = String(++requestCounter);
+  const response = await sendToWorker<{ type: "searchMarkers"; requestId: string; result: SearchMarkerPageResult }>(
+    w,
+    { type: "searchMarkers", requestId, payload: request },
+  );
+  return response.result;
+}
+
+export async function loadMarkerSummary(profileId: string, rsid: string): Promise<StoredMarkerSummary | null> {
+  const w = getWorker();
+  if (!w) return loadMarkerSummaryDirect(profileId, rsid);
+  const requestId = String(++requestCounter);
+  const response = await sendToWorker<{ type: "loadMarker"; requestId: string; result: StoredMarkerSummary | null }>(
+    w,
+    { type: "loadMarker", requestId, profileId, rsid },
   );
   return response.result;
 }

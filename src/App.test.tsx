@@ -23,7 +23,14 @@ import {
   streamReportEntries,
 } from "./lib/storage";
 import { EVIDENCE_PACK_VERSION } from "./lib/evidencePack";
-import { prewarmSearchIndex, searchExplorerEntryIds, waitForIndex } from "./lib/ai/searchIndex";
+import {
+  loadMarkerSummary,
+  prewarmMarkerIndex,
+  prewarmSearchIndex,
+  searchExplorerEntryIds,
+  searchMarkerPage,
+  waitForIndex,
+} from "./lib/ai/searchIndex";
 import { ExplorerFilters, buildEntrySearchText, compareEntries, matchesEntryFilters } from "./lib/explorer";
 import { buildCategoryFacets, buildFacets } from "./lib/reportEngine";
 import {
@@ -39,6 +46,7 @@ import {
   EvidenceSupplement,
   StoredChatMessage,
   StoredChatThread,
+  StoredMarkerSummary,
   StoredReportEntry,
 } from "./types";
 
@@ -69,8 +77,11 @@ vi.mock("./lib/storage", () => ({
 
 vi.mock("./lib/ai/searchIndex", () => ({
   clearSearchIndex: vi.fn(),
+  loadMarkerSummary: vi.fn(),
+  prewarmMarkerIndex: vi.fn(async () => readySearchIndexStatus()),
   prewarmSearchIndex: vi.fn(async () => readySearchIndexStatus()),
   searchExplorerEntryIds: vi.fn(),
+  searchMarkerPage: vi.fn(),
   waitForIndex: vi.fn(async () => readySearchIndexStatus()),
 }));
 
@@ -213,6 +224,25 @@ function queryEntries(
     .sort((left, right) => compareEntries(left, right, filters.sort));
 }
 
+function markerSummariesFromProfile(profile: SavedProfile): StoredMarkerSummary[] {
+  const entries = storedEntriesFromProfile(profile);
+  return profile.dna.markers.map(([rsid, chromosome, position, genotype]) => {
+    const linkedEntries = entries.filter((entry) =>
+      entry.matchedMarkers.some((marker) => marker.rsid.toLowerCase() === rsid.toLowerCase()),
+    );
+    return {
+      rsid,
+      chromosome,
+      position,
+      genotype,
+      genes: Array.from(new Set(linkedEntries.flatMap((entry) => entry.genes))),
+      findingIds: linkedEntries.map((entry) => entry.id),
+      findingTitles: linkedEntries.map((entry) => entry.title),
+      findingCount: linkedEntries.length,
+    };
+  });
+}
+
 function sliceEntries<T>(entries: T[], offset: number, limit: number): T[] {
   return entries.slice(offset, offset + limit);
 }
@@ -281,6 +311,7 @@ function installStorageMocks() {
     };
   });
   vi.mocked(waitForIndex).mockImplementation(async () => readySearchIndexStatus());
+  vi.mocked(prewarmMarkerIndex).mockImplementation(async () => readySearchIndexStatus());
   vi.mocked(searchExplorerEntryIds).mockImplementation(async ({ profileId, category, filters, offset, limit }) => {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) return { ids: [], count: 0, indexStatus: readySearchIndexStatus() };
@@ -291,6 +322,45 @@ function installStorageMocks() {
       count: entries.length,
       indexStatus: readySearchIndexStatus(entries.length),
     };
+  });
+  vi.mocked(searchMarkerPage).mockImplementation(async ({ profileId, query, sort, offset, limit }) => {
+    const profile = storedProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      return { markers: [], nextCursor: null, totalLoaded: 0, hasMore: false, indexStatus: readySearchIndexStatus() };
+    }
+    const normalizedQuery = query.trim().toLowerCase();
+    const summaries = markerSummariesFromProfile(profile)
+      .filter((marker) => {
+        if (!normalizedQuery) return true;
+        return [
+          marker.rsid,
+          marker.genotype,
+          marker.chromosome,
+          marker.position,
+          marker.genes.join(" "),
+          marker.findingTitles.join(" "),
+        ].join(" ").toLowerCase().includes(normalizedQuery);
+      })
+      .sort((left, right) => {
+        if (sort === "rsid") return Number(left.rsid.slice(2)) - Number(right.rsid.slice(2));
+        if (sort === "location") return left.chromosome.localeCompare(right.chromosome) || left.position - right.position;
+        if (sort === "raw") return profile.dna.markers.findIndex((marker) => marker[0] === left.rsid) - profile.dna.markers.findIndex((marker) => marker[0] === right.rsid);
+        return right.findingCount - left.findingCount || Number(left.rsid.slice(2)) - Number(right.rsid.slice(2));
+      });
+    const pageMarkers = sliceEntries(summaries, offset, limit);
+    const nextOffset = offset + pageMarkers.length;
+    return {
+      markers: pageMarkers,
+      nextCursor: nextOffset < summaries.length ? JSON.stringify({ offset: nextOffset }) : null,
+      totalLoaded: nextOffset,
+      hasMore: nextOffset < summaries.length,
+      indexStatus: readySearchIndexStatus(summaries.length),
+    };
+  });
+  vi.mocked(loadMarkerSummary).mockImplementation(async (profileId: string, rsid: string) => {
+    const profile = storedProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) return null;
+    return markerSummariesFromProfile(profile).find((marker) => marker.rsid.toLowerCase() === rsid.toLowerCase()) ?? null;
   });
   vi.mocked(loadReportEntry).mockImplementation(async (profileId: string, entryId: string) => {
     const profile = storedProfiles.find((candidate) => candidate.id === profileId);
@@ -798,7 +868,7 @@ describe("Deana app", () => {
     expect(screen.queryByText("DRUGGENE")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Drug response" }));
-    await screen.findByText("Drug response explorer");
+    await screen.findByRole("heading", { name: "Drug response" });
 
     const drugSource = screen.getByLabelText("Source");
     expect(within(drugSource).getByRole("option", { name: "Drug Only Source" })).toBeInTheDocument();
@@ -822,6 +892,7 @@ describe("Deana app", () => {
       "Medical",
       "Traits",
       "Drug response",
+      "Markers",
     ]);
     expect(fetchCallsFor("/api/ai-status").length).toBeGreaterThan(0);
     expect(fetchCallsFor("/api/chat")).toHaveLength(0);
@@ -1027,6 +1098,41 @@ describe("Deana app", () => {
     expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-ai?tab=ai");
   });
 
+  it("opens deana marker chips in the chat inspector", async () => {
+    const user = userEvent.setup();
+    storedProfiles = [makeSavedProfile({ id: "profile-ai-marker" })];
+    storedAiConsents["profile-ai-marker"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+    storedChatThreads = [{
+      id: "thread-marker-chip",
+      profileId: "profile-ai-marker",
+      title: "Marker link",
+      createdAt: "2026-04-26T09:00:00.000Z",
+      updatedAt: "2026-04-26T09:00:00.000Z",
+    }];
+    storedChatMessages = [{
+      id: "message-marker-chip",
+      threadId: "thread-marker-chip",
+      profileId: "profile-ai-marker",
+      role: "assistant",
+      content: "Review deana://marker/rs6025 and [missing](deana://marker/rs123456789).",
+      createdAt: "2026-04-26T09:01:00.000Z",
+    }];
+
+    renderApp("/explorer/profile-ai-marker?tab=ai");
+
+    const message = await screen.findByText(/Review/i);
+    const messageNode = message.closest(".dn-ai-message");
+    expect(messageNode).not.toBeNull();
+    const messageQueries = within(messageNode as HTMLElement);
+
+    await user.click(messageQueries.getByRole("button", { name: "rs6025" }));
+    const inspector = await screen.findByLabelText("Chat inspector");
+    expect(await within(inspector).findByRole("heading", { name: "rs6025" })).toBeInTheDocument();
+
+    await user.click(messageQueries.getByRole("button", { name: "missing" }));
+    expect(await within(inspector).findByRole("heading", { name: "Marker unavailable" })).toBeInTheDocument();
+  });
+
   it("shows follow-up prompt suggestions and sends the follow-up body", async () => {
     const user = userEvent.setup();
     storedProfiles = [makeSavedProfile({ id: "profile-ai" })];
@@ -1075,6 +1181,63 @@ describe("Deana app", () => {
     expect(screen.getByText("Medical finding 55")).toBeInTheDocument();
   });
 
+  it("lists raw markers with finding counts and opens linked findings from the marker inspector", async () => {
+    const user = userEvent.setup();
+    const baseProfile = makeSavedProfile({ id: "profile-markers" });
+    const profile = {
+      ...baseProfile,
+      dna: {
+        ...baseProfile.dna,
+        markerCount: baseProfile.dna.markerCount + 1,
+        markers: [...baseProfile.dna.markers, ["rs999999", "2", 123456, "AA"] as [string, string, number, string]],
+      },
+    };
+    storedProfiles = [profile];
+    const rs6025Summary = markerSummariesFromProfile(profile).find((marker) => marker.rsid === "rs6025");
+    expect(rs6025Summary?.findingIds.length).toBeGreaterThan(0);
+
+    renderApp("/explorer/profile-markers?tab=markers");
+
+    await screen.findByRole("heading", { name: "Markers" });
+    expect(await screen.findByText("rs999999")).toBeInTheDocument();
+    expect(screen.getByText("0 findings")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /rs6025/i }));
+
+    const inspector = await screen.findByLabelText("Marker inspector");
+    expect(within(inspector).getByRole("heading", { name: "rs6025" })).toBeInTheDocument();
+    expect(within(inspector).getByText(new RegExp(`${rs6025Summary?.findingCount ?? 0} findings?`))).toBeInTheDocument();
+    const externalHeading = within(inspector).getByRole("heading", { name: "External marker source" });
+    const linkedHeading = within(inspector).getByRole("heading", { name: "Linked findings" });
+    expect(Boolean(externalHeading.compareDocumentPosition(linkedHeading) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(within(inspector).getByRole("link", { name: /SNPedia rs6025/i })).toHaveAttribute("href", "https://www.snpedia.com/index.php/Rs6025");
+
+    await user.click(within(inspector).getByRole("button", { name: new RegExp(rs6025Summary?.findingTitles[0] ?? "", "i") }));
+    expect(await within(inspector).findByRole("heading", { name: rs6025Summary?.findingTitles[0] })).toBeInTheDocument();
+
+    await user.click(within(inspector).getByRole("button", { name: /Back/i }));
+    expect(within(inspector).getByRole("heading", { name: "rs6025" })).toBeInTheDocument();
+  });
+
+  it("starts an AI chat from the marker inspector when consent is already accepted", async () => {
+    const user = userEvent.setup();
+    let idCounter = 0;
+    vi.stubGlobal("crypto", {
+      randomUUID: () => `marker-ai-${++idCounter}`,
+    });
+    storedProfiles = [makeSavedProfile({ id: "profile-marker-ai" })];
+    storedAiConsents["profile-marker-ai"] = { accepted: true, version: 1, acceptedAt: new Date().toISOString() };
+
+    renderApp("/explorer/profile-marker-ai?tab=markers&selected=rs6025");
+
+    const inspector = await screen.findByLabelText("Marker inspector");
+    expect(await within(inspector).findByRole("heading", { name: "rs6025" })).toBeInTheDocument();
+    await user.click(within(inspector).getByRole("button", { name: "Ask AI" }));
+
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/explorer/profile-marker-ai?tab=ai"));
+    expect(await screen.findByText(/Tell me more about marker rs6025 in my Deana report/i)).toBeInTheDocument();
+  });
+
   it("mounts a fresh category list with top scroll when switching tabs", async () => {
     const user = userEvent.setup();
     storedProfiles = [makeTabFacetProfile("profile-tab-remount")];
@@ -1086,7 +1249,7 @@ describe("Deana app", () => {
     medicalPanel.scrollTop = 180;
 
     await user.click(screen.getByRole("button", { name: "Drug response" }));
-    await screen.findByText("Drug response explorer");
+    await screen.findByRole("heading", { name: "Drug response" });
 
     const drugPanel = container.querySelector(".dn-finding-list-panel") as HTMLElement;
     expect(drugPanel).not.toBe(medicalPanel);

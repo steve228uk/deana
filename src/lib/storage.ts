@@ -90,6 +90,7 @@ export interface StoredSearchIndexCache {
 
 export interface SearchIndexSource {
   metadata: SearchIndexProfileMetadata;
+  markers: ParsedDnaFile["markers"];
   entries: StoredReportEntry[];
 }
 
@@ -734,17 +735,21 @@ function loadReportEntriesForProfile(store: IDBObjectStore, profileId: string): 
 
 export async function loadSearchIndexSource(profileId: string): Promise<SearchIndexSource | null> {
   const db = await openDb();
-  const transaction = db.transaction([PROFILE_META_STORE, REPORT_ENTRY_STORE], "readonly");
+  const transaction = db.transaction([PROFILE_META_STORE, PROFILE_DNA_STORE, REPORT_ENTRY_STORE], "readonly");
   const metaPromise = requestToPromise(
     transaction.objectStore(PROFILE_META_STORE).get(profileId) as IDBRequest<StoredProfileMetaRecord | undefined>,
   );
+  const dnaPromise = requestToPromise(
+    transaction.objectStore(PROFILE_DNA_STORE).get(profileId) as IDBRequest<StoredProfileDnaRecord | undefined>,
+  );
   const entriesPromise = loadReportEntriesForProfile(transaction.objectStore(REPORT_ENTRY_STORE), profileId);
-  const [meta, entries] = await Promise.all([metaPromise, entriesPromise]);
+  const [meta, dna, entries] = await Promise.all([metaPromise, dnaPromise, entriesPromise]);
 
-  if (!meta) return null;
+  if (!meta || !dna) return null;
 
   return {
     metadata: toSearchIndexProfileMetadata(meta),
+    markers: dna.dna.markers,
     entries,
   };
 }

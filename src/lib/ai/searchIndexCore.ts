@@ -7,7 +7,16 @@ import {
   saveSearchIndexCache,
 } from "../storage";
 import { rankingQualityMultiplier } from "../ranking";
-import type { EvidenceTier, FindingOutcome, ReputeStatus, StoredReportEntry } from "../../types";
+import type {
+  CompactMarker,
+  EvidenceTier,
+  FindingOutcome,
+  MarkerExplorerPage,
+  MarkerSort,
+  ReputeStatus,
+  StoredMarkerSummary,
+  StoredReportEntry,
+} from "../../types";
 import type { ExplorerFilters } from "../explorer";
 
 interface LightEntry {
@@ -36,6 +45,13 @@ interface LightEntry {
   sortEvidence: number;
   sortPublications: number;
   sortAlphabetical: string;
+}
+
+interface MarkerDocument extends StoredMarkerSummary {
+  id: string;
+  genesText: string;
+  body: string;
+  sortOrder: number;
 }
 
 export interface SearchCandidate {
@@ -68,6 +84,18 @@ export interface SearchExplorerEntryIdsResult {
   indexStatus: SearchIndexStatus;
 }
 
+export interface SearchMarkerPageRequest {
+  profileId: string;
+  query: string;
+  sort: MarkerSort;
+  offset: number;
+  limit: number;
+}
+
+export interface SearchMarkerPageResult extends MarkerExplorerPage {
+  indexStatus: SearchIndexStatus;
+}
+
 export type SearchIndexFallbackReason = "memory-budget" | "unavailable" | "index-error";
 
 export type SearchIndexStatus =
@@ -79,6 +107,9 @@ export type WorkerRequest =
   | { type: "prewarm"; requestId: string; profileId: string }
   | { type: "waitForIndex"; requestId: string; profileId: string }
   | { type: "searchExplorer"; requestId: string; payload: SearchExplorerEntryIdsRequest }
+  | { type: "prewarmMarkers"; requestId: string; profileId: string }
+  | { type: "searchMarkers"; requestId: string; payload: SearchMarkerPageRequest }
+  | { type: "loadMarker"; requestId: string; profileId: string; rsid: string }
   | { type: "searchWithFields"; requestId: string; profileId: string; terms: string[]; limit: number }
   | { type: "queryCandidates"; requestId: string; profileId: string; terms: string[]; limit: number }
   | { type: "clearIndex"; requestId: string; profileId?: string; options?: { preservePersistentCache?: boolean } };
@@ -87,6 +118,9 @@ export type WorkerResponse =
   | { type: "prewarm"; requestId: string; status: SearchIndexStatus }
   | { type: "waitForIndex"; requestId: string; status: SearchIndexStatus }
   | { type: "searchExplorer"; requestId: string; result: SearchExplorerEntryIdsResult }
+  | { type: "prewarmMarkers"; requestId: string; status: SearchIndexStatus }
+  | { type: "searchMarkers"; requestId: string; result: SearchMarkerPageResult }
+  | { type: "loadMarker"; requestId: string; result: StoredMarkerSummary | null }
   | { type: "searchWithFields"; requestId: string; result: SearchCandidate[] }
   | { type: "queryCandidates"; requestId: string; result: string[] }
   | { type: "clearIndex"; requestId: string }
@@ -95,6 +129,11 @@ export type WorkerResponse =
 const indexes = new Map<string, MiniSearch<LightEntry>>();
 const indexStatuses = new Map<string, SearchIndexStatus>();
 const inFlight = new Map<string, Promise<SearchIndexStatus>>();
+const markerIndexes = new Map<string, MiniSearch<MarkerDocument>>();
+const markerDocuments = new Map<string, MarkerDocument[]>();
+const markerDocumentById = new Map<string, Map<string, MarkerDocument>>();
+const markerIndexStatuses = new Map<string, SearchIndexStatus>();
+const markerInFlight = new Map<string, Promise<SearchIndexStatus>>();
 
 // Version 10: invalidates cached ranks after source-aware validity scoring changes.
 const SEARCH_INDEX_CACHE_VERSION = 10;
@@ -152,6 +191,13 @@ function createSearchIndex(): MiniSearch<LightEntry> {
       "outcome", "significance", "repute", "coverage", "publicationBucket",
       "geneValues", "tagValues", "sourceNames",
     ],
+  });
+}
+
+function createMarkerIndex(): MiniSearch<MarkerDocument> {
+  return new MiniSearch<MarkerDocument>({
+    idField: "id",
+    fields: ["rsid", "genotype", "chromosome", "genesText", "body"],
   });
 }
 
@@ -291,6 +337,110 @@ function toLightEntry(entry: StoredReportEntry): LightEntry {
   };
 }
 
+function markerId(rsid: string): string {
+  return rsid.trim().toLowerCase();
+}
+
+function compactUnique(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  values.forEach((value) => {
+    const trimmed = value?.trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(trimmed);
+  });
+  return result;
+}
+
+function markerDocumentToSummary(document: Pick<
+  MarkerDocument,
+  "rsid" | "chromosome" | "position" | "genotype" | "genes" | "findingIds" | "findingTitles" | "findingCount"
+>): StoredMarkerSummary {
+  return {
+    rsid: document.rsid,
+    chromosome: document.chromosome,
+    position: document.position,
+    genotype: document.genotype,
+    genes: document.genes,
+    findingIds: document.findingIds,
+    findingTitles: document.findingTitles,
+    findingCount: document.findingCount,
+  };
+}
+
+function setMarkerDocumentCache(
+  profileId: string,
+  documents: MarkerDocument[],
+  status: SearchIndexStatus,
+): SearchIndexStatus {
+  markerDocuments.set(profileId, documents);
+  markerDocumentById.set(profileId, new Map(documents.map((document) => [document.id, document])));
+  markerIndexStatuses.set(profileId, status);
+  return status;
+}
+
+function buildMarkerDocuments(markers: CompactMarker[], entries: StoredReportEntry[]): MarkerDocument[] {
+  const aggregates = new Map<string, {
+    genes: string[];
+    findingIds: string[];
+    findingTitles: string[];
+    bodyParts: string[];
+  }>();
+
+  for (const entry of entries) {
+    for (const marker of entry.matchedMarkers) {
+      const id = markerId(marker.rsid);
+      if (!id) continue;
+      const aggregate = aggregates.get(id) ?? {
+        genes: [],
+        findingIds: [],
+        findingTitles: [],
+        bodyParts: [],
+      };
+      if (marker.gene) aggregate.genes.push(marker.gene);
+      aggregate.genes.push(...entry.genes);
+      aggregate.findingIds.push(entry.id);
+      aggregate.findingTitles.push(entry.title);
+      aggregate.bodyParts.push(
+        entry.title,
+        entry.summary,
+        entry.genotypeSummary,
+        ...entry.genes,
+        ...entry.topics,
+        ...entry.conditions,
+        ...entry.sources.map((source) => source.name),
+      );
+      aggregates.set(id, aggregate);
+    }
+  }
+
+  return markers.map((marker, index) => {
+    const [rsid, chromosome, position, genotype] = marker;
+    const aggregate = aggregates.get(markerId(rsid));
+    const genes = compactUnique(aggregate?.genes ?? []);
+    const findingIds = compactUnique(aggregate?.findingIds ?? []);
+    const findingTitles = compactUnique(aggregate?.findingTitles ?? []);
+
+    return {
+      id: markerId(rsid),
+      rsid,
+      chromosome,
+      position,
+      genotype,
+      genes,
+      genesText: genes.join(" "),
+      findingIds,
+      findingTitles,
+      findingCount: findingIds.length,
+      body: compactUnique(aggregate?.bodyParts ?? []).join(" "),
+      sortOrder: index,
+    };
+  });
+}
+
 function toSearchCandidate(result: SearchResult): SearchCandidate {
   return {
     id: result.id as string,
@@ -309,8 +459,8 @@ function toSearchCandidate(result: SearchResult): SearchCandidate {
   };
 }
 
-function insertBatched(index: MiniSearch<LightEntry>, documents: LightEntry[]): void {
-  let batch: LightEntry[] = [];
+function insertBatched<T>(index: MiniSearch<T>, documents: T[]): void {
+  let batch: T[] = [];
   for (const document of documents) {
     batch.push(document);
     if (batch.length >= SEARCH_INDEX_INSERT_BATCH_SIZE) {
@@ -475,6 +625,166 @@ export async function prewarmSearchIndex(profileId: string): Promise<SearchIndex
   return job;
 }
 
+export async function prewarmMarkerIndex(profileId: string): Promise<SearchIndexStatus> {
+  if (markerIndexes.has(profileId)) return markerIndexStatuses.get(profileId) ?? EMPTY_READY_STATUS;
+  const existingStatus = markerIndexStatuses.get(profileId);
+  if (existingStatus && existingStatus.state !== "ready") return existingStatus;
+  const pendingJob = markerInFlight.get(profileId);
+  if (pendingJob) return pendingJob;
+
+  const job = (async () => {
+    const source = await loadSearchIndexSource(profileId);
+    if (!source) {
+      const index = createMarkerIndex();
+      markerIndexes.set(profileId, index);
+      return setMarkerDocumentCache(profileId, [], readyIndexStatus(0));
+    }
+
+    const documents = buildMarkerDocuments(source.markers, source.entries);
+    const budget = activeMemoryBudget();
+    const textBytes = documents.reduce((total, document) => total + (
+      document.rsid.length +
+      document.chromosome.length +
+      document.genotype.length +
+      document.genesText.length +
+      document.body.length
+    ) * 2, 0);
+    const budgetStatus = memoryBudgetSkipStatus(budget, documents.length, textBytes);
+    if (budgetStatus) {
+      return setMarkerDocumentCache(profileId, documents, budgetStatus);
+    }
+
+    const index = createMarkerIndex();
+    if (documents.length > 0) insertBatched(index, documents);
+    markerIndexes.set(profileId, index);
+    return setMarkerDocumentCache(profileId, documents, readyIndexStatus(documents.length));
+  })().finally(() => markerInFlight.delete(profileId));
+
+  markerInFlight.set(profileId, job);
+  return job;
+}
+
+function markerPageFromDocuments(
+  documents: MarkerDocument[],
+  offset: number,
+  limit: number,
+  indexStatus: SearchIndexStatus,
+): SearchMarkerPageResult {
+  const markers = documents.slice(offset, offset + limit).map(markerDocumentToSummary);
+  const nextOffset = offset + markers.length;
+
+  return {
+    markers,
+    nextCursor: nextOffset < documents.length ? JSON.stringify({ offset: nextOffset }) : null,
+    totalLoaded: offset + markers.length,
+    hasMore: nextOffset < documents.length,
+    indexStatus,
+  };
+}
+
+function rsidNumber(value: string): number {
+  const match = /^rs(\d+)$/i.exec(value.trim());
+  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+}
+
+function chromosomeRank(value: string): number {
+  const normalized = value.trim().toUpperCase().replace(/^CHR/, "");
+  if (/^\d+$/.test(normalized)) return Number(normalized);
+  if (normalized === "X") return 23;
+  if (normalized === "Y") return 24;
+  if (normalized === "M" || normalized === "MT") return 25;
+  return 99;
+}
+
+function compareMarkerDocuments(left: MarkerDocument, right: MarkerDocument, sort: MarkerSort): number {
+  switch (sort) {
+    case "rsid":
+      return rsidNumber(left.rsid) - rsidNumber(right.rsid)
+        || left.rsid.localeCompare(right.rsid)
+        || left.sortOrder - right.sortOrder;
+    case "location":
+      return chromosomeRank(left.chromosome) - chromosomeRank(right.chromosome)
+        || left.position - right.position
+        || rsidNumber(left.rsid) - rsidNumber(right.rsid)
+        || left.sortOrder - right.sortOrder;
+    case "raw":
+      return left.sortOrder - right.sortOrder;
+    case "findings":
+    default:
+      return right.findingCount - left.findingCount
+        || rsidNumber(left.rsid) - rsidNumber(right.rsid)
+        || left.sortOrder - right.sortOrder;
+  }
+}
+
+function sortMarkerDocuments(documents: MarkerDocument[], sort: MarkerSort): MarkerDocument[] {
+  if (sort === "raw") return documents;
+  return [...documents].sort((left, right) => compareMarkerDocuments(left, right, sort));
+}
+
+function decodeMarkerOffset(cursorOffset: number): number {
+  return Number.isFinite(cursorOffset) && cursorOffset > 0 ? cursorOffset : 0;
+}
+
+export async function searchMarkerPage({
+  profileId,
+  query,
+  sort,
+  offset,
+  limit,
+}: SearchMarkerPageRequest): Promise<SearchMarkerPageResult> {
+  const status = await prewarmMarkerIndex(profileId);
+  const documents = markerDocuments.get(profileId) ?? [];
+  const normalizedOffset = decodeMarkerOffset(offset);
+  const trimmedQuery = query.trim();
+  const normalizedQuery = trimmedQuery.toLowerCase();
+
+  if (!trimmedQuery || status.state !== "ready") {
+    const filteredDocuments = trimmedQuery
+      ? documents.filter((document) => {
+        const haystack = [
+          document.rsid,
+          document.genotype,
+          document.chromosome,
+          document.position,
+          document.genesText,
+          document.body,
+        ].join(" ").toLowerCase();
+        return haystack.includes(normalizedQuery);
+      })
+      : documents;
+    return markerPageFromDocuments(sortMarkerDocuments(filteredDocuments, sort), normalizedOffset, limit, status);
+  }
+
+  const index = markerIndexes.get(profileId);
+  if (!index) return markerPageFromDocuments(sortMarkerDocuments(documents, sort), normalizedOffset, limit, status);
+  const documentsById = markerDocumentById.get(profileId) ?? new Map();
+
+  const hits = index.search(trimmedQuery, {
+    boost: {
+      rsid: 12,
+      genesText: 8,
+      genotype: 4,
+      chromosome: 2,
+      body: 1,
+    },
+    fuzzy: (term) => term.length >= 5 ? 0.2 : false,
+    maxFuzzy: 2,
+    prefix: (term) => term.length >= 2,
+    combineWith: "AND",
+  })
+    .map((result) => documentsById.get(result.id as string))
+    .filter((document): document is MarkerDocument => Boolean(document));
+
+  return markerPageFromDocuments(sortMarkerDocuments(hits, sort), normalizedOffset, limit, status);
+}
+
+export async function loadMarkerSummary(profileId: string, rsid: string): Promise<StoredMarkerSummary | null> {
+  await prewarmMarkerIndex(profileId);
+  const document = markerDocumentById.get(profileId)?.get(markerId(rsid));
+  return document ? markerDocumentToSummary(document) : null;
+}
+
 export async function queryCandidateIds(profileId: string, terms: string[], limit = 50): Promise<string[]> {
   const index = indexes.get(profileId);
   if (!index) return [];
@@ -543,11 +853,21 @@ export function clearSearchIndex(
     indexes.delete(profileId);
     indexStatuses.delete(profileId);
     inFlight.delete(profileId);
+    markerIndexes.delete(profileId);
+    markerDocuments.delete(profileId);
+    markerDocumentById.delete(profileId);
+    markerIndexStatuses.delete(profileId);
+    markerInFlight.delete(profileId);
     if (!options.preservePersistentCache) void deleteSearchIndexCache(profileId);
     return;
   }
   indexes.clear();
   indexStatuses.clear();
   inFlight.clear();
+  markerIndexes.clear();
+  markerDocuments.clear();
+  markerDocumentById.clear();
+  markerIndexStatuses.clear();
+  markerInFlight.clear();
   if (!options.preservePersistentCache) void deleteSearchIndexCache();
 }
