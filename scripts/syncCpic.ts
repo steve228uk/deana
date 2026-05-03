@@ -19,6 +19,7 @@ interface RawCpicPair {
   genesymbol: string;
   drugname: string;
   level: string;
+  levelStatus?: string;
 }
 
 const jsonHeaders = { headers: { Accept: "application/json" } };
@@ -35,6 +36,7 @@ async function fetchPairs(): Promise<RawCpicPair[]> {
       genesymbol: String(r.genesymbol ?? ""),
       drugname: String(r.drugname ?? ""),
       level: String(r.cpiclevel ?? ""),
+      levelStatus: String(r.cpiclevelstatus ?? r.levelstatus ?? ""),
     }))
     .filter((p) => p.genesymbol && p.drugname && p.level);
 }

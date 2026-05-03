@@ -18,8 +18,9 @@ import {
   normalizeClinicalSignificance,
   normalizeConditions,
 } from "./normalization";
+import { calculateFindingRank, evidenceTierSortValue } from "./ranking";
 
-export const REPORT_VERSION = 8;
+export const REPORT_VERSION = 10;
 
 type MarkerMap = Map<string, CompactMarker>;
 
@@ -304,22 +305,49 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
         tone,
         outcome,
         sort: {
+          rank: calculateFindingRank({
+            evidenceTier: record.evidenceLevel,
+            outcome,
+            repute,
+            coverage,
+            publicationCount,
+            magnitude: record.magnitude,
+            clingenClassification,
+            pharmgkbLevel: record.pharmgkbLevel,
+            cpicLevel: record.cpicLevel,
+            cpicLevelStatus: record.cpicLevelStatus,
+            clinvarStars: record.clinvarStars,
+            gwasPValue: record.gwasPValue,
+            gwasEffect: record.gwasEffect,
+            gwasHasReplication: record.gwasHasReplication,
+            gwasInitialSampleSize: record.gwasInitialSampleSize,
+            gwasReplicationSampleSize: record.gwasReplicationSampleSize,
+            gwasFullSummaryStats: record.gwasFullSummaryStats,
+            clinicalSignificance: record.clinicalSignificance,
+            normalizedClinicalSignificance,
+            sources: [{ id: record.sourceId, name: sourceName }],
+            matchedMarkers: match.matchedMarkers,
+          }),
           severity: severityForLocalEvidence(outcome, repute, category),
-          evidence:
-            record.evidenceLevel === "high"
-              ? 4
-              : record.evidenceLevel === "moderate"
-                ? 3
-                : record.evidenceLevel === "emerging"
-                  ? 2
-                  : 1,
+          evidence: evidenceTierSortValue(record.evidenceLevel),
           alphabetical: title.toLowerCase(),
           publications: publicationCount,
         },
         confidenceNote: `Matched locally from evidence pack ${supplement.packVersion}.`,
         disclaimer: "Informational only. Do not use this result alone for diagnosis, treatment, or prescribing decisions.",
         pharmgkbLevel: record.pharmgkbLevel,
+        cpicLevel: record.cpicLevel,
+        cpicLevelStatus: record.cpicLevelStatus,
         clingenClassification,
+        clinvarReviewStatus: record.clinvarReviewStatus,
+        clinvarStars: record.clinvarStars,
+        gwasPValue: record.gwasPValue,
+        gwasEffect: record.gwasEffect,
+        gwasHasReplication: record.gwasHasReplication,
+        gwasInitialSampleSize: record.gwasInitialSampleSize,
+        gwasReplicationSampleSize: record.gwasReplicationSampleSize,
+        gwasStudyAccession: record.gwasStudyAccession,
+        gwasFullSummaryStats: record.gwasFullSummaryStats,
       };
     });
 }

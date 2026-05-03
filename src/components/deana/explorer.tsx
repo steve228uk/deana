@@ -35,6 +35,7 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = tabs.map(
 const visibleTabsWithoutAi = tabs.filter((item) => item.id !== "ai");
 const visibleNavWithoutAi = nav.filter((item) => item.id !== "ai");
 const SORT_FILTER_OPTIONS: Array<[string, string]> = [
+  ["rank", "Best evidence match"],
   ["severity", "Severity / priority"],
   ["evidence", "Evidence strength"],
   ["publications", "Publication count"],
@@ -551,7 +552,9 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
         <div className="dn-finding-card__meta">
           <span>{entry.sources[0]?.name ?? "Source"}</span>
           <span>{entry.evidenceTier} · {entry.coverage}</span>
+          {entry.clinvarStars !== undefined ? <ClinVarStarsBadge stars={entry.clinvarStars} /> : null}
           {entry.pharmgkbLevel ? <PharmGkbLevelBadge level={entry.pharmgkbLevel} /> : null}
+          {entry.cpicLevel ? <span>CPIC {entry.cpicLevel}</span> : null}
           {entry.clingenClassification ? <span>{entry.clingenClassification}</span> : null}
           <span className="dn-priority-pill">{priorityLabel(entry)}</span>
         </div>
@@ -648,7 +651,9 @@ export function FindingDetailContent({
       <Title id={titleId}>{finding.title}</Title>
       <div className="dn-finding-badges">
         <span className={`dn-priority-pill dn-finding-tone-${toneForEntry(finding)}`}>{priorityLabel(finding)}</span>
+        {finding.clinvarStars !== undefined ? <ClinVarStarsBadge stars={finding.clinvarStars} /> : null}
         {finding.pharmgkbLevel ? <PharmGkbLevelBadge level={finding.pharmgkbLevel} /> : null}
+        {finding.cpicLevel ? <span>CPIC level {finding.cpicLevel}</span> : null}
       </div>
       {summary ? <div className="dn-inspector__intro">{renderMarkdown(summary)}</div> : null}
       {finding.detail.trim() ? (
@@ -741,6 +746,28 @@ function EvidenceSnapshot({ finding }: { finding: StoredReportEntry }) {
           <div>
             <dt>ClinGen classification</dt>
             <dd>{finding.clingenClassification}</dd>
+          </div>
+        ) : null}
+        {finding.clinvarStars !== undefined ? (
+          <div>
+            <dt>ClinVar review</dt>
+            <dd>{formatClinVarStars(finding.clinvarStars)}{finding.clinvarReviewStatus ? ` · ${finding.clinvarReviewStatus}` : ""}</dd>
+          </div>
+        ) : null}
+        {finding.cpicLevel ? (
+          <div>
+            <dt>CPIC level</dt>
+            <dd>{finding.cpicLevel}{finding.cpicLevelStatus ? ` · ${finding.cpicLevelStatus}` : ""}</dd>
+          </div>
+        ) : null}
+        {finding.gwasPValue !== undefined ? (
+          <div>
+            <dt>GWAS signal</dt>
+            <dd>
+              p={formatPValue(finding.gwasPValue)}
+              {finding.gwasHasReplication ? " · replicated" : ""}
+              {typeof finding.gwasEffect === "number" ? ` · effect ${finding.gwasEffect}` : ""}
+            </dd>
           </div>
         ) : null}
         <div>
@@ -1058,6 +1085,20 @@ function formatMagnitude(magnitude: number): string {
     }).format(magnitude);
 }
 
+function formatClinVarStars(stars: number): string {
+  const normalized = Math.max(0, Math.min(4, Math.floor(stars)));
+  return `${normalized}/4 stars`;
+}
+
+function formatPValue(value: number): string {
+  if (!Number.isFinite(value)) return "n/a";
+  return value < 0.001 ? value.toExponential(2) : value.toPrecision(3);
+}
+
+function ClinVarStarsBadge({ stars }: { stars: number }) {
+  return <span>{formatClinVarStars(stars)}</span>;
+}
+
 function evidenceSnapshotItems(entry: StoredReportEntry): Array<{ label: string; value: string }> {
   const firstMarker = entry.matchedMarkers[0];
   const snapshot: Array<{ label: string; value: string }> = [];
@@ -1068,6 +1109,15 @@ function evidenceSnapshotItems(entry: StoredReportEntry): Array<{ label: string;
 
   if (typeof entry.magnitude === "number") {
     snapshot.push({ label: "Magnitude", value: formatMagnitude(entry.magnitude) });
+  }
+  if (entry.clinvarStars !== undefined) {
+    snapshot.push({ label: "ClinVar", value: formatClinVarStars(entry.clinvarStars) });
+  }
+  if (entry.cpicLevel) {
+    snapshot.push({ label: "CPIC", value: `Level ${entry.cpicLevel}` });
+  }
+  if (entry.gwasPValue !== undefined) {
+    snapshot.push({ label: "GWAS", value: `p=${formatPValue(entry.gwasPValue)}${entry.gwasHasReplication ? ", replicated" : ""}` });
   }
 
   return snapshot;

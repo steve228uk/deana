@@ -1088,6 +1088,7 @@ describe("Deana app", () => {
       tone: "caution" as const,
       outcome: "negative" as const,
       sort: {
+        rank: 1_250,
         severity: 82,
         evidence: 1,
         alphabetical: "rs995030 genotype context",

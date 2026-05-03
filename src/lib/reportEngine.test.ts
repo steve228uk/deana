@@ -22,7 +22,9 @@ describe("reportEngine", () => {
       outcome: expect.any(String),
       sources: expect.any(Array),
       matchedMarkers: expect.any(Array),
-      sort: expect.any(Object),
+      sort: expect.objectContaining({
+        rank: expect.any(Number),
+      }),
     });
   });
 
@@ -162,6 +164,8 @@ describe("reportEngine", () => {
             release: "Auto-generated from ClinVar/GWAS source data",
             evidenceLevel: "high",
             clinicalSignificance: null,
+            clinvarReviewStatus: "reviewed by expert panel",
+            clinvarStars: 3,
             pmids: ["30072576"],
             notes: ["test"],
           },
@@ -189,6 +193,8 @@ describe("reportEngine", () => {
       name: "ClinVar",
       url: SOURCE_LIBRARY.clinvar.url,
     });
+    expect(apoe?.clinvarReviewStatus).toBe("reviewed by expert panel");
+    expect(apoe?.clinvarStars).toBe(3);
   });
 
   it("extracts legacy ClinGen classifications from local evidence titles", () => {

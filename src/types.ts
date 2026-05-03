@@ -131,7 +131,18 @@ export interface EvidencePackRecord {
   riskSummary?: string;
   qualityTier?: "tier-1";
   pharmgkbLevel?: string;
+  cpicLevel?: string;
+  cpicLevelStatus?: string;
   clingenClassification?: string;
+  clinvarReviewStatus?: string;
+  clinvarStars?: number;
+  gwasPValue?: number;
+  gwasEffect?: number | null;
+  gwasHasReplication?: boolean;
+  gwasInitialSampleSize?: string;
+  gwasReplicationSampleSize?: string;
+  gwasStudyAccession?: string;
+  gwasFullSummaryStats?: boolean;
   notes: string[];
 }
 
@@ -183,6 +194,7 @@ export interface ReportEntry {
   tone: InsightTone;
   outcome: FindingOutcome;
   sort: {
+    rank: number;
     severity: number;
     evidence: number;
     alphabetical: string;
@@ -191,7 +203,18 @@ export interface ReportEntry {
   confidenceNote: string;
   disclaimer: string;
   pharmgkbLevel?: string;
+  cpicLevel?: string;
+  cpicLevelStatus?: string;
   clingenClassification?: string;
+  clinvarReviewStatus?: string;
+  clinvarStars?: number;
+  gwasPValue?: number;
+  gwasEffect?: number | null;
+  gwasHasReplication?: boolean;
+  gwasInitialSampleSize?: string;
+  gwasReplicationSampleSize?: string;
+  gwasStudyAccession?: string;
+  gwasFullSummaryStats?: boolean;
 }
 
 export interface TabSummary {
