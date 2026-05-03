@@ -1138,28 +1138,60 @@ function isHighConfidenceClinGenClassification(classification: string): boolean 
   return classification === "Definitive" || classification === "Strong";
 }
 
+export function clingenDiseaseWordsOverlap(conditions: string[], disease: string): boolean {
+  const STOP_WORDS = new Set(["and", "or", "of", "the", "a", "an", "with", "to", "in", "by", "for"]);
+  const diseaseWords = new Set(
+    disease.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w)),
+  );
+  return conditions.some((condition) => {
+    const condWords = condition.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+    return condWords.some((word) => diseaseWords.has(word));
+  });
+}
+
+interface PathogenicClinVarMarker {
+  rsid: string;
+  riskAllele?: string;
+  conditions: string[];
+}
+
 async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promise<EvidencePackRecord[]> {
   const sourceFile = sourceCacheFiles.clingen;
   if (!existsSync(sourceFile)) return [];
 
   const classifications = JSON.parse(await readFile(sourceFile, "utf8")) as ClinGenClassification[];
 
-  // Build gene → rsid map from ClinVar records so we can key ClinGen data on rsids
-  const geneToRsids = new Map<string, string[]>();
+  // Build gene → pathogenic ClinVar markers only. Gene-only matching against any ClinVar
+  // significance would produce false positives (e.g. a "risk factor" variant for disease A in
+  // gene X wrongly backing a ClinGen classification for disease B in the same gene).
+  const geneToMarkers = new Map<string, PathogenicClinVarMarker[]>();
   for (const record of clinvarRecords) {
+    if (!/pathogenic/i.test(record.clinicalSignificance ?? "")) continue;
+    const rsid = record.markerIds[0];
+    if (!rsid) continue;
     for (const gene of record.genes ?? []) {
       const upper = gene.toUpperCase();
-      const existing = geneToRsids.get(upper);
-      if (existing) { if (!existing.includes(record.markerIds[0])) existing.push(record.markerIds[0]); }
-      else geneToRsids.set(upper, [record.markerIds[0]]);
+      const marker: PathogenicClinVarMarker = { rsid, riskAllele: record.riskAllele, conditions: record.conditions ?? [] };
+      const existing = geneToMarkers.get(upper);
+      if (existing) { existing.push(marker); }
+      else geneToMarkers.set(upper, [marker]);
     }
   }
 
   const records: EvidencePackRecord[] = [];
   for (const cls of classifications) {
     const gene = cls.gene.toUpperCase();
-    const rsids = geneToRsids.get(gene);
-    if (!rsids || rsids.length === 0) continue;
+    const markers = geneToMarkers.get(gene);
+    if (!markers || markers.length === 0) continue;
+
+    // Prefer markers whose ClinVar conditions overlap with the ClinGen disease label.
+    // Fall back to any pathogenic marker for the gene if none match by condition.
+    const matchingMarkers = markers.filter(
+      (m) => m.conditions.length === 0 || clingenDiseaseWordsOverlap(m.conditions, cls.disease),
+    );
+    const candidateMarkers = matchingMarkers.length > 0 ? matchingMarkers : markers;
+    const rsids = Array.from(new Set(candidateMarkers.map((m) => m.rsid))).slice(0, 3);
+    if (rsids.length === 0) continue;
 
     const evidenceLevel = clingenEvidenceTier(cls.classification);
     const pmids = cls.pmids?.length ? Array.from(new Set(cls.pmids)) : [];
@@ -1174,7 +1206,7 @@ async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promis
       role: "primary",
       category: "medical",
       subcategory: "gene-disease-validity",
-      markerIds: rsids.slice(0, 3),
+      markerIds: rsids,
       genes: [cls.gene],
       title: `${cls.gene} / ${cls.disease}`,
       summary: `ClinGen has classified the relationship between ${cls.gene} and ${cls.disease} as ${cls.classification} based on systematic evidence review.`,
