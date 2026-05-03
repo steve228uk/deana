@@ -5,6 +5,7 @@ import {
   EvidencePackMatch,
   EvidenceSupplement,
   EvidenceTier,
+  InsightCategory,
   InsightTone,
   ParsedDnaFile,
   ProfileSupplements,
@@ -43,7 +44,7 @@ function facetValues<T extends string>(values: readonly T[], preferred: readonly
   return preferred.filter((value) => values.includes(value));
 }
 
-function buildFacets(entries: ReportEntry[]): ReportFacets {
+export function buildFacets(entries: ReportEntry[]): ReportFacets {
   const clinicalSignificances = uniq(
     entries
       .map((entry) => entry.normalizedClinicalSignificance)
@@ -75,6 +76,24 @@ function buildFacets(entries: ReportEntry[]): ReportFacets {
       uniq(entries.map((entry) => entry.publicationBucket)) as Array<ReportEntry["publicationBucket"]>,
       ["0", "1-5", "6-20", "21+"],
     ),
+  };
+}
+
+export function buildCategoryFacets(entries: ReportEntry[]): Record<InsightCategory, ReportFacets> {
+  const entriesByCategory: Record<InsightCategory, ReportEntry[]> = {
+    medical: [],
+    traits: [],
+    drug: [],
+  };
+
+  for (const entry of entries) {
+    entriesByCategory[entry.category].push(entry);
+  }
+
+  return {
+    medical: buildFacets(entriesByCategory.medical),
+    traits: buildFacets(entriesByCategory.traits),
+    drug: buildFacets(entriesByCategory.drug),
   };
 }
 
@@ -400,5 +419,6 @@ export function generateReport(dna: ParsedDnaFile, supplements?: ProfileSuppleme
     tabs: buildTabs(entries),
     entries,
     facets: buildFacets(entries),
+    categoryFacets: buildCategoryFacets(entries),
   };
 }

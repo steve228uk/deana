@@ -1,9 +1,11 @@
 import { EVIDENCE_PACK_VERSION } from "./evidencePack";
 import { DEFAULT_FILTERS, ExplorerFilters, buildEntrySearchText, matchesEntryFilters } from "./explorer";
-import { generateReport, REPORT_VERSION } from "./reportEngine";
+import { buildCategoryFacets, generateReport, REPORT_VERSION } from "./reportEngine";
 import {
   ExplorerPage,
   AiConsentAcceptance,
+  INSIGHT_CATEGORIES,
+  InsightCategory,
   ParsedDnaFile,
   ProfileMeta,
   ProfileSupplements,
@@ -232,10 +234,18 @@ function hasCurrentReportShape(profile: SavedProfile): boolean {
       profile.report.entries.every((entry) => typeof entry.sort?.rank === "number") &&
       !profile.report?.tabs?.some((tab) => (tab.tab as string) === "other") &&
       profile.report?.facets?.clinicalSignificanceLabels &&
+      hasCategoryFacets(profile.report) &&
       typeof profile.report?.overview?.localEvidenceEntryMatches === "number" &&
       typeof profile.report?.overview?.localEvidenceRecordMatches === "number" &&
       typeof profile.report?.overview?.localEvidenceMatchedRsids === "number",
   );
+}
+
+function hasCategoryFacets(report: Partial<Pick<ReportDataMeta, "categoryFacets">>): boolean {
+  return INSIGHT_CATEGORIES.every((category) => {
+    const facets = report.categoryFacets?.[category];
+    return Boolean(facets?.clinicalSignificanceLabels);
+  });
 }
 
 function profileNeedsReportShapeRegeneration(profile: {
@@ -305,6 +315,7 @@ function toReportMeta(report: SavedProfile["report"]): ReportDataMeta {
     overview: report.overview,
     tabs: report.tabs,
     facets: report.facets,
+    categoryFacets: report.categoryFacets,
   };
 }
 
@@ -576,7 +587,38 @@ export async function loadProfileMeta(profileId: string): Promise<ProfileMeta | 
     };
   }
 
+  if (!hasCategoryFacets(profile.report)) {
+    return refreshProfileCategoryFacets(profile, metaRecord);
+  }
+
   return profile;
+}
+
+async function refreshProfileCategoryFacets(
+  profile: ProfileMeta,
+  metaRecord: StoredProfileMetaRecord,
+): Promise<ProfileMeta> {
+  const db = await openDb();
+  const entriesTransaction = db.transaction(REPORT_ENTRY_STORE, "readonly");
+  const entries = await loadReportEntriesForProfile(entriesTransaction.objectStore(REPORT_ENTRY_STORE), profile.id);
+  const categoryFacets = buildCategoryFacets(entries);
+  const refreshed = {
+    ...profile,
+    report: {
+      ...profile.report,
+      categoryFacets,
+    },
+  };
+
+  const metaTransaction = db.transaction(PROFILE_META_STORE, "readwrite");
+  const done = transactionToPromise(metaTransaction);
+  metaTransaction.objectStore(PROFILE_META_STORE).put({
+    ...metaRecord,
+    report: refreshed.report,
+  } satisfies StoredProfileMetaRecord);
+  await done;
+
+  return refreshed;
 }
 
 export async function loadCategoryPage({
@@ -801,7 +843,7 @@ export async function* streamReportEntries(
   profileId: string,
   category?: StoredReportEntry["category"],
 ): AsyncGenerator<StoredReportEntry> {
-  const categories = category ? [category] : (["medical", "traits", "drug"] as const);
+  const categories = category ? [category] : INSIGHT_CATEGORIES;
 
   for (const activeCategory of categories) {
     const entries = await loadAllEntriesForCategory(profileId, activeCategory);

@@ -26,6 +26,14 @@ export const DEFAULT_FILTERS: ExplorerFilters = {
   sort: "rank",
 };
 
+export const SORT_FILTER_OPTIONS: Array<[ExplorerFilters["sort"], string]> = [
+  ["rank", "Best evidence match"],
+  ["severity", "Severity / priority"],
+  ["evidence", "Evidence strength"],
+  ["publications", "Publication count"],
+  ["alphabetical", "Alphabetical"],
+];
+
 type SearchableEntry = {
   searchText?: string;
   id?: string;

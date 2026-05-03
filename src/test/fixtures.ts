@@ -57,7 +57,10 @@ export function makeProfileSummary(overrides: Partial<SavedProfileSummary> = {})
 
 export function makeProfileMeta(overrides: Partial<ProfileMeta> = {}): ProfileMeta {
   const profile = makeSavedProfile();
+  return makeProfileMetaFromProfile(profile, overrides);
+}
 
+export function makeProfileMetaFromProfile(profile: SavedProfile, overrides: Partial<ProfileMeta> = {}): ProfileMeta {
   return {
     id: profile.id,
     name: profile.name,
@@ -73,6 +76,7 @@ export function makeProfileMeta(overrides: Partial<ProfileMeta> = {}): ProfileMe
       overview: profile.report.overview,
       tabs: profile.report.tabs,
       facets: profile.report.facets,
+      categoryFacets: profile.report.categoryFacets,
     },
     ...overrides,
   };

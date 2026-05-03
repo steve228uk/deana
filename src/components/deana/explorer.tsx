@@ -1,6 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import type { ExplorerFilters } from "../../lib/explorer";
-import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, StoredReportEntry } from "../../types";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type DependencyList, type ReactNode, type RefObject } from "react";
+import { SORT_FILTER_OPTIONS, type ExplorerFilters } from "../../lib/explorer";
+import type { ExplorerTab, InsightCategory, ProfileMeta, ReportEntry, ReportFacets, StoredReportEntry } from "../../types";
 import { DEANA_GITHUB_URL, PrivacyModal, SupportDeanaModal } from "./marketing";
 import { DeanaWordmark, Icon, IconName } from "./ui";
 
@@ -34,13 +34,13 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = tabs.map(
 }));
 const visibleTabsWithoutAi = tabs.filter((item) => item.id !== "ai");
 const visibleNavWithoutAi = nav.filter((item) => item.id !== "ai");
-const SORT_FILTER_OPTIONS: Array<[string, string]> = [
-  ["rank", "Best evidence match"],
-  ["severity", "Severity / priority"],
-  ["evidence", "Evidence strength"],
-  ["publications", "Publication count"],
-  ["alphabetical", "Alphabetical"],
-];
+
+function useScrollTopOnChange<T extends HTMLElement>(ref: RefObject<T | null>, deps: DependencyList) {
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.scrollTop = 0;
+  }, deps);
+}
 
 export function ExplorerShell({
   report,
@@ -309,7 +309,7 @@ export function OverviewContent({
 
 export function CategoryExplorerContent({
   activeTab,
-  profile,
+  facets,
   filters,
   entries,
   selectedEntry,
@@ -326,7 +326,7 @@ export function CategoryExplorerContent({
   onLoadMore,
 }: {
   activeTab: InsightCategory;
-  profile: ProfileMeta;
+  facets: ReportFacets;
   filters: ExplorerFilters;
   entries: StoredReportEntry[];
   selectedEntry: StoredReportEntry | null;
@@ -344,13 +344,23 @@ export function CategoryExplorerContent({
 }) {
   const [areFiltersCollapsed, setAreFiltersCollapsed] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const listPanelRef = useRef<HTMLElement | null>(null);
+  const onSelectEntryRef = useRef(onSelectEntry);
   const filterFormProps = {
-    profile,
+    facets,
     filters,
     searchValue,
     onFilterChange,
     onSearchChange,
   };
+  const handleSelectEntry = useCallback((id: string) => {
+    onSelectEntryRef.current(id);
+  }, []);
+
+  useEffect(() => {
+    onSelectEntryRef.current = onSelectEntry;
+  }, [onSelectEntry]);
+  useScrollTopOnChange(listPanelRef, []);
 
   return (
     <main className={`dn-category-screen ${areFiltersCollapsed ? "is-filter-collapsed" : ""}`}>
@@ -387,7 +397,7 @@ export function CategoryExplorerContent({
         )}
       </aside>
 
-      <section className="dn-finding-list-panel">
+      <section ref={listPanelRef} className="dn-finding-list-panel">
         <div className="dn-category-title-row">
           <div>
             <h1>{titleForTab(activeTab)}</h1>
@@ -403,7 +413,7 @@ export function CategoryExplorerContent({
 
         <div className="dn-finding-list">
           {entries.map((entry) => (
-            <FindingCard key={entry.id} entry={entry} selected={entry.id === selectedEntry?.id} onClick={() => onSelectEntry(entry.id)} />
+            <FindingCard key={entry.id} entry={entry} selected={entry.id === selectedEntry?.id} onSelect={handleSelectEntry} />
           ))}
           {entries.length === 0 && !isLoading ? (
             <div className="dn-empty-state">
@@ -458,57 +468,56 @@ export function CategoryExplorerContent({
 }
 
 function ExplorerFiltersForm({
-  profile,
+  facets,
   filters,
   searchValue,
   onFilterChange,
   onSearchChange,
 }: {
-  profile: ProfileMeta;
+  facets: ReportFacets;
   filters: ExplorerFilters;
   searchValue: string;
   onFilterChange: <K extends keyof ExplorerFilters>(key: K, value: ExplorerFilters[K]) => void;
   onSearchChange: (value: string) => void;
 }) {
   const sourceOptions = useMemo(
-    () => optionList(profile.report.facets.sources, "All sources"),
-    [profile.report.facets.sources],
+    () => optionList(facets.sources, "All sources"),
+    [facets.sources],
   );
   const evidenceOptions = useMemo(
-    () => profile.report.facets.evidenceTiers.map((value): [string, string] => [value, value]),
-    [profile.report.facets.evidenceTiers],
+    () => facets.evidenceTiers.map((value): [string, string] => [value, value]),
+    [facets.evidenceTiers],
   );
   const clinicalSignificanceOptions = useMemo(
     () =>
-      profile.report.facets.clinicalSignificances.map((value): [string, string] => [
+      facets.clinicalSignificances.map((value): [string, string] => [
         value,
-        profile.report.facets.clinicalSignificanceLabels[value] ?? value,
+        facets.clinicalSignificanceLabels[value] ?? value,
       ]),
-    [profile.report.facets.clinicalSignificanceLabels, profile.report.facets.clinicalSignificances],
+    [facets.clinicalSignificanceLabels, facets.clinicalSignificances],
   );
   const reputeOptions = useMemo(
-    () => profile.report.facets.reputes.map((value): [string, string] => [value, value]),
-    [profile.report.facets.reputes],
+    () => facets.reputes.map((value): [string, string] => [value, value]),
+    [facets.reputes],
   );
   const coverageOptions = useMemo(
-    () => profile.report.facets.coverages.map((value): [string, string] => [value, value]),
-    [profile.report.facets.coverages],
+    () => facets.coverages.map((value): [string, string] => [value, value]),
+    [facets.coverages],
   );
   const publicationOptions = useMemo(
-    () => profile.report.facets.publicationBuckets.map((value): [string, string] => [value, value]),
-    [profile.report.facets.publicationBuckets],
+    () => facets.publicationBuckets.map((value): [string, string] => [value, value]),
+    [facets.publicationBuckets],
   );
   const geneOptions = useMemo(
-    () => profile.report.facets.genes.map((value): [string, string] => [value, value]),
-    [profile.report.facets.genes],
+    () => facets.genes.map((value): [string, string] => [value, value]),
+    [facets.genes],
   );
   const tagOptions = useMemo(
     () =>
-      [...profile.report.facets.tags, ...profile.report.facets.conditions]
-        .filter((value, index, array) => array.indexOf(value) === index)
+      Array.from(new Set([...facets.tags, ...facets.conditions]))
         .sort()
         .map((value): [string, string] => [value, value]),
-    [profile.report.facets.conditions, profile.report.facets.tags],
+    [facets.conditions, facets.tags],
   );
 
   return (
@@ -540,13 +549,24 @@ function ExplorerFiltersForm({
   );
 }
 
-function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; selected?: boolean; onClick?: () => void }) {
+const FindingCard = memo(function FindingCard({
+  entry,
+  selected,
+  onSelect,
+}: {
+  entry: StoredReportEntry;
+  selected?: boolean;
+  onSelect: (id: string) => void;
+}) {
   const firstMarker = entry.matchedMarkers[0];
   const summary = summaryUnlessTitle(entry.summary, entry.title);
   const snapshot = evidenceSnapshotItems(entry);
+  const handleClick = useCallback(() => {
+    onSelect(entry.id);
+  }, [entry.id, onSelect]);
 
   return (
-    <button className={`dn-finding-card ${selected ? "is-selected" : ""} dn-finding-tone-${toneForEntry(entry)}`} onClick={onClick}>
+    <button className={`dn-finding-card ${selected ? "is-selected" : ""} dn-finding-tone-${toneForEntry(entry)}`} onClick={handleClick}>
         <span className="dn-finding-card__icon"><Icon name={iconForTab(entry.category)} /></span>
       <div className="dn-finding-card__main">
         <div className="dn-finding-card__meta">
@@ -575,7 +595,7 @@ function FindingCard({ entry, selected, onClick }: { entry: StoredReportEntry; s
       <Icon name="external" />
     </button>
   );
-}
+});
 
 export function FindingInspector({
   finding,
@@ -589,11 +609,7 @@ export function FindingInspector({
   emptyContent?: ReactNode;
 }) {
   const inspectorRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (!inspectorRef.current) return;
-    inspectorRef.current.scrollTop = 0;
-  }, [finding?.id]);
+  useScrollTopOnChange(inspectorRef, [finding?.id]);
 
   if (!finding) {
     return (

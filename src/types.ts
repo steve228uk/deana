@@ -16,7 +16,8 @@ export type ProviderName =
   | "Unknown";
 
 export type GenomeBuild = "GRCh37" | "GRCh38";
-export type InsightCategory = "medical" | "traits" | "drug";
+export const INSIGHT_CATEGORIES = ["medical", "traits", "drug"] as const;
+export type InsightCategory = (typeof INSIGHT_CATEGORIES)[number];
 export type ExplorerTab = "overview" | "medical" | "traits" | "drug" | "ai";
 export type InsightTone = "neutral" | "good" | "caution";
 export type FindingOutcome = "negative" | "positive" | "informational" | "missing";
@@ -264,15 +265,10 @@ export interface ReportData {
   tabs: TabSummary[];
   entries: ReportEntry[];
   facets: ReportFacets;
+  categoryFacets: Record<InsightCategory, ReportFacets>;
 }
 
-export interface ReportDataMeta {
-  reportVersion: number;
-  evidencePackVersion: string;
-  overview: ReportOverview;
-  tabs: TabSummary[];
-  facets: ReportFacets;
-}
+export type ReportDataMeta = Omit<ReportData, "entries">;
 
 export interface ProfileSupplements {
   evidence?: EvidenceSupplement;
