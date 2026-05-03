@@ -595,6 +595,18 @@ a { color: inherit; }
 .dn-marker-toolbar .dn-field { margin: 0; }
 .dn-marker-inspector { padding: 0; background: #fff; }
 .dn-marker-inspector__body { padding: 24px; }
+.dn-marker-linked-findings button,
+.dn-marker-linked-findings strong,
+.dn-marker-linked-findings span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dn-marker-linked-findings strong {
+  line-height: 1.28;
+}
+.dn-marker-linked-findings span {
+  line-height: 1.35;
+}
 .dn-marker-header-ai-button { min-height: 40px; padding: 0 16px; white-space: nowrap; }
 .dn-raw-screen { grid-template-columns: 1fr; }
 .dn-raw-list-panel { grid-column: 1 / -1; }
