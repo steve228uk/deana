@@ -2,7 +2,6 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState } fr
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CategoryExplorerContent,
-  EvidenceUpdateNotice,
   ExplorerReportCard,
   ExplorerShell,
   MARKER_SORT_OPTIONS,
@@ -229,29 +228,14 @@ function scheduleSearchIndexPrewarm(profileId: string): () => void {
   };
 }
 
-function getEvidencePackStatus(profile: ProfileMeta | null): {
-  currentPackVersion: string;
-  isStale: boolean;
-} {
-  if (!profile) {
-    return {
-      currentPackVersion: EVIDENCE_PACK_VERSION,
-      isStale: false,
-    };
-  }
+function isEvidencePackStale(profile: ProfileMeta | null): boolean {
+  if (!profile) return false;
 
-  const currentPackVersion =
-    profile.report.overview.evidencePackVersion ??
-    profile.report.evidencePackVersion ??
-    profile.evidencePackVersion;
-
-  return {
-    currentPackVersion,
-    isStale:
-      profile.evidencePackVersion !== EVIDENCE_PACK_VERSION ||
-      profile.report.evidencePackVersion !== EVIDENCE_PACK_VERSION ||
-      profile.report.overview.evidencePackVersion !== EVIDENCE_PACK_VERSION,
-  };
+  return (
+    profile.evidencePackVersion !== EVIDENCE_PACK_VERSION ||
+    profile.report.evidencePackVersion !== EVIDENCE_PACK_VERSION ||
+    profile.report.overview.evidencePackVersion !== EVIDENCE_PACK_VERSION
+  );
 }
 
 export function ExplorerScreen({
@@ -270,7 +254,7 @@ export function ExplorerScreen({
   const tab = useMemo(() => normalizeTab(searchParams.get("tab")), [searchParams]);
   const filters = useMemo(() => formatFilters(searchParams), [filterKey]);
   const category = categoryForTab(tab);
-  const evidencePackStatus = getEvidencePackStatus(profile);
+  const shouldRefreshEvidence = isEvidencePackStale(profile);
 
   useEffect(() => {
     let cancelled = false;
@@ -315,9 +299,9 @@ export function ExplorerScreen({
   }, [isLibraryReady, profileId]);
 
   useEffect(() => {
-    if (!profile?.id) return;
+    if (!profile?.id || shouldRefreshEvidence) return;
     return scheduleSearchIndexPrewarm(profile.id);
-  }, [profile?.id]);
+  }, [profile?.id, shouldRefreshEvidence]);
 
   useEffect(() => {
     if (previousTabRef.current === "ai" && tab !== "ai" && pendingAiPrompt) {
@@ -338,6 +322,10 @@ export function ExplorerScreen({
 
   if (!profile) {
     return <Navigate to="/" replace />;
+  }
+
+  if (shouldRefreshEvidence) {
+    return <Navigate to={`/processing/refresh/${profile.id}`} replace />;
   }
 
   function setTab(nextTab: ExplorerTab) {
@@ -386,15 +374,6 @@ export function ExplorerScreen({
       report={toReportCard(profile)}
       activeTab={tab}
       isAiEnabled={isAiEnabled === true}
-      notice={
-        evidencePackStatus.isStale ? (
-          <EvidenceUpdateNotice
-            currentPackVersion={evidencePackStatus.currentPackVersion}
-            latestVersion={EVIDENCE_PACK_VERSION}
-            onRefresh={() => navigate(`/processing/refresh/${profile.id}`)}
-          />
-        ) : null
-      }
       onTabChange={setTab}
       onBackHome={() => navigate("/")}
     >

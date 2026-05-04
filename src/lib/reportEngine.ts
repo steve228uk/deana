@@ -199,11 +199,50 @@ function sourceNotesForLocalEvidence(record: EvidencePackMatch["record"], source
   ];
 }
 
+function sourcesForLocalEvidence(record: EvidencePackMatch["record"], sourceName: string): ReportEntry["sources"] {
+  const sources = new Map<string, ReportEntry["sources"][number]>();
+  const addSource = (id: string, name: string, url: string) => {
+    if (!sources.has(id)) sources.set(id, { id, name, url });
+  };
+
+  addSource(record.sourceId, sourceName, record.url || SOURCE_LIBRARY[record.sourceId]?.url || "");
+
+  for (const context of record.relatedContexts ?? []) {
+    const relatedSource = SOURCE_LIBRARY[context.sourceId];
+    addSource(context.sourceId, relatedSource?.name ?? context.sourceId, context.url || relatedSource?.url || "");
+  }
+
+  return Array.from(sources.values());
+}
+
 function markerLabel(marker: ReportEntry["matchedMarkers"][number]): string {
   const base = `${marker.rsid} ${marker.genotype ?? "not found"}`;
   if (!marker.matchedAllele) return base;
   const copies = marker.matchedAlleleCount ?? 0;
   return `${base} (${copies} ${marker.matchedAllele} ${copies === 1 ? "allele" : "alleles"})`;
+}
+
+function toneForLocalEvidence(
+  riskCount: number | null,
+  repute: ReportEntry["repute"],
+  fallbackTone?: InsightTone,
+): InsightTone {
+  if (riskCount !== null && riskCount > 0 && repute === "bad") return "caution";
+  if (riskCount !== null && riskCount > 0 && repute === "good") return "good";
+  return fallbackTone ?? "neutral";
+}
+
+function summaryForLocalEvidence(
+  matchedMarker: ReportEntry["matchedMarkers"][number] | undefined,
+  genotype: string | null,
+  riskCount: number | null,
+  riskSummary: string | undefined,
+): string | null {
+  if (!genotype) return `This upload did not include the ${matchedMarker?.rsid ?? "relevant"} marker.`;
+  if (riskCount === 0 && matchedMarker) return `No risk allele detected at ${matchedMarker.rsid}.`;
+  if (riskCount === 1 && riskSummary) return `One copy of the risk allele detected. ${riskSummary}.`;
+  if (riskCount === 2 && riskSummary) return `Two copies of the risk allele detected. ${riskSummary}.`;
+  return null;
 }
 
 function localEvidenceGenotypeSummary(match: EvidencePackMatch): string {
@@ -240,38 +279,25 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
       const publicationCount = record.pmids.length;
       const category = record.category ?? "traits";
       const sourceName = SOURCE_LIBRARY[record.sourceId]?.name ?? record.sourceId;
+      const sources = sourcesForLocalEvidence(record, sourceName);
       const normalizedClinicalSignificance = normalizeClinicalSignificance(record.clinicalSignificance);
       const conditions = normalizeConditions(record.conditions ?? []);
 
       const matchedMarker = match.matchedMarkers[0];
       const genotype = matchedMarker?.genotype ?? null;
-      const riskAllele = record.riskAllele;
+      const riskAllele = matchedMarker?.matchedAllele ?? record.riskAllele;
       const riskCount =
         riskAllele && genotype ? [...genotype].filter((a) => a === riskAllele).length : null;
 
-      const coverage: CoverageStatus = genotype ? "full" : "missing";
-      const tone: InsightTone =
-        riskCount !== null && riskCount > 0 && record.repute === "bad"
-          ? "caution"
-          : riskCount !== null && riskCount > 0 && record.repute === "good"
-            ? "good"
-            : record.tone ?? "neutral";
       const repute = record.repute ?? "not-set";
+      const coverage: CoverageStatus = genotype ? "full" : "missing";
+      const tone = toneForLocalEvidence(riskCount, repute, record.tone);
       const outcome = outcomeForTone(tone, repute);
       const clingenClassification = clinGenClassificationForRecord(record);
       const title = titleWithoutClinGenClassification(record.title, clingenClassification);
 
       const riskSummary = record.riskSummary;
-      const computedSummary =
-        !genotype
-          ? `This upload did not include the ${matchedMarker?.rsid ?? "relevant"} marker.`
-          : riskCount === 0
-            ? `No risk allele detected at ${matchedMarker.rsid}.`
-            : riskCount === 1 && riskSummary
-              ? `One copy of the risk allele detected. ${riskSummary}.`
-              : riskCount === 2 && riskSummary
-                ? `Two copies of the risk allele detected. ${riskSummary}.`
-                : null;
+      const computedSummary = summaryForLocalEvidence(matchedMarker, genotype, riskCount, riskSummary);
 
       const summary =
         computedSummary ??
@@ -301,14 +327,9 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
           "This is local evidence-pack context, not a diagnosis or treatment recommendation.",
           "Consumer-array coverage and genotype orientation can limit interpretation fidelity.",
         ],
-        sources: [
-          {
-            id: record.sourceId,
-            name: sourceName,
-            url: record.url,
-          },
-        ],
+        sources,
         sourceNotes: sourceNotesForLocalEvidence(record, sourceName),
+        relatedContexts: record.relatedContexts ?? [],
         evidenceTier: record.evidenceLevel,
         clinicalSignificance: record.clinicalSignificance,
         normalizedClinicalSignificance,
@@ -344,7 +365,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
             gwasFullSummaryStats: record.gwasFullSummaryStats,
             clinicalSignificance: record.clinicalSignificance,
             normalizedClinicalSignificance,
-            sources: [{ id: record.sourceId, name: sourceName }],
+            sources: sources.map((source) => ({ id: source.id, name: source.name })),
             matchedMarkers: match.matchedMarkers,
           }),
           severity: severityForLocalEvidence(outcome, repute, category),
@@ -379,20 +400,28 @@ export function generateReport(dna: ParsedDnaFile, supplements?: ProfileSuppleme
   );
   const localEvidenceEntries = createLocalEvidenceEntries(evidenceSupplement);
   const entries = [...curatedEntries, ...localEvidenceEntries];
-  const curatedMarkerMatches = curatedEntries.flatMap((entry) => entry.matchedMarkers).filter((marker) => marker.genotype).length;
-  const totalTrackedMarkers = curatedEntries.flatMap((entry) => entry.matchedMarkers).length;
+
+  let curatedMarkerMatches = 0;
+  let totalTrackedMarkers = 0;
+  for (const entry of curatedEntries) {
+    for (const marker of entry.matchedMarkers) {
+      totalTrackedMarkers += 1;
+      if (marker.genotype) curatedMarkerMatches += 1;
+    }
+  }
+
   const coverageScore = totalTrackedMarkers === 0 ? 0 : Math.round((curatedMarkerMatches / totalTrackedMarkers) * 100);
   const localEvidenceRecordMatches = evidenceSupplement?.matchedRecords.length ?? 0;
-  const localEvidenceEntryMatches = evidenceSupplement
-    ? new Set(evidenceSupplement.matchedRecords.map((match) => match.record.entryId)).size
-    : 0;
-  const localEvidenceMatchedRsids = evidenceSupplement
-    ? new Set(
-      evidenceSupplement.matchedRecords.flatMap((match) =>
-        match.matchedMarkers.map((marker) => marker.rsid.toLowerCase()),
-      ),
-    ).size
-    : 0;
+  const localEvidenceEntryIds = new Set<string>();
+  const localEvidenceMatchedRsidSet = new Set<string>();
+  for (const match of evidenceSupplement?.matchedRecords ?? []) {
+    localEvidenceEntryIds.add(match.record.entryId);
+    for (const marker of match.matchedMarkers) {
+      localEvidenceMatchedRsidSet.add(marker.rsid.toLowerCase());
+    }
+  }
+  const localEvidenceEntryMatches = localEvidenceEntryIds.size;
+  const localEvidenceMatchedRsids = localEvidenceMatchedRsidSet.size;
 
   return {
     reportVersion: REPORT_VERSION,

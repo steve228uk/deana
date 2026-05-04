@@ -56,8 +56,6 @@ export function ProcessingScreen({
 }: ProcessingScreenProps) {
   const navigate = useNavigate();
   const { profileId: refreshProfileId } = useParams<{ profileId: string }>();
-  const isRefreshMode = Boolean(refreshProfileId);
-  const backPath = refreshProfileId ? `/explorer/${refreshProfileId}?tab=overview` : "/";
   const startedRef = useRef(false);
   const [snapshot, setSnapshot] = useState<EvidenceProgressSnapshot | null>(() =>
     initialSnapshotForProcessing(pendingBuild, refreshProfileId),
@@ -101,11 +99,11 @@ export function ProcessingScreen({
       <MarketingProcessing
         snapshot={snapshot}
         error={error}
-        mode={isRefreshMode ? "refresh" : "create"}
+        mode={refreshProfileId ? "refresh" : "create"}
         onPrivacy={() => setShowPrivacy(true)}
         onBackHome={() => {
           clearPendingBuild();
-          navigate(backPath, { replace: true });
+          navigate("/", { replace: true });
         }}
       />
       {showPrivacy ? <PrivacyModal onClose={() => setShowPrivacy(false)} /> : null}

@@ -44,6 +44,12 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = tabs.map(
 const visibleTabsWithoutAi = tabs.filter((item) => item.id !== "ai");
 const visibleNavWithoutAi = nav.filter((item) => item.id !== "ai");
 
+function relatedEvidenceLabel(context: ReportEntry["relatedContexts"][number]): string {
+  return context.contextType === "gene-disease-validity"
+    ? "Related ClinGen gene-disease context"
+    : "Related ClinGen variant context";
+}
+
 function useScrollTopOnChange<T extends HTMLElement>(ref: RefObject<T | null>, deps: DependencyList) {
   useEffect(() => {
     if (!ref.current) return;
@@ -55,7 +61,6 @@ export function ExplorerShell({
   report,
   activeTab,
   isAiEnabled = false,
-  notice,
   children,
   onTabChange,
   onBackHome,
@@ -63,7 +68,6 @@ export function ExplorerShell({
   report: ExplorerReportCard;
   activeTab: ExplorerTab;
   isAiEnabled?: boolean;
-  notice?: ReactNode;
   children: ReactNode;
   onTabChange?: (tab: ExplorerTab) => void;
   onBackHome?: () => void;
@@ -136,7 +140,6 @@ export function ExplorerShell({
           </nav>
         </div>
 
-        {notice}
         {children}
         </div>
       </div>
@@ -149,35 +152,6 @@ export function ExplorerShell({
       {modal === "help" ? <HelpModal onClose={() => setModal(null)} /> : null}
       {modal === "support" ? <SupportDeanaModal onClose={() => setModal(null)} /> : null}
     </>
-  );
-}
-
-export function EvidenceUpdateNotice({
-  currentPackVersion,
-  latestVersion,
-  onRefresh,
-}: {
-  currentPackVersion: string;
-  latestVersion: string;
-  onRefresh: () => void;
-}) {
-  return (
-    <section className="dn-evidence-update-notice" aria-labelledby="evidence-update-title">
-      <span className="dn-round-icon"><Icon name="refresh" /></span>
-      <div>
-        <h2 id="evidence-update-title">New evidence is available</h2>
-        <p>
-          This report uses evidence pack <strong>{currentPackVersion}</strong>. The bundled local pack is now{" "}
-          <strong>{latestVersion}</strong>.
-        </p>
-        <p className="dn-evidence-update-notice__privacy">
-          Refreshing rematches your saved DNA data in this browser. No DNA is uploaded.
-        </p>
-      </div>
-      <button className="dn-button dn-button--primary" onClick={onRefresh}>
-        <Icon name="refresh" /> Refresh evidence
-      </button>
-    </section>
   );
 }
 
@@ -1016,6 +990,7 @@ export function FindingDetailContent({
 }) {
   const Title = titleLevel;
   const summary = summaryUnlessTitle(finding.summary, finding.title);
+  const relatedContexts = finding.relatedContexts ?? [];
 
   return (
     <>
@@ -1057,6 +1032,23 @@ export function FindingDetailContent({
           <h3>Warnings</h3>
           <ul>
             {finding.warnings.map((warning) => <li key={warning}>{renderMarkdownInline(warning)}</li>)}
+          </ul>
+        </section>
+      ) : null}
+      {relatedContexts.length > 0 ? (
+        <section>
+          <h3>Related evidence</h3>
+          <ul>
+            {relatedContexts.map((context) => {
+              const href = ensureAbsoluteUrl(context.url);
+              const label = relatedEvidenceLabel(context);
+              return (
+                <li key={`${context.sourceId}-${context.id}`}>
+                  <strong>{label}:</strong> {renderMarkdownInline(context.summary)}
+                  {href ? <> <a href={href} target="_blank" rel="noreferrer">Source <Icon name="external" /></a></> : null}
+                </li>
+              );
+            })}
           </ul>
         </section>
       ) : null}

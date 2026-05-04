@@ -14,7 +14,7 @@ import type {
   InsightTone,
   ReputeStatus,
 } from "../src/types";
-import { normalizeConditions } from "../src/lib/normalization";
+import { normalizeClinicalSignificance, normalizeConditions } from "../src/lib/normalization";
 import { normalizeChromosome } from "../src/lib/dbsnpAnnotation";
 import { column, extractPmids, extractRsids, normalizeRsid, riskSummaryForClinvar, riskSummaryForGwas, singleBaseAllele, splitTsv, tsvRows } from "./tsvUtils";
 import { DEFINITION_MARKERS, DEFINITION_TITLES } from "./definitionMarkers";
@@ -33,6 +33,7 @@ const sourceCacheFiles = {
   cpicPairs: path.join(cacheRoot, "cpic", "pairs.json"),
   pharmgkb: path.join(cacheRoot, "pharmgkb", "annotations.json"),
   clingen: path.join(cacheRoot, "clingen", "gene_validity.json"),
+  clingenVariantPathogenicity: path.join(cacheRoot, "clingen", "variant_pathogenicity.json"),
 } as const;
 const schemaVersion = 1;
 const shardModulo = 256;
@@ -125,6 +126,7 @@ const sourceMetadata: EvidencePackManifest["sources"] = [
     role: "supplementary",
   },
 ];
+const sourceRoleById = new Map(sourceMetadata.map((source) => [source.id, source.role]));
 
 interface Options {
   version: string;
@@ -193,10 +195,7 @@ function rsidBucket(rsid: string): number {
 }
 
 function sourceRole(sourceId: string): EvidenceSourceRole {
-  if (sourceId === "gnomad") return "frequency-context";
-  if (sourceId === "pubmed") return "citation";
-  if (sourceId === "snpedia") return "supplementary";
-  return "primary";
+  return sourceRoleById.get(sourceId) ?? "primary";
 }
 
 type DbsnpAnnotationRow = [chromosome: string, position: number, ref: string, alt: string, rsids: string[]];
@@ -472,6 +471,10 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
   const rsid = normalizeRsid(rawRsid.startsWith("rs") ? rawRsid : `rs${rawRsid}`);
   if (!rsid) return null;
 
+  const chromosome = column(row, ["Chromosome"]);
+  const chromosomeAccession = column(row, ["ChromosomeAccession"]);
+  if (/^(MT|M|chrM|chrMT)$/i.test(chromosome) || chromosomeAccession === "NC_012920.1") return null;
+
   const significance = column(row, ["ClinicalSignificance"]);
   const reviewStatus = column(row, ["ReviewStatus"]);
   if (!includeClinvar(significance, reviewStatus)) return null;
@@ -482,7 +485,11 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
   const traits = conditionList(column(row, ["PhenotypeList"]));
   const category = categoryForClinvar(significance);
   const condition = primaryCondition(traits, "the reported condition");
+  const assembly = column(row, ["Assembly"]);
   const riskAllele = singleBaseAllele(column(row, ["AlternateAlleleVCF", "AlternateAllele"]));
+  const riskAllelesByBuild = riskAllele && (assembly === "GRCh37" || assembly === "GRCh38")
+    ? { [assembly]: riskAllele }
+    : undefined;
   const title = plainClinvarTitle(gene, significance, traits, category);
   const reviewStars = clinvarStarsForReviewStatus(reviewStatus);
   const pmids = clinvarCitationPmidsForRow(row, citationPmids, variationId);
@@ -516,6 +523,8 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
     repute: reputeForSignificance(significance),
     tone: category === "drug" ? "caution" : "neutral",
     riskAllele,
+    riskAllelesByBuild,
+    clinvarVariationId: variationId,
     riskSummary: /reviewed by expert panel|practice guideline/i.test(reviewStatus)
       ? riskSummaryForClinvar(gene, significance, condition)
       : undefined,
@@ -932,14 +941,29 @@ async function buildClinvarRecords(maxRecords: number, citationPmids: Map<string
   const sourceFile = sourceCacheFiles.clinvar;
   if (!existsSync(sourceFile)) return [];
 
-  const records: EvidencePackRecord[] = [];
+  const records = new Map<string, EvidencePackRecord>();
   for await (const row of tsvRows(sourceFile)) {
     const record = clinvarRecord(row, citationPmids);
     if (!record) continue;
-    records.push(record);
-    if (records.length >= maxRecords) break;
+    const existing = records.get(record.id);
+    if (existing) {
+      const riskAllelesByBuild = {
+        ...(existing.riskAllelesByBuild ?? {}),
+        ...(record.riskAllelesByBuild ?? {}),
+      };
+      const distinctAlleles = Array.from(new Set(Object.values(riskAllelesByBuild).filter(Boolean)));
+      existing.riskAllelesByBuild = Object.keys(riskAllelesByBuild).length > 0 ? riskAllelesByBuild : undefined;
+      existing.riskAllele = distinctAlleles.length === 1 ? distinctAlleles[0] : undefined;
+      existing.pmids = Array.from(new Set([...existing.pmids, ...record.pmids]));
+      existing.notes = Array.from(new Set([...existing.notes, ...record.notes]));
+      continue;
+    }
+
+    records.set(record.id, record);
+    if (records.size >= maxRecords) break;
   }
-  return records;
+
+  return Array.from(records.values());
 }
 
 async function buildGwasRecords(maxRecords: number, studyMetadata: Map<string, GwasStudyMetadata>): Promise<EvidencePackRecord[]> {
@@ -964,6 +988,7 @@ interface CpicVariant {
   rsid: string;
   genesymbol: string;
   function: string | null;
+  variantAllele?: string | null;
 }
 
 interface CpicPair {
@@ -1001,6 +1026,8 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
     const levelStatus = topPair.levelStatus;
     const evidenceLevel: EvidenceTier = level === "A" ? "high" : "moderate";
     const functionNote = variant.function ? `Variant function: ${variant.function}.` : null;
+    const riskAllele = variant.variantAllele ?? undefined;
+    if (!riskAllele || !/^[ACGT]$/.test(riskAllele)) continue;
 
     records.push({
       id: `cpic-${rsid}-${gene.toLowerCase()}`,
@@ -1011,8 +1038,9 @@ async function buildCpicRecords(): Promise<EvidencePackRecord[]> {
       subcategory: "pharmacogenomics",
       markerIds: [rsid],
       genes: [gene],
+      riskAllele,
       title: `${gene} pharmacogenomic variant — ${drugs[0]} context (CPIC)`,
-      summary: `${rsid} affects ${gene} function and is relevant to ${drugs.slice(0, 2).join(" and ")} dosing per CPIC level ${level} guidelines.`,
+      summary: `${rsid} is a pharmacogenomic variant in ${gene} relevant to ${drugs.slice(0, 2).join(" and ")} dosing per CPIC level ${level} guidelines.`,
       riskSummary: `${gene} variant with altered function (${variant.function ?? "see guideline"}) — ${drugs[0]} dosing may require adjustment`,
       qualityTier: level === "A" ? "tier-1" : undefined,
       cpicLevel: level,
@@ -1051,12 +1079,27 @@ interface PharmGkbAnnotation {
   significance: string;
   pmids: string[];
   url: string;
+  annotationText?: string | null;
+  genotype?: string | null;
+  riskAllele?: string | null;
 }
 
 function pharmgkbEvidenceTier(level: string): EvidenceTier {
   if (level === "1A" || level === "1B") return "high";
   if (level === "2A" || level === "2B") return "moderate";
   return "emerging";
+}
+
+function pharmgkbToneForPhenotype(category: string): InsightTone {
+  if (/toxicity|adverse/i.test(category)) return "caution";
+  if (/efficacy/i.test(category)) return "good";
+  return "neutral";
+}
+
+function pharmgkbReputeForPhenotype(category: string): ReputeStatus {
+  if (/toxicity|adverse/i.test(category)) return "bad";
+  if (/efficacy/i.test(category)) return "good";
+  return "not-set";
 }
 
 async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
@@ -1074,28 +1117,34 @@ async function buildPharmgkbRecords(): Promise<EvidencePackRecord[]> {
 
     const drugs = ann.drugs.slice(0, 4);
     const category = ann.phenotypeCategory.toLowerCase();
-    const isEfficacy = /efficacy/i.test(category);
-    const isToxicity = /toxicity|adverse/i.test(category);
-    const tone: InsightTone = isToxicity ? "caution" : isEfficacy ? "good" : "neutral";
-    const repute: ReputeStatus = isToxicity ? "bad" : isEfficacy ? "good" : "not-set";
+    const tone = pharmgkbToneForPhenotype(category);
+    const repute = pharmgkbReputeForPhenotype(category);
+
+    const riskAllele = ann.riskAllele ?? undefined;
+    const genotype = ann.genotype ?? undefined;
+    if (!riskAllele && !genotype) continue;
+    const alleleKey = genotype ? `genotype-${genotype.toLowerCase()}` : `allele-${riskAllele?.toLowerCase()}`;
+    const annotationText = ann.annotationText?.trim();
 
     records.push({
-      id: `pharmgkb-${ann.variantId}-${rsid}`,
-      entryId: `local-drug-pharmgkb-${ann.variantId}`,
+      id: `pharmgkb-${ann.variantId}-${rsid}-${alleleKey}`,
+      entryId: `local-drug-pharmgkb-${ann.variantId}-${alleleKey}`,
       sourceId: "pharmgkb",
       role: "primary",
       category: "drug",
       subcategory: "pharmacogenomics",
       markerIds: [rsid],
       genes: ann.gene ? [ann.gene] : [],
+      riskAllele,
+      genotype,
       title: `${ann.gene || rsid} / ${drugs[0] ?? "drug response"}`,
-      summary: `PharmGKB level ${ann.evidenceLevel} annotation links ${rsid} to ${ann.phenotypeCategory.toLowerCase()} with ${drugs.slice(0, 2).join(" and ")}.`,
+      summary: annotationText || `PharmGKB level ${ann.evidenceLevel} annotation links ${rsid} to ${ann.phenotypeCategory.toLowerCase()} with ${drugs.slice(0, 2).join(" and ")}.`,
       riskSummary: evidenceLevel === "high" || evidenceLevel === "moderate"
         ? `${ann.gene || rsid} variant associated with ${ann.phenotypeCategory.toLowerCase()} for ${drugs[0] ?? "the reported drug"}`
         : undefined,
       qualityTier: ann.evidenceLevel === "1A" || ann.evidenceLevel === "1B" ? "tier-1" : undefined,
       pharmgkbLevel: ann.evidenceLevel,
-      detail: `PharmGKB clinical annotation level ${ann.evidenceLevel}: ${ann.phenotypeCategory} for ${drugs.join(", ")}.`,
+      detail: annotationText || `PharmGKB clinical annotation level ${ann.evidenceLevel}: ${ann.phenotypeCategory} for ${drugs.join(", ")}.`,
       whyItMatters: "PharmGKB curates pharmacogenomic evidence from the literature, with level 1A–2B annotations backed by expert review and published clinical studies.",
       topics: ["PharmGKB", "Drug response", "Pharmacogenomics"],
       conditions: drugs.map((d) => `${d} ${ann.phenotypeCategory.toLowerCase()}`),
@@ -1128,6 +1177,7 @@ interface ClinGenClassification {
 }
 
 const CLINGEN_CLASSIFICATION_NOTE_PREFIX = "ClinGen classification:";
+const CLINGEN_DISEASE_STOP_WORDS = new Set(["and", "or", "of", "the", "a", "an", "with", "to", "in", "by", "for"]);
 
 function clingenEvidenceTier(classification: string): EvidenceTier {
   if (isHighConfidenceClinGenClassification(classification)) return "high";
@@ -1138,28 +1188,214 @@ function isHighConfidenceClinGenClassification(classification: string): boolean 
   return classification === "Definitive" || classification === "Strong";
 }
 
+export function clingenDiseaseWordsOverlap(conditions: string[], disease: string): boolean {
+  return clingenConditionWordsOverlap(conditions, clingenDiseaseWordSet(disease));
+}
+
+function clingenDiseaseWordSet(disease: string): Set<string> {
+  return new Set(
+    disease.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !CLINGEN_DISEASE_STOP_WORDS.has(w)),
+  );
+}
+
+function clingenConditionWordsOverlap(conditions: string[], diseaseWords: Set<string>): boolean {
+  return conditions.some((condition) => {
+    const condWords = condition.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !CLINGEN_DISEASE_STOP_WORDS.has(w));
+    return condWords.some((word) => diseaseWords.has(word));
+  });
+}
+
+export interface PathogenicClinVarMarker {
+  rsid: string;
+  riskAllele?: string;
+  riskAllelesByBuild?: Partial<Record<GenomeBuild, string>>;
+  conditions: string[];
+  record?: EvidencePackRecord;
+}
+
+interface ClinGenVariantPathogenicityRecord {
+  id: string;
+  source: string;
+  geneSymbol: string | null;
+  diseaseLabel: string | null;
+  mondoId: string | null;
+  assertion: string | null;
+  reportUrl: string | null;
+  publishedDate?: string | null;
+  raw?: Record<string, string>;
+}
+
+function validRiskAllele(value?: string): string | null {
+  return value && /^[ACGT]$/i.test(value) ? value.toUpperCase() : null;
+}
+
+function normalizedRiskAllelesByBuild(record: EvidencePackRecord): Partial<Record<GenomeBuild, string>> {
+  const byBuild: Partial<Record<GenomeBuild, string>> = {};
+  const grch37 = validRiskAllele(record.riskAllelesByBuild?.GRCh37);
+  const grch38 = validRiskAllele(record.riskAllelesByBuild?.GRCh38);
+  if (grch37) byBuild.GRCh37 = grch37;
+  if (grch38) byBuild.GRCh38 = grch38;
+
+  if (!byBuild.GRCh37 && !byBuild.GRCh38) {
+    const riskAllele = validRiskAllele(record.riskAllele);
+    if (riskAllele) {
+      byBuild.GRCh37 = riskAllele;
+      byBuild.GRCh38 = riskAllele;
+    }
+  }
+
+  return byBuild;
+}
+
+function singleUnambiguousRiskAllele(riskAllelesByBuild: Partial<Record<GenomeBuild, string>>): string | undefined {
+  const alleles = Array.from(new Set(Object.values(riskAllelesByBuild)));
+  return alleles.length === 1 ? alleles[0] : undefined;
+}
+
+function riskAlleleBuildKey(riskAllelesByBuild: Partial<Record<GenomeBuild, string>>): string {
+  return [
+    riskAllelesByBuild.GRCh37 ? `grch37-${riskAllelesByBuild.GRCh37.toLowerCase()}` : null,
+    riskAllelesByBuild.GRCh38 ? `grch38-${riskAllelesByBuild.GRCh38.toLowerCase()}` : null,
+  ].filter(Boolean).join("-");
+}
+
+function clinGenMarkerKey(marker: PathogenicClinVarMarker): string {
+  return `${marker.rsid}:${riskAlleleBuildKey(marker.riskAllelesByBuild ?? {})}`;
+}
+
+function uniqueClinGenMarkersByRsidAndBuild(markers: PathogenicClinVarMarker[], limit: number): PathogenicClinVarMarker[] {
+  const seen = new Set<string>();
+  const uniqueMarkers: PathogenicClinVarMarker[] = [];
+
+  for (const marker of markers) {
+    const key = clinGenMarkerKey(marker);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueMarkers.push(marker);
+    if (uniqueMarkers.length >= limit) break;
+  }
+
+  return uniqueMarkers;
+}
+
+function isClinGenBackingClinVarRecord(record: EvidencePackRecord): boolean {
+  const normalized = normalizeClinicalSignificance(record.clinicalSignificance);
+  return normalized === "pathogenic" ||
+    normalized === "likely-pathogenic" ||
+    normalized === "pathogenic-likely-pathogenic";
+}
+
+function relatedContextKey(sourceId: string, id: string): string {
+  return `${sourceId}:${id}`;
+}
+
+function addRelatedContext(
+  record: EvidencePackRecord,
+  context: NonNullable<EvidencePackRecord["relatedContexts"]>[number],
+): void {
+  const existing = new Set((record.relatedContexts ?? []).map((item) => relatedContextKey(item.sourceId, item.id)));
+  if (existing.has(relatedContextKey(context.sourceId, context.id))) return;
+  record.relatedContexts = [...(record.relatedContexts ?? []), context];
+}
+
+function clinGenVariantEvidenceTier(assertion: string | null): EvidenceTier {
+  if (/^pathogenic$/i.test(assertion ?? "")) return "high";
+  if (/likely pathogenic/i.test(assertion ?? "")) return "moderate";
+  return "supplementary";
+}
+
+async function attachClinGenVariantPathogenicityContexts(clinvarRecords: EvidencePackRecord[]): Promise<void> {
+  const sourceFile = sourceCacheFiles.clingenVariantPathogenicity;
+  if (!existsSync(sourceFile)) return;
+
+  const recordsByVariationId = new Map<string, EvidencePackRecord[]>();
+  for (const record of clinvarRecords) {
+    if (!record.clinvarVariationId) continue;
+    pushMapValue(recordsByVariationId, record.clinvarVariationId, record);
+  }
+
+  const classifications = JSON.parse(await readFile(sourceFile, "utf8")) as ClinGenVariantPathogenicityRecord[];
+  for (const classification of classifications) {
+    if (classification.source !== "variant_pathogenicity") continue;
+    if (!classification.assertion) continue;
+    if (classification.raw?.Retracted?.trim().toLowerCase() === "true") continue;
+
+    const variationId = classification.raw?.["ClinVar Variation Id"]?.trim();
+    if (!variationId) continue;
+    const linkedRecords = recordsByVariationId.get(variationId);
+    if (!linkedRecords) continue;
+
+    for (const record of linkedRecords) {
+      addRelatedContext(record, {
+        id: classification.id,
+        sourceId: "clingen",
+        contextType: "variant-pathogenicity",
+        title: `${classification.geneSymbol ?? record.genes[0] ?? "ClinGen"} variant pathogenicity`,
+        summary: `ClinGen Variant Pathogenicity classifies this exact ClinVar variant as ${classification.assertion}. This is related source context for the matched ClinVar allele, not a separate genotype match.`,
+        url: classification.reportUrl ?? record.url,
+        evidenceLevel: clinGenVariantEvidenceTier(classification.assertion),
+        classification: classification.assertion,
+        genes: classification.geneSymbol ? [classification.geneSymbol] : record.genes,
+        conditions: classification.diseaseLabel ? [classification.diseaseLabel] : record.conditions,
+        notes: [
+          `ClinVar Variation ID: ${variationId}.`,
+          ...(classification.publishedDate ? [`Published: ${classification.publishedDate}.`] : []),
+        ],
+      });
+    }
+  }
+}
+
+export function clingenCandidateMarkersForDisease(
+  markers: PathogenicClinVarMarker[],
+  disease: string,
+): PathogenicClinVarMarker[] {
+  const markersWithConditions = markers.filter((marker) => marker.conditions.length > 0);
+  if (markersWithConditions.length === 0) return markers;
+
+  const diseaseWords = clingenDiseaseWordSet(disease);
+  return markersWithConditions.filter((marker) => clingenConditionWordsOverlap(marker.conditions, diseaseWords));
+}
+
 async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promise<EvidencePackRecord[]> {
   const sourceFile = sourceCacheFiles.clingen;
+  await attachClinGenVariantPathogenicityContexts(clinvarRecords);
   if (!existsSync(sourceFile)) return [];
 
   const classifications = JSON.parse(await readFile(sourceFile, "utf8")) as ClinGenClassification[];
 
-  // Build gene → rsid map from ClinVar records so we can key ClinGen data on rsids
-  const geneToRsids = new Map<string, string[]>();
+  // Build gene → pathogenic ClinVar markers only. Gene-only matching against any ClinVar
+  // significance would produce false positives (e.g. a "risk factor" variant for disease A in
+  // gene X wrongly backing a ClinGen classification for disease B in the same gene).
+  const geneToMarkers = new Map<string, PathogenicClinVarMarker[]>();
   for (const record of clinvarRecords) {
+    if (!isClinGenBackingClinVarRecord(record)) continue;
+    const rsid = record.markerIds[0];
+    if (!rsid) continue;
+    const riskAllelesByBuild = normalizedRiskAllelesByBuild(record);
+    if (!riskAllelesByBuild.GRCh37 && !riskAllelesByBuild.GRCh38) continue;
+    const riskAllele = singleUnambiguousRiskAllele(riskAllelesByBuild);
     for (const gene of record.genes ?? []) {
       const upper = gene.toUpperCase();
-      const existing = geneToRsids.get(upper);
-      if (existing) { if (!existing.includes(record.markerIds[0])) existing.push(record.markerIds[0]); }
-      else geneToRsids.set(upper, [record.markerIds[0]]);
+      const marker: PathogenicClinVarMarker = { rsid, riskAllele, riskAllelesByBuild, conditions: record.conditions ?? [], record };
+      const existing = geneToMarkers.get(upper);
+      if (existing) { existing.push(marker); }
+      else geneToMarkers.set(upper, [marker]);
     }
   }
 
-  const records: EvidencePackRecord[] = [];
   for (const cls of classifications) {
     const gene = cls.gene.toUpperCase();
-    const rsids = geneToRsids.get(gene);
-    if (!rsids || rsids.length === 0) continue;
+    const markers = geneToMarkers.get(gene);
+    if (!markers || markers.length === 0) continue;
+
+    // Prefer markers whose ClinVar conditions overlap with the ClinGen disease label.
+    // Fall back to conditionless markers only when no condition-bearing candidates exist.
+    const candidateMarkers = uniqueClinGenMarkersByRsidAndBuild(
+      clingenCandidateMarkersForDisease(markers, cls.disease),
+      3,
+    );
+    if (candidateMarkers.length === 0) continue;
 
     const evidenceLevel = clingenEvidenceTier(cls.classification);
     const pmids = cls.pmids?.length ? Array.from(new Set(cls.pmids)) : [];
@@ -1167,40 +1403,31 @@ async function buildClinGenRecords(clinvarRecords: EvidencePackRecord[]): Promis
     const slug = cls.gene.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     const diseaseSlug = cls.disease.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
 
-    records.push({
-      id: `clingen-${slug}-${diseaseSlug}`,
-      entryId: `local-medical-clingen-${slug}-${diseaseSlug}`,
-      sourceId: "clingen",
-      role: "primary",
-      category: "medical",
-      subcategory: "gene-disease-validity",
-      markerIds: rsids.slice(0, 3),
-      genes: [cls.gene],
-      title: `${cls.gene} / ${cls.disease}`,
-      summary: `ClinGen has classified the relationship between ${cls.gene} and ${cls.disease} as ${cls.classification} based on systematic evidence review.`,
-      riskSummary: `${cls.gene} variant in a gene with ClinGen ${cls.classification} evidence for ${cls.disease}`,
-      qualityTier: isHighConfidenceClinGenClassification(cls.classification) ? "tier-1" : undefined,
-      clingenClassification: cls.classification,
-      detail: `ClinGen ${cls.classification} classification: expert curation found ${cls.classification.toLowerCase()} evidence that ${cls.gene} variants cause ${cls.disease}.`,
-      whyItMatters: "ClinGen gene-disease validity classifications reflect the strength of evidence that variants in this gene cause the specified disease, using a rigorous semi-quantitative framework.",
-      topics: ["ClinGen", "Gene-disease validity"],
-      conditions: [cls.disease],
-      url: cls.url,
-      release: "ClinGen gene-disease validity classifications",
-      evidenceLevel,
-      clinicalSignificance: "pathogenic",
-      repute: "bad",
-      tone: "caution",
-      pmids,
-      notes: [
-        `${CLINGEN_CLASSIFICATION_NOTE_PREFIX} ${cls.classification}.`,
-        ...(cls.diseaseId ? [`Disease identifier: ${cls.diseaseId}.`] : []),
-        "ClinGen classifications reflect published literature and expert panel review; they do not replace diagnostic genetic testing.",
-      ],
-    });
+    for (const marker of candidateMarkers) {
+      if (!marker.record) continue;
+      addRelatedContext(marker.record, {
+        id: `clingen-gene-validity-${slug}-${diseaseSlug}`,
+        sourceId: "clingen",
+        contextType: "gene-disease-validity",
+        title: `${cls.gene} / ${cls.disease}`,
+        summary: `ClinGen classifies the ${cls.gene} / ${cls.disease} gene-disease relationship as ${cls.classification}. This is related gene-disease context for the matched ClinVar allele, not an additional genotype match.`,
+        url: cls.url,
+        evidenceLevel,
+        classification: cls.classification,
+        genes: [cls.gene],
+        conditions: [cls.disease],
+        pmids,
+        notes: [
+          `${CLINGEN_CLASSIFICATION_NOTE_PREFIX} ${cls.classification}.`,
+          `Matched ClinVar marker: ${marker.rsid}${marker.riskAllele ? ` risk allele ${marker.riskAllele}` : " with build-specific risk alleles"}.`,
+          ...(cls.diseaseId ? [`Disease identifier: ${cls.diseaseId}.`] : []),
+          "ClinGen gene-disease validity is context for the gene-disease relationship and does not replace variant-specific interpretation.",
+        ],
+      });
+    }
   }
 
-  return records;
+  return [];
 }
 
 function dedupeRecords(records: EvidencePackRecord[]): EvidencePackRecord[] {
@@ -1233,6 +1460,7 @@ async function sourceChecksums(): Promise<Record<string, string | null>> {
     cpic: sourceCacheFiles.cpicVariants,
     pharmgkb: sourceCacheFiles.pharmgkb,
     clingen: sourceCacheFiles.clingen,
+    "clingen-variant-pathogenicity": sourceCacheFiles.clingenVariantPathogenicity,
   };
   const entries = await Promise.all(
     Object.entries(sources).map(async ([key, filePath]) =>

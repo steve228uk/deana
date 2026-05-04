@@ -673,8 +673,7 @@ describe("Deana app", () => {
     await waitFor(() => expect(prewarmSearchIndex).toHaveBeenCalledWith("profile-2"));
   });
 
-  it("shows a local evidence update notice for stale reports and refreshes on request", async () => {
-    const user = userEvent.setup();
+  it("automatically refreshes stale reports when they are opened", async () => {
     let resolveIndex: (() => void) | undefined;
     vi.mocked(prewarmSearchIndex).mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => {
@@ -686,16 +685,11 @@ describe("Deana app", () => {
 
     renderApp("/explorer/profile-stale?tab=overview");
 
-    expect(await screen.findByText("New evidence is available")).toBeInTheDocument();
-    expect(screen.getAllByText(/legacy-pack/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(new RegExp(EVIDENCE_PACK_VERSION)).length).toBeGreaterThan(0);
-
-    await user.click(screen.getByRole("button", { name: /Refresh evidence/i }));
-
     await waitFor(() =>
       expect(screen.getByTestId("location").textContent).toBe("/processing/refresh/profile-stale"),
     );
     expect(await screen.findByRole("heading", { name: /Refreshing evidence/i })).toBeInTheDocument();
+    expect(screen.queryByText("New evidence is available")).not.toBeInTheDocument();
     await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(1));
     expect(workerPostCounts.evidence).toBe(1);
     expect(screen.getByText("Building search index…")).toBeInTheDocument();
@@ -715,15 +709,17 @@ describe("Deana app", () => {
 
     renderApp("/explorer/profile-stale-failure?tab=overview");
 
-    expect(await screen.findByText("New evidence is available")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Refresh evidence/i }));
-
     await waitFor(() =>
       expect(screen.getByTestId("location").textContent).toBe("/processing/refresh/profile-stale-failure"),
     );
     expect(await screen.findByText(/Evidence refresh failed/i)).toBeInTheDocument();
     expect(saveProfile).not.toHaveBeenCalled();
     expect(storedProfiles[0].evidencePackVersion).toBe("legacy-pack");
+
+    await user.click(screen.getByRole("button", { name: /Back home/i }));
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("/"),
+    );
   });
 
   it("removes a saved profile from the home library", async () => {

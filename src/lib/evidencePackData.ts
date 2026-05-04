@@ -3,10 +3,11 @@ import {
   EvidencePackManifest,
   EvidencePackMatch,
   EvidencePackRecord,
+  GenomeBuild,
   MatchedMarker,
 } from "../types";
 
-export const LOCAL_EVIDENCE_PACK_VERSION = "2026-05-core-1";
+export const LOCAL_EVIDENCE_PACK_VERSION = "2026-05-core-2";
 export const LOCAL_EVIDENCE_PACK_BASE = `/evidence-packs/${LOCAL_EVIDENCE_PACK_VERSION}`;
 
 const DEFAULT_SHARD_MODULO = 256;
@@ -25,12 +26,40 @@ function alleleCount(genotype: string | null, allele?: string): number | null {
 }
 
 const COMPLEMENT: Record<string, string> = { A: "T", T: "A", C: "G", G: "C" };
+const CONSTRAINT_REQUIRED_SOURCES = new Set(["clingen", "clinvar", "cpic", "pharmgkb"]);
 
 function complementGenotype(genotype: string): string {
   return genotype.toUpperCase().split("").map((a) => COMPLEMENT[a] ?? a).join("");
 }
 
-function markerMatchesRecord(marker: CompactMarker | undefined, record: EvidencePackRecord): boolean {
+function validRiskAllele(allele?: string): string | null {
+  if (!allele || !/^[ACGT]$/i.test(allele)) return null;
+  return allele.toUpperCase();
+}
+
+function supportedGenomeBuild(build?: string): GenomeBuild | null {
+  return build === "GRCh37" || build === "GRCh38" ? build : null;
+}
+
+function riskAlleleForBuild(record: EvidencePackRecord, build?: string): string | null {
+  const supportedBuild = supportedGenomeBuild(build);
+  if (record.riskAllelesByBuild) {
+    if (supportedBuild) return validRiskAllele(record.riskAllelesByBuild[supportedBuild]);
+
+    const alleles = Array.from(
+      new Set(Object.values(record.riskAllelesByBuild).map(validRiskAllele).filter((allele): allele is string => Boolean(allele))),
+    );
+    return alleles.length === 1 ? alleles[0] : null;
+  }
+
+  return validRiskAllele(record.riskAllele);
+}
+
+function markerMatchesRecord(
+  marker: CompactMarker | undefined,
+  record: EvidencePackRecord,
+  build?: string,
+): boolean {
   const genotype = canonicalGenotype(marker?.[3] ?? null);
   if (!genotype) return false;
 
@@ -40,8 +69,13 @@ function markerMatchesRecord(marker: CompactMarker | undefined, record: Evidence
     return genotype === stored || (comp !== null && genotype === comp);
   }
 
-  if (record.riskAllele && /^[ACGT]$/i.test(record.riskAllele)) {
-    return alleleCount(genotype, record.riskAllele) !== 0;
+  const riskAllele = riskAlleleForBuild(record, build);
+  if (riskAllele) {
+    return alleleCount(genotype, riskAllele) !== 0;
+  }
+
+  if (CONSTRAINT_REQUIRED_SOURCES.has(record.sourceId)) {
+    return false;
   }
 
   return true;
@@ -52,11 +86,10 @@ function markerToMatchedMarker(
   rsid: string,
   gene?: string,
   record?: EvidencePackRecord,
+  build?: string,
 ): MatchedMarker {
   const genotype = canonicalGenotype(marker?.[3] ?? null);
-  const matchedAllele = record?.riskAllele && /^[ACGT]$/i.test(record.riskAllele)
-    ? record.riskAllele.toUpperCase()
-    : undefined;
+  const matchedAllele = record ? riskAlleleForBuild(record, build) ?? undefined : undefined;
 
   return {
     rsid,
@@ -155,6 +188,7 @@ export async function fetchLocalEvidencePack(
 export function matchEvidenceRecords(
   markers: CompactMarker[],
   records: EvidencePackRecord[],
+  build?: string,
 ): EvidencePackMatch[] {
   const markerMap = new Map(markers.map((marker) => [marker[0].toLowerCase(), marker]));
   const matches: EvidencePackMatch[] = [];
@@ -164,9 +198,9 @@ export function matchEvidenceRecords(
 
     record.markerIds.forEach((rsid, index) => {
       const marker = markerMap.get(rsid.toLowerCase());
-      if (!markerMatchesRecord(marker, record)) return;
+      if (!markerMatchesRecord(marker, record, build)) return;
 
-      const matchedMarker = markerToMatchedMarker(marker, rsid, record.genes[index] ?? record.genes[0], record);
+      const matchedMarker = markerToMatchedMarker(marker, rsid, record.genes[index] ?? record.genes[0], record, build);
       if (matchedMarker.genotype) {
         matchedMarkers.push(matchedMarker);
       }
