@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { LOCAL_EVIDENCE_PACK_VERSION, fetchLocalEvidencePack, matchEvidenceRecords } from "./evidencePackData";
-import type { EvidencePackManifest, EvidencePackRecord } from "../types";
+import {
+  LOCAL_EVIDENCE_PACK_VERSION,
+  fetchLocalEvidencePack,
+  matchEvidenceRecords,
+  matchLocalEvidencePack,
+} from "./evidencePackData";
+import type { CompactMarker, EvidencePackManifest, EvidencePackRecord } from "../types";
 
 async function sha256(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
@@ -85,6 +90,141 @@ describe("fetchLocalEvidencePack", () => {
     expect(pack.records).toEqual(neededRecords);
     expect(fetchedUrls.some((url) => url.endsWith("/shards/m000.json"))).toBe(false);
     expect(fetchedUrls.some((url) => url.endsWith("/shards/m001.json"))).toBe(true);
+  });
+
+  it("matches selected shards sequentially without materializing the pack", async () => {
+    const bucketZeroRecords = [makeRecord("bucket-zero", "rs2")];
+    const bucketOneRecords = [
+      makeRecord("bucket-one", "rs1"),
+      { ...makeRecord("missing-risk", "rs1"), riskAllele: "G" },
+    ];
+    const bucketZeroText = text(bucketZeroRecords);
+    const bucketOneText = text(bucketOneRecords);
+    const manifest: EvidencePackManifest = {
+      version: LOCAL_EVIDENCE_PACK_VERSION,
+      schemaVersion: 1,
+      generatedAt: "2026-04-25T00:00:00.000Z",
+      shardStrategy: "rsid-modulo",
+      shardModulo: 2,
+      shards: [
+        {
+          id: "m000",
+          recordsPath: "shards/m000.json",
+          recordsSha256: await sha256(bucketZeroText),
+          recordCount: bucketZeroRecords.length,
+          bucket: 0,
+        },
+        {
+          id: "m001",
+          recordsPath: "shards/m001.json",
+          recordsSha256: await sha256(bucketOneText),
+          recordCount: bucketOneRecords.length,
+          bucket: 1,
+        },
+      ],
+      recordCount: bucketZeroRecords.length + bucketOneRecords.length,
+      attribution: "test",
+      sources: [],
+    };
+    const fetchedShards: string[] = [];
+    let activeRecordFetches = 0;
+    let maxActiveRecordFetches = 0;
+    const fetchImpl = async (url: string | URL | Request): Promise<Response> => {
+      const href = String(url);
+      if (href.endsWith("/manifest.json")) {
+        return Response.json(manifest);
+      }
+
+      activeRecordFetches += 1;
+      maxActiveRecordFetches = Math.max(maxActiveRecordFetches, activeRecordFetches);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      activeRecordFetches -= 1;
+      fetchedShards.push(href);
+
+      if (href.endsWith("/shards/m000.json")) {
+        return new Response(bucketZeroText);
+      }
+      if (href.endsWith("/shards/m001.json")) {
+        return new Response(bucketOneText);
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const markers: CompactMarker[] = [
+      ["rs1", "1", 1, "AA"],
+      ["rs2", "1", 2, "AG"],
+    ];
+    const result = await matchLocalEvidencePack(fetchImpl as typeof fetch, markers, "GRCh37");
+
+    expect(result.matchedRecords).toEqual(matchEvidenceRecords(markers, [...bucketZeroRecords, ...bucketOneRecords], "GRCh37"));
+    expect(fetchedShards.map((url) => url.slice(url.lastIndexOf("/") + 1))).toEqual(["m000.json", "m001.json"]);
+    expect(maxActiveRecordFetches).toBe(1);
+  });
+
+  it("reports shard matching progress as each selected shard completes", async () => {
+    const firstRecords = [makeRecord("first", "rs1")];
+    const secondRecords = [makeRecord("second", "rs2")];
+    const firstText = text(firstRecords);
+    const secondText = text(secondRecords);
+    const manifest: EvidencePackManifest = {
+      version: LOCAL_EVIDENCE_PACK_VERSION,
+      schemaVersion: 1,
+      generatedAt: "2026-04-25T00:00:00.000Z",
+      shardStrategy: "rsid-modulo",
+      shardModulo: 2,
+      shards: [
+        {
+          id: "m000",
+          recordsPath: "shards/m000.json",
+          recordsSha256: await sha256(secondText),
+          recordCount: secondRecords.length,
+          bucket: 0,
+        },
+        {
+          id: "m001",
+          recordsPath: "shards/m001.json",
+          recordsSha256: await sha256(firstText),
+          recordCount: firstRecords.length,
+          bucket: 1,
+        },
+      ],
+      recordCount: firstRecords.length + secondRecords.length,
+      attribution: "test",
+      sources: [],
+    };
+    const fetchImpl = async (url: string | URL | Request): Promise<Response> => {
+      const href = String(url);
+      if (href.endsWith("/manifest.json")) return Response.json(manifest);
+      if (href.endsWith("/shards/m000.json")) return new Response(secondText);
+      if (href.endsWith("/shards/m001.json")) return new Response(firstText);
+      return new Response("not found", { status: 404 });
+    };
+    const progress: Array<{
+      processedShards: number;
+      processedRecords: number;
+      matchedEntryCount: number;
+      matchedRsidCount: number;
+      currentPath: string | null;
+    }> = [];
+
+    await matchLocalEvidencePack(fetchImpl as typeof fetch, [
+      ["rs1", "1", 1, "AA"],
+      ["rs2", "1", 2, "AG"],
+    ], undefined, (snapshot) => {
+      progress.push({
+        processedShards: snapshot.processedShards,
+        processedRecords: snapshot.processedRecords,
+        matchedEntryCount: snapshot.matchedEntryCount,
+        matchedRsidCount: snapshot.matchedRsidCount,
+        currentPath: snapshot.currentPath,
+      });
+    });
+
+    expect(progress).toEqual([
+      { processedShards: 0, processedRecords: 0, matchedEntryCount: 0, matchedRsidCount: 0, currentPath: null },
+      { processedShards: 1, processedRecords: 1, matchedEntryCount: 1, matchedRsidCount: 1, currentPath: "shards/m000.json" },
+      { processedShards: 2, processedRecords: 2, matchedEntryCount: 2, matchedRsidCount: 2, currentPath: "shards/m001.json" },
+    ]);
   });
 
   it("normalizes uploaded genotypes when matching local records", () => {

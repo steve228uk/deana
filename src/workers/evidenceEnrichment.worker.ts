@@ -1,4 +1,4 @@
-import { fetchLocalEvidencePack, matchEvidenceRecords } from "../lib/evidencePackData";
+import { matchLocalEvidencePack, type LocalEvidencePackMatchProgress } from "../lib/evidencePackData";
 import {
   EvidenceProgressSnapshot,
   EvidenceSupplement,
@@ -28,6 +28,25 @@ type ErrorResponse = {
 };
 
 type WorkerResponse = ProgressResponse | DoneResponse | ErrorResponse;
+
+const MATCHING_PROGRESS_FLOOR = 0.05;
+const MATCHING_PROGRESS_WEIGHT = 0.9;
+const FINALIZING_PROGRESS_RATIO = 0.95;
+
+function recordProgressRatio(progress: LocalEvidencePackMatchProgress): number {
+  if (progress.totalRecords > 0) {
+    return progress.processedRecords / progress.totalRecords;
+  }
+  if (progress.totalShards === 0) {
+    return 1;
+  }
+  return progress.processedShards / progress.totalShards;
+}
+
+function estimateProcessedRsids(markerCount: number, progress: LocalEvidencePackMatchProgress): number {
+  const weightedProgress = Math.max(MATCHING_PROGRESS_FLOOR, recordProgressRatio(progress) * MATCHING_PROGRESS_WEIGHT);
+  return Math.min(markerCount, Math.round(markerCount * weightedProgress));
+}
 
 function postProgress(
   post: (message: WorkerResponse) => void,
@@ -59,31 +78,33 @@ async function buildEvidenceSupplement(
     currentRsid: "Loading local evidence-pack manifest",
   });
 
-  const { manifest, records } = await fetchLocalEvidencePack(fetch, dna.markers);
+  const { manifest, matchedRecords, matchedEntryCount, matchedRsidCount } = await matchLocalEvidencePack(fetch, dna.markers, dna.build, (progress) => {
+    postProgress(post, dna, {
+      packStage: progress.processedShards === 0 ? "records" : "matching",
+      packVersion: progress.manifest.version,
+      processedRsids: estimateProcessedRsids(dna.markerCount, progress),
+      matchedFindings: progress.matchedEntryCount,
+      unmatchedRsids: Math.max(0, dna.markerCount - progress.matchedRsidCount),
+      currentRsid: progress.currentPath
+        ? `Matched evidence shard ${progress.processedShards} of ${progress.totalShards}`
+        : "Loading local evidence shards",
+    });
+  });
 
   postProgress(post, dna, {
     packStage: "matching",
     packVersion: manifest.version,
-    processedRsids: Math.round(dna.markerCount * 0.35),
-    currentRsid: "Matching bundled evidence sources locally",
+    processedRsids: Math.round(dna.markerCount * FINALIZING_PROGRESS_RATIO),
+    currentRsid: "Finalizing bundled evidence matches",
   });
 
-  const matchedRecords = matchEvidenceRecords(dna.markers, records, dna.build);
-  const matchedRsids = new Set<string>();
-  const matchedEntryIds = new Set<string>();
-  for (const match of matchedRecords) {
-    matchedEntryIds.add(match.record.entryId);
-    for (const marker of match.matchedMarkers) {
-      matchedRsids.add(marker.rsid.toLowerCase());
-    }
-  }
-  const unmatchedRsids = Math.max(0, dna.markerCount - matchedRsids.size);
+  const unmatchedRsids = Math.max(0, dna.markerCount - matchedRsidCount);
 
   postProgress(post, dna, {
     packStage: "matching",
     packVersion: manifest.version,
     processedRsids: dna.markerCount,
-    matchedFindings: matchedEntryIds.size,
+    matchedFindings: matchedEntryCount,
     unmatchedRsids,
     currentRsid: "Matched bundled evidence records",
   });

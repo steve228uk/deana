@@ -12,6 +12,20 @@ export const LOCAL_EVIDENCE_PACK_BASE = `/evidence-packs/${LOCAL_EVIDENCE_PACK_V
 
 const DEFAULT_SHARD_MODULO = 256;
 
+type EvidencePackShard = NonNullable<EvidencePackManifest["shards"]>[number];
+type MarkerLookup = Map<string, CompactMarker>;
+
+export interface LocalEvidencePackMatchProgress {
+  manifest: EvidencePackManifest;
+  totalShards: number;
+  processedShards: number;
+  totalRecords: number;
+  processedRecords: number;
+  matchedEntryCount: number;
+  matchedRsidCount: number;
+  currentPath: string | null;
+}
+
 function canonicalGenotype(genotype: string | null): string | null {
   if (!genotype || genotype === "--") return null;
   if (/^[ACGT]{2}$/i.test(genotype)) {
@@ -114,6 +128,38 @@ function rsidBucket(rsid: string, modulo: number): number {
   return hash % modulo;
 }
 
+async function fetchLocalEvidencePackManifest(fetchImpl: typeof fetch): Promise<EvidencePackManifest> {
+  const manifestResponse = await fetchImpl(`${LOCAL_EVIDENCE_PACK_BASE}/manifest.json`, {
+    cache: "force-cache",
+  });
+  if (!manifestResponse.ok) {
+    throw new Error(`Local evidence pack manifest failed with ${manifestResponse.status}`);
+  }
+
+  const manifest = (await manifestResponse.json()) as EvidencePackManifest;
+  if (manifest.version !== LOCAL_EVIDENCE_PACK_VERSION || manifest.schemaVersion !== 1) {
+    throw new Error("Local evidence pack manifest is not compatible with this app version.");
+  }
+
+  return manifest;
+}
+
+function selectShardsForMarkers(
+  manifest: EvidencePackManifest,
+  markersForShardSelection: CompactMarker[],
+): EvidencePackShard[] {
+  if (!manifest.shards || manifest.shards.length === 0) return [];
+
+  if (markersForShardSelection.length === 0) return manifest.shards;
+
+  const modulo = manifest.shardModulo ?? DEFAULT_SHARD_MODULO;
+  const neededBuckets = new Set<number>();
+  for (const marker of markersForShardSelection) {
+    neededBuckets.add(rsidBucket(marker[0], modulo));
+  }
+  return manifest.shards.filter((shard) => neededBuckets.has(shard.bucket));
+}
+
 async function fetchRecordsFile(
   fetchImpl: typeof fetch,
   path: string,
@@ -144,27 +190,14 @@ export async function fetchLocalEvidencePack(
   manifest: EvidencePackManifest;
   records: EvidencePackRecord[];
 }> {
-  const manifestResponse = await fetchImpl(`${LOCAL_EVIDENCE_PACK_BASE}/manifest.json`, {
-    cache: "force-cache",
-  });
-  if (!manifestResponse.ok) {
-    throw new Error(`Local evidence pack manifest failed with ${manifestResponse.status}`);
-  }
-
-  const manifest = (await manifestResponse.json()) as EvidencePackManifest;
-  if (manifest.version !== LOCAL_EVIDENCE_PACK_VERSION || manifest.schemaVersion !== 1) {
-    throw new Error("Local evidence pack manifest is not compatible with this app version.");
-  }
+  const manifest = await fetchLocalEvidencePackManifest(fetchImpl);
 
   if (manifest.shards && manifest.shards.length > 0) {
-    const modulo = manifest.shardModulo ?? DEFAULT_SHARD_MODULO;
-    const neededBuckets = new Set(markersForShardSelection.map((marker) => rsidBucket(marker[0], modulo)));
-    const selectedShards = markersForShardSelection.length > 0
-      ? manifest.shards.filter((shard) => neededBuckets.has(shard.bucket))
-      : manifest.shards;
-    const records = (await Promise.all(
-      selectedShards.map((shard) => fetchRecordsFile(fetchImpl, shard.recordsPath, shard.recordsSha256)),
-    )).flat();
+    const selectedShards = selectShardsForMarkers(manifest, markersForShardSelection);
+    const records: EvidencePackRecord[] = [];
+    for (const shard of selectedShards) {
+      records.push(...await fetchRecordsFile(fetchImpl, shard.recordsPath, shard.recordsSha256));
+    }
 
     return { manifest, records };
   }
@@ -179,31 +212,150 @@ export async function fetchLocalEvidencePack(
   };
 }
 
+function createMarkerLookup(markers: CompactMarker[]): MarkerLookup {
+  const lookup: MarkerLookup = new Map();
+  for (const marker of markers) {
+    lookup.set(marker[0].toLowerCase(), marker);
+  }
+  return lookup;
+}
+
+function matchEvidenceRecord(
+  markerLookup: MarkerLookup,
+  record: EvidencePackRecord,
+  build?: string,
+): EvidencePackMatch | null {
+  const matchedMarkers: MatchedMarker[] = [];
+
+  for (let index = 0; index < record.markerIds.length; index += 1) {
+    const rsid = record.markerIds[index];
+    const marker = markerLookup.get(rsid.toLowerCase());
+    if (!markerMatchesRecord(marker, record, build)) continue;
+
+    const matchedMarker = markerToMatchedMarker(marker, rsid, record.genes[index] ?? record.genes[0], record, build);
+    if (matchedMarker.genotype) {
+      matchedMarkers.push(matchedMarker);
+    }
+  }
+
+  return matchedMarkers.length > 0 ? { record, matchedMarkers } : null;
+}
+
+function matchEvidenceRecordsWithMarkerLookup(
+  markerLookup: MarkerLookup,
+  records: EvidencePackRecord[],
+  build?: string,
+): EvidencePackMatch[] {
+  const matches: EvidencePackMatch[] = [];
+
+  for (const record of records) {
+    const match = matchEvidenceRecord(markerLookup, record, build);
+    if (match) matches.push(match);
+  }
+
+  return matches;
+}
+
+export async function matchLocalEvidencePack(
+  fetchImpl: typeof fetch = fetch,
+  markers: CompactMarker[] = [],
+  build?: string,
+  onProgress?: (progress: LocalEvidencePackMatchProgress) => void,
+): Promise<{
+  manifest: EvidencePackManifest;
+  matchedRecords: EvidencePackMatch[];
+  matchedEntryCount: number;
+  matchedRsidCount: number;
+}> {
+  const manifest = await fetchLocalEvidencePackManifest(fetchImpl);
+  const markerLookup = createMarkerLookup(markers);
+  const matchedRecords: EvidencePackMatch[] = [];
+  const matchedEntryIds = new Set<string>();
+  const matchedRsids = new Set<string>();
+
+  const addMatch = (match: EvidencePackMatch) => {
+    matchedRecords.push(match);
+    matchedEntryIds.add(match.record.entryId);
+    for (const marker of match.matchedMarkers) {
+      matchedRsids.add(marker.rsid.toLowerCase());
+    }
+  };
+
+  const addRecordMatches = (records: EvidencePackRecord[]) => {
+    for (const record of records) {
+      const match = matchEvidenceRecord(markerLookup, record, build);
+      if (match) addMatch(match);
+    }
+  };
+
+  const emitProgress = (
+    totalShards: number,
+    processedShards: number,
+    totalRecords: number,
+    processedRecords: number,
+    currentPath: string | null,
+  ) => {
+    onProgress?.({
+      manifest,
+      totalShards,
+      processedShards,
+      totalRecords,
+      processedRecords,
+      matchedEntryCount: matchedEntryIds.size,
+      matchedRsidCount: matchedRsids.size,
+      currentPath,
+    });
+  };
+
+  if (manifest.shards && manifest.shards.length > 0) {
+    const selectedShards = selectShardsForMarkers(manifest, markers);
+    const totalRecords = selectedShards.reduce((total, shard) => total + shard.recordCount, 0);
+    let processedRecords = 0;
+    let processedShards = 0;
+
+    emitProgress(selectedShards.length, processedShards, totalRecords, processedRecords, null);
+
+    for (const shard of selectedShards) {
+      const records = await fetchRecordsFile(fetchImpl, shard.recordsPath, shard.recordsSha256);
+      addRecordMatches(records);
+      processedRecords += shard.recordCount;
+      processedShards += 1;
+
+      emitProgress(selectedShards.length, processedShards, totalRecords, processedRecords, shard.recordsPath);
+    }
+
+    return {
+      manifest,
+      matchedRecords,
+      matchedEntryCount: matchedEntryIds.size,
+      matchedRsidCount: matchedRsids.size,
+    };
+  }
+
+  if (!manifest.recordsPath || !manifest.recordsSha256) {
+    throw new Error("Local evidence pack manifest did not include records or shards.");
+  }
+
+  emitProgress(1, 0, manifest.recordCount ?? 0, 0, null);
+
+  const records = await fetchRecordsFile(fetchImpl, manifest.recordsPath, manifest.recordsSha256);
+  addRecordMatches(records);
+
+  const totalRecords = manifest.recordCount ?? records.length;
+  emitProgress(1, 1, totalRecords, totalRecords, manifest.recordsPath);
+
+  return {
+    manifest,
+    matchedRecords,
+    matchedEntryCount: matchedEntryIds.size,
+    matchedRsidCount: matchedRsids.size,
+  };
+}
+
 export function matchEvidenceRecords(
   markers: CompactMarker[],
   records: EvidencePackRecord[],
   build?: string,
 ): EvidencePackMatch[] {
-  const markerMap = new Map(markers.map((marker) => [marker[0].toLowerCase(), marker]));
-  const matches: EvidencePackMatch[] = [];
-
-  for (const record of records) {
-    const matchedMarkers: MatchedMarker[] = [];
-
-    record.markerIds.forEach((rsid, index) => {
-      const marker = markerMap.get(rsid.toLowerCase());
-      if (!markerMatchesRecord(marker, record, build)) return;
-
-      const matchedMarker = markerToMatchedMarker(marker, rsid, record.genes[index] ?? record.genes[0], record, build);
-      if (matchedMarker.genotype) {
-        matchedMarkers.push(matchedMarker);
-      }
-    });
-
-    if (matchedMarkers.length > 0) {
-      matches.push({ record, matchedMarkers });
-    }
-  }
-
-  return matches;
+  return matchEvidenceRecordsWithMarkerLookup(createMarkerLookup(markers), records, build);
 }
