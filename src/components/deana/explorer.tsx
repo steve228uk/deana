@@ -61,7 +61,6 @@ export function ExplorerShell({
   report,
   activeTab,
   isAiEnabled = false,
-  notice,
   children,
   onTabChange,
   onBackHome,
@@ -69,7 +68,6 @@ export function ExplorerShell({
   report: ExplorerReportCard;
   activeTab: ExplorerTab;
   isAiEnabled?: boolean;
-  notice?: ReactNode;
   children: ReactNode;
   onTabChange?: (tab: ExplorerTab) => void;
   onBackHome?: () => void;
@@ -142,7 +140,6 @@ export function ExplorerShell({
           </nav>
         </div>
 
-        {notice}
         {children}
         </div>
       </div>
@@ -155,35 +152,6 @@ export function ExplorerShell({
       {modal === "help" ? <HelpModal onClose={() => setModal(null)} /> : null}
       {modal === "support" ? <SupportDeanaModal onClose={() => setModal(null)} /> : null}
     </>
-  );
-}
-
-export function EvidenceUpdateNotice({
-  currentPackVersion,
-  latestVersion,
-  onRefresh,
-}: {
-  currentPackVersion: string;
-  latestVersion: string;
-  onRefresh: () => void;
-}) {
-  return (
-    <section className="dn-evidence-update-notice" aria-labelledby="evidence-update-title">
-      <span className="dn-round-icon"><Icon name="refresh" /></span>
-      <div>
-        <h2 id="evidence-update-title">New evidence is available</h2>
-        <p>
-          This report uses evidence pack <strong>{currentPackVersion}</strong>. The bundled local pack is now{" "}
-          <strong>{latestVersion}</strong>.
-        </p>
-        <p className="dn-evidence-update-notice__privacy">
-          Refreshing rematches your saved DNA data in this browser. No DNA is uploaded.
-        </p>
-      </div>
-      <button className="dn-button dn-button--primary" onClick={onRefresh}>
-        <Icon name="refresh" /> Refresh evidence
-      </button>
-    </section>
   );
 }
 
