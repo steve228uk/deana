@@ -106,7 +106,7 @@ describe("shouldRequireReportSearch", () => {
       {
         id: "a1",
         role: "assistant",
-        parts: [{ type: CHAT_SEARCH_TOOL_PART_TYPE, state: "output-available", toolCallId: "tool-1", output: { findings: [] } }],
+        parts: [{ type: CHAT_SEARCH_TOOL_PART_TYPE, state: "output-available", toolCallId: "tool-1", input: {}, output: { findings: [] } }],
       },
     ], buildChatContext())).toBe(false);
   });
