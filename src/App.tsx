@@ -73,6 +73,12 @@ function countMatchedFindings(evidenceSupplement: EvidenceSupplement): number {
   return entryIds.size;
 }
 
+function createEvidenceWorker(): Worker {
+  return new Worker(new URL("./workers/evidenceEnrichment.worker.ts", import.meta.url), {
+    type: "module",
+  });
+}
+
 export default function App() {
   const parserWorkerRef = useRef<Worker | null>(null);
   const evidenceWorkerRef = useRef<Worker | null>(null);
@@ -98,9 +104,7 @@ export default function App() {
     parserWorkerRef.current = new Worker(new URL("./workers/dnaParser.worker.ts", import.meta.url), {
       type: "module",
     });
-    evidenceWorkerRef.current = new Worker(new URL("./workers/evidenceEnrichment.worker.ts", import.meta.url), {
-      type: "module",
-    });
+    evidenceWorkerRef.current = createEvidenceWorker();
 
     return () => {
       parserWorkerRef.current?.terminate();
@@ -113,19 +117,21 @@ export default function App() {
       throw new Error("Parser worker is not ready yet.");
     }
 
+    const worker = parserWorkerRef.current;
     const result = await new Promise<Exclude<ParserWorkerResponse, { type: "progress" }>>((resolve) => {
-      parserWorkerRef.current!.onmessage = (event: MessageEvent<ParserWorkerResponse>) => {
+      worker.onmessage = (event: MessageEvent<ParserWorkerResponse>) => {
         if ("type" in event.data && event.data.type === "progress") {
           onProgress?.(event.data.progress);
           return;
         }
 
         if ("ok" in event.data) {
+          worker.onmessage = null;
           resolve(event.data);
         }
       };
 
-      parserWorkerRef.current!.postMessage({ file });
+      worker.postMessage({ file });
     });
 
     if (!result.ok) {
@@ -143,8 +149,27 @@ export default function App() {
       throw new Error("Evidence worker is not ready yet.");
     }
 
+    const worker = evidenceWorkerRef.current;
     const result = await new Promise<EvidenceSupplement>((resolve, reject) => {
-      evidenceWorkerRef.current!.onmessage = (event: MessageEvent<EvidenceWorkerResponse>) => {
+      const clearWorkerHandlers = () => {
+        worker.onmessage = null;
+        worker.onerror = null;
+        worker.onmessageerror = null;
+      };
+      const resetWorkerAfterFailure = () => {
+        clearWorkerHandlers();
+
+        if (evidenceWorkerRef.current === worker) {
+          worker.terminate();
+          evidenceWorkerRef.current = createEvidenceWorker();
+        }
+      };
+      const handleWorkerTransportFailure = () => {
+        resetWorkerAfterFailure();
+        reject(new Error("Local evidence enrichment failed."));
+      };
+
+      worker.onmessage = (event: MessageEvent<EvidenceWorkerResponse>) => {
         const message = event.data;
         if (message.type === "progress") {
           onProgress?.(message.snapshot);
@@ -152,14 +177,21 @@ export default function App() {
         }
 
         if (message.type === "done") {
+          clearWorkerHandlers();
           resolve(message.supplement);
           return;
         }
 
+        clearWorkerHandlers();
         reject(new Error(message.error));
       };
+      worker.onerror = (event) => {
+        event.preventDefault();
+        handleWorkerTransportFailure();
+      };
+      worker.onmessageerror = handleWorkerTransportFailure;
 
-      evidenceWorkerRef.current!.postMessage({ type: "start", dna: parsed });
+      worker.postMessage({ type: "start", dna: parsed });
     });
 
     return result;

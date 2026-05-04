@@ -348,8 +348,8 @@ export function MarketingProcessing({
   const heroVerb = isRefreshMode ? "Refreshing" : "Building";
   const bodyVerb = isRefreshMode ? "rematches" : "processes";
   const progressTitle = isRefreshMode ? "Refreshing evidence" : "Processing your data";
-  const isPreparingPack = snapshot.packStage && snapshot.packStage !== "matching";
-  const percent = isPreparingPack
+  const usesFixedProgressPercent = snapshot.packStage && snapshot.packStage !== "matching";
+  const percent = usesFixedProgressPercent
     ? 20
     : snapshot.totalRsids > 0
       ? Math.round((snapshot.processedRsids / snapshot.totalRsids) * 100)
@@ -362,12 +362,12 @@ export function MarketingProcessing({
   } else if (isSavingReport) {
     blockingReportMessage = "Saving your report…";
   }
-  const progressSummary = isPreparingPack
+  const progressSummary = usesFixedProgressPercent
     ? <span>Loading fixed evidence pack <strong>{snapshot.packVersion ?? "locally"}</strong></span>
     : (
       <span>Comparing <strong>{snapshot.processedRsids.toLocaleString()}</strong> of <strong>{snapshot.totalRsids.toLocaleString()}</strong> uploaded rsIDs locally</span>
     );
-  const currentLabel = isPreparingPack ? "Evidence pack" : "Current step";
+  const currentLabel = usesFixedProgressPercent ? "Evidence pack" : "Current step";
   const currentValue = snapshot.currentRsid ?? "Starting...";
 
   return (
@@ -414,9 +414,6 @@ export function MarketingProcessing({
         <Metric icon="upload" label="Uploaded rsIDs" value={snapshot.totalRsids} />
         <Metric icon="check" label="Processed" value={snapshot.processedRsids} />
         <Metric icon="spark" label="Matched findings" value={snapshot.matchedFindings} />
-        <Metric icon="x" label="Unmatched" value={snapshot.unmatchedRsids} />
-        <Metric icon="alert" label="Failed" value={snapshot.failedRsids} tone="coral" />
-        <Metric icon="refresh" label="Retries" value={snapshot.retries} />
       </section>
 
       {error ? (
