@@ -13,7 +13,7 @@ import {
 } from "../types";
 import { normalizeClinicalSignificance } from "./normalization";
 import { calculateFindingRank, evidenceTierSortValue } from "./ranking";
-export const EVIDENCE_PACK_VERSION = "2026-05-core-2";
+export const EVIDENCE_PACK_VERSION = "2026-05-core-3";
 
 export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
   clinvar: {
