@@ -44,6 +44,12 @@ const nav: Array<{ id: ExplorerTab; label: string; icon: IconName }> = tabs.map(
 const visibleTabsWithoutAi = tabs.filter((item) => item.id !== "ai");
 const visibleNavWithoutAi = nav.filter((item) => item.id !== "ai");
 
+function relatedEvidenceLabel(context: ReportEntry["relatedContexts"][number]): string {
+  return context.contextType === "gene-disease-validity"
+    ? "Related ClinGen gene-disease context"
+    : "Related ClinGen variant context";
+}
+
 function useScrollTopOnChange<T extends HTMLElement>(ref: RefObject<T | null>, deps: DependencyList) {
   useEffect(() => {
     if (!ref.current) return;
@@ -1016,6 +1022,7 @@ export function FindingDetailContent({
 }) {
   const Title = titleLevel;
   const summary = summaryUnlessTitle(finding.summary, finding.title);
+  const relatedContexts = finding.relatedContexts ?? [];
 
   return (
     <>
@@ -1057,6 +1064,23 @@ export function FindingDetailContent({
           <h3>Warnings</h3>
           <ul>
             {finding.warnings.map((warning) => <li key={warning}>{renderMarkdownInline(warning)}</li>)}
+          </ul>
+        </section>
+      ) : null}
+      {relatedContexts.length > 0 ? (
+        <section>
+          <h3>Related evidence</h3>
+          <ul>
+            {relatedContexts.map((context) => {
+              const href = ensureAbsoluteUrl(context.url);
+              const label = relatedEvidenceLabel(context);
+              return (
+                <li key={`${context.sourceId}-${context.id}`}>
+                  <strong>{label}:</strong> {renderMarkdownInline(context.summary)}
+                  {href ? <> <a href={href} target="_blank" rel="noreferrer">Source <Icon name="external" /></a></> : null}
+                </li>
+              );
+            })}
           </ul>
         </section>
       ) : null}

@@ -25,6 +25,24 @@ interface RawCpicPair {
 
 const jsonHeaders = { headers: { Accept: "application/json" } };
 
+export function isReferenceAlleleDefinitionName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return normalized === "reference" || /\breference\b/.test(normalized) || /^\*1(?!\d)/i.test(name.trim());
+}
+
+export function deriveCpicVariantAllele(nonReferenceAlleles: Iterable<string>): string | null {
+  const alleles = new Set<string>();
+
+  for (const allele of nonReferenceAlleles) {
+    const normalized = allele.trim().toUpperCase();
+    if (!/^[ACGT]$/.test(normalized)) continue;
+    alleles.add(normalized);
+    if (alleles.size > 1) return null;
+  }
+
+  return alleles.values().next().value ?? null;
+}
+
 async function fetchPairs(): Promise<RawCpicPair[]> {
   // pair_view joins drug/guideline data onto pair; raw /pair has drugid not drugname.
   // cpiclevel is the actual column name (not "level").
@@ -50,12 +68,14 @@ async function fetchVariants(): Promise<RawCpicVariant[]> {
       `${apiBase}/allele_definition?select=genesymbol,name,allele_location_value(*,sequence_location(dbsnpid))&limit=5000`,
       jsonHeaders,
     );
-    // Collect all variant alleles seen per rsid+gene so we can detect multi-allelic
-    // positions (where different named alleles define different bases at the same rsid).
-    const allelesByKey = new Map<string, { rsid: string; gene: string; alleles: Set<string> }>();
+    // Collect non-reference variant alleles per rsid+gene. CPIC also exposes reference
+    // definitions (often *1 or "reference"), which should not make a single alternate
+    // allele look ambiguous.
+    const allelesByKey = new Map<string, { rsid: string; gene: string; nonReferenceAlleles: Set<string> }>();
     for (const allele of raw) {
       const gene = String(allele.genesymbol ?? "");
       if (!gene) continue;
+      const referenceDefinition = isReferenceAlleleDefinitionName(String(allele.name ?? ""));
       const locations = Array.isArray(allele.allele_location_value) ? allele.allele_location_value : [];
       for (const loc of locations) {
         if (!loc || typeof loc !== "object") continue;
@@ -63,24 +83,26 @@ async function fetchVariants(): Promise<RawCpicVariant[]> {
         if (!seqLoc || typeof seqLoc !== "object") continue;
         const rsid = String((seqLoc as Record<string, unknown>).dbsnpid ?? "");
         if (!rsid.startsWith("rs")) continue;
-        const raw_allele = String((loc as Record<string, unknown>).variantallele ?? "").trim().toUpperCase();
+        const rawAllele = String((loc as Record<string, unknown>).variantallele ?? "").trim().toUpperCase();
         const key = `${rsid}|${gene}`;
         const existing = allelesByKey.get(key);
         if (existing) {
-          if (raw_allele) existing.alleles.add(raw_allele);
+          if (!referenceDefinition && /^[ACGT]$/.test(rawAllele)) existing.nonReferenceAlleles.add(rawAllele);
         } else {
-          allelesByKey.set(key, { rsid, gene, alleles: raw_allele ? new Set([raw_allele]) : new Set() });
+          allelesByKey.set(key, {
+            rsid,
+            gene,
+            nonReferenceAlleles: !referenceDefinition && /^[ACGT]$/.test(rawAllele) ? new Set([rawAllele]) : new Set(),
+          });
         }
       }
     }
 
     const variants: RawCpicVariant[] = [];
-    for (const { rsid, gene, alleles } of allelesByKey.values()) {
-      // Only set variantAllele when a single unambiguous single-base allele defines this position.
-      // Multi-allelic positions get null so the matcher falls back to any-genotype rather than
-      // filtering on the wrong allele.
-      const singleAllele = alleles.size === 1 ? [...alleles][0] : null;
-      const variantAllele = singleAllele && /^[ACGT]$/.test(singleAllele) ? singleAllele : null;
+    for (const { rsid, gene, nonReferenceAlleles } of allelesByKey.values()) {
+      // Only set variantAllele when a single unambiguous non-reference single-base allele
+      // defines this position. Multi-allelic positions stay null and are skipped by the pack.
+      const variantAllele = deriveCpicVariantAllele(nonReferenceAlleles);
       variants.push({ rsid, genesymbol: gene, function: null, variantAllele });
     }
     return variants;

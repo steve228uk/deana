@@ -51,6 +51,7 @@ type SearchableEntry = {
   warnings?: string[];
   sources?: ReportEntry["sources"];
   sourceNotes?: string[];
+  relatedContexts?: ReportEntry["relatedContexts"];
   evidenceTier?: string;
   clinicalSignificance?: string | null;
   normalizedClinicalSignificance?: string | null;
@@ -111,6 +112,20 @@ export function buildEntrySearchText(entry: SearchableEntry): string {
     ...entry.conditions,
     ...(entry.warnings ?? []),
     ...(entry.sourceNotes ?? []),
+    ...(entry.relatedContexts ?? []).flatMap((context) => [
+      context.id,
+      context.sourceId,
+      context.contextType,
+      context.title,
+      context.summary,
+      context.url,
+      context.evidenceLevel,
+      context.classification,
+      ...(context.genes ?? []),
+      ...(context.conditions ?? []),
+      ...(context.pmids ?? []),
+      ...(context.notes ?? []),
+    ]),
     ...(entry.sources ?? []).flatMap((source) => [source.id, source.name, source.url]),
     ...entry.matchedMarkers.flatMap((marker) => [
       marker.rsid,
@@ -203,7 +218,11 @@ export function matchesEntryFilters(
     && matchesAny(entry.coverage, filters.coverage)
     && matchesAny(entry.publicationBucket, filters.publications)
     && overlaps(entry.genes, filters.gene)
-    && overlaps([...entry.topics, ...entry.conditions], filters.tag);
+    && (
+      filters.tag.length === 0 ||
+      overlaps(entry.topics, filters.tag) ||
+      overlaps(entry.conditions, filters.tag)
+    );
 }
 
 export function compareEntries(

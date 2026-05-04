@@ -13,7 +13,7 @@ import {
 } from "../types";
 import { normalizeClinicalSignificance } from "./normalization";
 import { calculateFindingRank, evidenceTierSortValue } from "./ranking";
-export const EVIDENCE_PACK_VERSION = "2026-05-core-1";
+export const EVIDENCE_PACK_VERSION = "2026-05-core-2";
 
 export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
   clinvar: {
@@ -881,6 +881,7 @@ export function createEntryFromDefinition(
   const pharmgkbLevel = evidenceMatches.map((match) => match.record.pharmgkbLevel).find(Boolean);
   const cpicLevel = evidenceMatches.map((match) => match.record.cpicLevel).find(Boolean);
   const cpicLevelStatus = evidenceMatches.map((match) => match.record.cpicLevelStatus).find(Boolean);
+  const sources = sourceEntries(definition.sourceIds, evidenceMatches);
 
   return {
     id: definition.id,
@@ -897,8 +898,9 @@ export function createEntryFromDefinition(
     topics: definition.topics,
     conditions: definition.conditions,
     warnings: evaluation.warnings,
-    sources: sourceEntries(definition.sourceIds, evidenceMatches),
+    sources,
     sourceNotes: sourceNotes(definition.sourceIds, evidenceMatches),
+    relatedContexts: [],
     evidenceTier: definition.evidenceTier,
     clinicalSignificance: definition.clinicalSignificance,
     normalizedClinicalSignificance,
@@ -930,7 +932,7 @@ export function createEntryFromDefinition(
         cpicLevelStatus,
         clinicalSignificance: definition.clinicalSignificance,
         normalizedClinicalSignificance,
-        sources: sourceEntries(definition.sourceIds, evidenceMatches),
+        sources,
         matchedMarkers: evaluation.matchedMarkers,
       }),
       severity: severityForDefinition(definition, evaluation),

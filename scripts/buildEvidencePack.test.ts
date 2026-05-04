@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clingenDiseaseWordsOverlap } from "./buildEvidencePack";
+import { clingenCandidateMarkersForDisease, clingenDiseaseWordsOverlap } from "./buildEvidencePack";
 
 describe("clingenDiseaseWordsOverlap", () => {
   it("matches when a condition contains a key disease word", () => {
@@ -23,7 +23,7 @@ describe("clingenDiseaseWordsOverlap", () => {
     )).toBe(false);
   });
 
-  it("returns true (no mismatch) for an empty conditions array", () => {
+  it("returns false for an empty conditions array", () => {
     expect(clingenDiseaseWordsOverlap([], "Hereditary breast and ovarian cancer")).toBe(false);
   });
 
@@ -54,5 +54,34 @@ describe("clingenDiseaseWordsOverlap", () => {
       ["Unrelated condition", "Breast cancer susceptibility"],
       "Hereditary breast and ovarian cancer",
     )).toBe(true);
+  });
+});
+
+describe("clingenCandidateMarkersForDisease", () => {
+  it("uses disease-overlapping condition-bearing candidates", () => {
+    expect(clingenCandidateMarkersForDisease([
+      { rsid: "rs1", riskAllele: "A", conditions: ["Fanconi anemia"] },
+      { rsid: "rs2", riskAllele: "T", conditions: ["Breast cancer susceptibility"] },
+      { rsid: "rs3", riskAllele: "G", conditions: [] },
+    ], "Hereditary breast and ovarian cancer")).toEqual([
+      { rsid: "rs2", riskAllele: "T", conditions: ["Breast cancer susceptibility"] },
+    ]);
+  });
+
+  it("does not fall back to conditionless markers when condition-bearing candidates mismatch", () => {
+    expect(clingenCandidateMarkersForDisease([
+      { rsid: "rs1", riskAllele: "A", conditions: ["Fanconi anemia"] },
+      { rsid: "rs2", riskAllele: "T", conditions: [] },
+    ], "Hereditary breast and ovarian cancer")).toEqual([]);
+  });
+
+  it("falls back to conditionless markers only when no candidates have conditions", () => {
+    expect(clingenCandidateMarkersForDisease([
+      { rsid: "rs1", riskAllele: "A", conditions: [] },
+      { rsid: "rs2", riskAllele: "T", conditions: [] },
+    ], "Hereditary breast and ovarian cancer")).toEqual([
+      { rsid: "rs1", riskAllele: "A", conditions: [] },
+      { rsid: "rs2", riskAllele: "T", conditions: [] },
+    ]);
   });
 });

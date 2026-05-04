@@ -130,6 +130,75 @@ describe("fetchLocalEvidencePack", () => {
     expect(matches[0].matchedMarkers[0].matchedAlleleCount).toBe(1);
   });
 
+  it("uses build-specific risk alleles when the source record provides them", () => {
+    const record: EvidencePackRecord = {
+      ...makeRecord("build-specific-clinvar", "rs1"),
+      sourceId: "clinvar",
+      riskAllelesByBuild: {
+        GRCh37: "T",
+        GRCh38: "A",
+      },
+    };
+
+    expect(matchEvidenceRecords([["rs1", "1", 1, "AA"]], [record], "GRCh37")).toHaveLength(0);
+    expect(matchEvidenceRecords([["rs1", "1", 1, "AA"]], [record], "GRCh38")).toHaveLength(1);
+    expect(matchEvidenceRecords([["rs1", "1", 1, "AA"]], [record], "Unknown")).toHaveLength(0);
+  });
+
+  it("allows buildless matching when build-specific risk alleles are unambiguous", () => {
+    const matches = matchEvidenceRecords(
+      [["rs1", "1", 1, "AT"]],
+      [
+        {
+          ...makeRecord("same-risk-allele", "rs1"),
+          sourceId: "clinvar",
+          riskAllelesByBuild: {
+            GRCh37: "T",
+            GRCh38: "T",
+          },
+        },
+      ],
+      "Unknown",
+    );
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0].matchedMarkers[0].matchedAllele).toBe("T");
+  });
+
+  it("fails closed for unconstrained ClinGen, ClinVar, CPIC, and PharmGKB records", () => {
+    const matches = matchEvidenceRecords(
+      [["rs1", "1", 1, "AA"]],
+      [
+        { ...makeRecord("clingen", "rs1"), sourceId: "clingen" },
+        { ...makeRecord("clinvar", "rs1"), sourceId: "clinvar" },
+        { ...makeRecord("cpic", "rs1"), sourceId: "cpic" },
+        { ...makeRecord("pharmgkb", "rs1"), sourceId: "pharmgkb" },
+        { ...makeRecord("gwas", "rs1"), sourceId: "gwas" },
+      ],
+    );
+
+    expect(matches.map((match) => match.record.id)).toEqual(["gwas"]);
+  });
+
+  it("allows constrained ClinGen, ClinVar, CPIC, and PharmGKB records to match", () => {
+    const matches = matchEvidenceRecords(
+      [
+        ["rs1", "1", 1, "AG"],
+        ["rs2", "1", 2, "CT"],
+        ["rs3", "1", 3, "TT"],
+        ["rs4", "1", 4, "AC"],
+      ],
+      [
+        { ...makeRecord("clingen", "rs1"), sourceId: "clingen", riskAllele: "G" },
+        { ...makeRecord("clinvar", "rs2"), sourceId: "clinvar", riskAllele: "T" },
+        { ...makeRecord("cpic", "rs3"), sourceId: "cpic", riskAllele: "T" },
+        { ...makeRecord("pharmgkb", "rs4"), sourceId: "pharmgkb", genotype: "AC" },
+      ],
+    );
+
+    expect(matches.map((match) => match.record.id)).toEqual(["clingen", "clinvar", "cpic", "pharmgkb"]);
+  });
+
   it("matches SNPedia genotype pages on either strand", () => {
     const matches = matchEvidenceRecords(
       [["rs7412", "19", 45412079, "CC"]],

@@ -125,6 +125,9 @@ export interface EvidencePackRecord {
   repute?: ReputeStatus;
   tone?: InsightTone;
   riskAllele?: string;
+  riskAllelesByBuild?: Partial<Record<GenomeBuild, string>>;
+  clinvarVariationId?: string;
+  relatedContexts?: RelatedEvidenceContext[];
   genotype?: string;
   magnitude?: number | null;
   pmids: string[];
@@ -163,6 +166,21 @@ export interface ReportEntrySource {
   url: string;
 }
 
+export interface RelatedEvidenceContext {
+  id: string;
+  sourceId: string;
+  contextType: "gene-disease-validity" | "variant-pathogenicity";
+  title: string;
+  summary: string;
+  url: string;
+  evidenceLevel?: EvidenceTier;
+  classification?: string;
+  genes?: string[];
+  conditions?: string[];
+  pmids?: string[];
+  notes?: string[];
+}
+
 export interface ReportEntry {
   id: string;
   entryKind: ReportEntryKind;
@@ -180,6 +198,7 @@ export interface ReportEntry {
   warnings: string[];
   sources: ReportEntrySource[];
   sourceNotes: string[];
+  relatedContexts: RelatedEvidenceContext[];
   evidenceTier: EvidenceTier;
   clinicalSignificance: string | null;
   normalizedClinicalSignificance: string | null;

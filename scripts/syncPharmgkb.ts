@@ -13,11 +13,6 @@ const downloadUrl = "https://api.pharmgkb.org/v1/download/file/data/clinicalAnno
 // Include levels with robust clinical evidence; exclude 3/4 (case reports, weak associations)
 const INCLUDED_LEVELS = new Set(["1A", "1B", "2A", "2B"]);
 
-// Patterns that indicate the allele/genotype is associated with altered (risk) function
-const RISK_FUNCTION_RE =
-  /poor\s+metabolizer|no\s+function|decreased\s+function|increased\s+toxicity|decreased\s+efficacy|ultra.?rapid\s+metabolizer/i;
-const NORMAL_FUNCTION_RE = /normal\s+metabolizer|normal\s+function|increased\s+function/i;
-
 export interface PharmGkbAnnotation {
   variantId: string;
   rsid: string;
@@ -28,57 +23,30 @@ export interface PharmGkbAnnotation {
   significance: string;
   pmids: string[];
   url: string;
+  annotationText: string | null;
+  genotype: string | null;
   riskAllele: string | null;
 }
 
-export function determineRiskAllele(
-  entries: Array<{ genotype: string; function_: string }>,
-): string | null {
-  // Case 1: Single-base allele entries (allele-level annotations, e.g. Genotype/Allele = "A")
-  const singleBase = entries.filter((e) => /^[ACGT]$/i.test(e.genotype));
-  if (singleBase.length > 0) {
-    const riskEntry = singleBase.find((e) => RISK_FUNCTION_RE.test(e.function_));
-    if (riskEntry) return riskEntry.genotype.toUpperCase();
-    // No function info: return the allele only when there's a single unambiguous one
-    const unique = new Set(singleBase.map((e) => e.genotype.toUpperCase()));
-    if (unique.size === 1) return [...unique][0];
-    return null;
+export interface PharmGkbAlleleAnnotation {
+  annotationText: string | null;
+  genotype: string | null;
+  riskAllele: string | null;
+}
+
+export function normalizePharmgkbAllele(value: string): { genotype: string | null; riskAllele: string | null } | null {
+  const normalized = value.trim().toUpperCase();
+  if (/^[ACGT]{2}$/.test(normalized)) {
+    return { genotype: normalized.split("").sort().join(""), riskAllele: null };
   }
-
-  // Case 2: Two-character genotype entries (e.g. Genotype/Allele = "CT")
-  const twoChar = entries.filter((e) => /^[ACGT]{2}$/i.test(e.genotype));
-  if (twoChar.length === 0) return null;
-
-  // Find the homozygous risk genotype directly ("TT" → Poor Metabolizer → risk allele = "T")
-  const homoRisk = twoChar
-    .filter((e) => e.genotype[0] === e.genotype[1])
-    .find((e) => RISK_FUNCTION_RE.test(e.function_));
-  if (homoRisk) {
-    const allele = homoRisk.genotype[0].toUpperCase();
-    if (/^[ACGT]$/.test(allele)) return allele;
+  if (/^[ACGT]$/.test(normalized)) {
+    return { genotype: null, riskAllele: normalized };
   }
-
-  // Derive risk allele from normal-homozygous + heterozygous pair
-  // ("CC" → Normal, "CT" → het → risk allele is "T")
-  const homoNormal = twoChar
-    .filter((e) => e.genotype[0] === e.genotype[1])
-    .find((e) => NORMAL_FUNCTION_RE.test(e.function_));
-  const hetEntry = twoChar.find((e) => e.genotype[0] !== e.genotype[1]);
-  if (homoNormal && hetEntry) {
-    const normalAllele = homoNormal.genotype[0].toUpperCase();
-    const [a, b] = [hetEntry.genotype[0].toUpperCase(), hetEntry.genotype[1].toUpperCase()];
-    // The het must contain the normal allele for this derivation to be valid
-    if (a === normalAllele || b === normalAllele) {
-      const risk = a === normalAllele ? b : a;
-      if (/^[ACGT]$/.test(risk)) return risk;
-    }
-  }
-
   return null;
 }
 
-// Build annotationId → riskAllele map from clinical_ann_alleles.tsv
-export function buildRiskAlleleMap(text: string): Map<string, string> {
+// Build annotationId → genotype-specific rows from clinical_ann_alleles.tsv.
+export function buildAlleleAnnotationMap(text: string): Map<string, PharmGkbAlleleAnnotation[]> {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return new Map();
 
@@ -88,32 +56,31 @@ export function buildRiskAlleleMap(text: string): Map<string, string> {
 
   const idIdx = findCol([/clinical\s*annotation\s*id/i]);
   const genoIdx = findCol([/genotype\s*[/\\]\s*allele/i, /genotype/i]);
-  const funcIdx = findCol([/^allele\s*function$/i, /^function$/i]);
+  const textIdx = findCol([/^annotation\s*text$/i]);
 
   if (idIdx === -1 || genoIdx === -1) return new Map();
 
-  const grouped = new Map<string, Array<{ genotype: string; function_: string }>>();
+  const grouped = new Map<string, PharmGkbAlleleAnnotation[]>();
+  const seen = new Set<string>();
   for (let i = 1; i < lines.length; i++) {
     const values = splitTsv(lines[i]);
     const id = (values[idIdx] ?? "").trim();
     if (!id) continue;
-    const genotype = (values[genoIdx] ?? "").trim();
-    if (!genotype) continue;
-    const func = funcIdx >= 0 ? (values[funcIdx] ?? "").trim() : "";
+    const normalized = normalizePharmgkbAllele(values[genoIdx] ?? "");
+    if (!normalized) continue;
+    const annotationText = textIdx >= 0 ? (values[textIdx] ?? "").trim() : "";
+    const dedupeKey = [id, normalized.genotype ?? "", normalized.riskAllele ?? "", annotationText].join("\0");
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     const existing = grouped.get(id);
-    if (existing) existing.push({ genotype, function_: func });
-    else grouped.set(id, [{ genotype, function_: func }]);
+    const entry = { ...normalized, annotationText: annotationText || null };
+    if (existing) existing.push(entry);
+    else grouped.set(id, [entry]);
   }
-
-  const result = new Map<string, string>();
-  for (const [id, entries] of grouped) {
-    const allele = determineRiskAllele(entries);
-    if (allele) result.set(id, allele);
-  }
-  return result;
+  return grouped;
 }
 
-function parseClinicalAnnotationsTsv(text: string, riskAlleleMap: Map<string, string>): PharmGkbAnnotation[] {
+function parseClinicalAnnotationsTsv(text: string, alleleAnnotationMap: Map<string, PharmGkbAlleleAnnotation[]>): PharmGkbAnnotation[] {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return [];
 
@@ -145,9 +112,22 @@ function parseClinicalAnnotationsTsv(text: string, riskAlleleMap: Map<string, st
     const pmidsRaw = row["PMID(s)"] ?? "";
     const pmids = pmidsRaw.split(/[,;]/).map((p) => p.trim()).filter(Boolean);
     const url = row["URL"] ?? `https://www.pharmgkb.org/clinicalAnnotation/${variantId}`;
-    const riskAllele = riskAlleleMap.get(variantId) ?? null;
+    const alleleAnnotations = alleleAnnotationMap.get(variantId) ?? [];
 
-    results.push({ variantId, rsid, gene, drugs, phenotypeCategory, evidenceLevel: level, significance, pmids, url, riskAllele });
+    for (const alleleAnnotation of alleleAnnotations) {
+      results.push({
+        variantId,
+        rsid,
+        gene,
+        drugs,
+        phenotypeCategory,
+        evidenceLevel: level,
+        significance,
+        pmids,
+        url,
+        ...alleleAnnotation,
+      });
+    }
   }
 
   return results;
@@ -179,18 +159,19 @@ async function main(): Promise<void> {
   );
 
   const allelesBytes = findOptionalZipTextEntry(entries, /clinical.?ann.?alleles?/i);
-  const riskAlleleMap = allelesBytes
-    ? buildRiskAlleleMap(new TextDecoder().decode(allelesBytes))
-    : new Map<string, string>();
+  const alleleAnnotationMap = allelesBytes
+    ? buildAlleleAnnotationMap(new TextDecoder().decode(allelesBytes))
+    : new Map<string, PharmGkbAlleleAnnotation[]>();
 
   if (allelesBytes) {
-    console.log(`PharmGKB: parsed allele function data (${riskAlleleMap.size} risk alleles identified).`);
+    const alleleAnnotationCount = Array.from(alleleAnnotationMap.values()).reduce((sum, entries) => sum + entries.length, 0);
+    console.log(`PharmGKB: parsed allele annotation data (${alleleAnnotationCount.toLocaleString()} genotype/allele rows identified).`);
   } else {
-    console.log("PharmGKB: no allele function file found in ZIP; risk alleles will not be set.");
+    console.log("PharmGKB: no allele annotation file found in ZIP; genotype-specific records will not be set.");
   }
 
   const text = new TextDecoder().decode(tsvBytes);
-  const annotations = parseClinicalAnnotationsTsv(text, riskAlleleMap);
+  const annotations = parseClinicalAnnotationsTsv(text, alleleAnnotationMap);
 
   await writeFile(annotationsFile, `${JSON.stringify(annotations, null, 2)}\n`);
   console.log(`PharmGKB: ${annotations.length.toLocaleString()} level 1A–2B annotations written to ${path.relative(repoRoot, annotationsFile)}`);

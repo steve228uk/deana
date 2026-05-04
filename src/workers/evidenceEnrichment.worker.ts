@@ -68,11 +68,15 @@ async function buildEvidenceSupplement(
     currentRsid: "Matching bundled evidence sources locally",
   });
 
-  const matchedRecords = matchEvidenceRecords(dna.markers, records);
-  const matchedRsids = new Set(
-    matchedRecords.flatMap((match) => match.matchedMarkers.map((marker) => marker.rsid.toLowerCase())),
-  );
-  const matchedEntryIds = new Set(matchedRecords.map((match) => match.record.entryId));
+  const matchedRecords = matchEvidenceRecords(dna.markers, records, dna.build);
+  const matchedRsids = new Set<string>();
+  const matchedEntryIds = new Set<string>();
+  for (const match of matchedRecords) {
+    matchedEntryIds.add(match.record.entryId);
+    for (const marker of match.matchedMarkers) {
+      matchedRsids.add(marker.rsid.toLowerCase());
+    }
+  }
   const unmatchedRsids = Math.max(0, dna.markerCount - matchedRsids.size);
 
   postProgress(post, dna, {

@@ -191,6 +191,78 @@ describe("reportEngine", () => {
     expect(apoe?.clinvarStars).toBe(3);
   });
 
+  it("keeps related ClinGen context separate from the primary genotype match", () => {
+    const dna = makeParsedDnaFile();
+    const supplement: EvidenceSupplement = {
+      status: "complete",
+      fetchedAt: "2026-04-25T00:00:00.000Z",
+      attribution: "test",
+      packVersion: EVIDENCE_PACK_VERSION,
+      manifest: null,
+      totalRsids: dna.markerCount,
+      processedRsids: dna.markerCount,
+      matchedRecords: [
+        {
+          record: {
+            id: "clinvar-1-rs6025",
+            entryId: "local-medical-clinvar-1",
+            sourceId: "clinvar",
+            role: "primary",
+            category: "medical",
+            subcategory: "clinical-variant",
+            markerIds: ["rs6025"],
+            genes: ["F5"],
+            title: "F5 variant reported for thrombophilia",
+            url: "https://example.com/clinvar",
+            release: "test",
+            evidenceLevel: "high",
+            clinicalSignificance: "Pathogenic",
+            repute: "bad",
+            riskAllele: "T",
+            pmids: [],
+            notes: ["test"],
+            relatedContexts: [
+              {
+                id: "clingen-gene-validity-f5-thrombophilia",
+                sourceId: "clingen",
+                contextType: "gene-disease-validity",
+                title: "F5 / thrombophilia",
+                summary: "ClinGen classifies the F5 / thrombophilia relationship as Definitive. This is related gene-disease context for the matched ClinVar allele, not an additional genotype match.",
+                url: "https://example.com/clingen",
+                evidenceLevel: "high",
+                classification: "Definitive",
+                genes: ["F5"],
+                conditions: ["thrombophilia"],
+              },
+            ],
+          },
+          matchedMarkers: [
+            {
+              rsid: "rs6025",
+              genotype: "CT",
+              chromosome: "1",
+              position: 169519049,
+              gene: "F5",
+              matchedAllele: "T",
+              matchedAlleleCount: 1,
+            },
+          ],
+        },
+      ],
+      unmatchedRsids: dna.markerCount - 1,
+      failedItems: [],
+      retries: 0,
+    };
+
+    const report = generateReport(dna, { evidence: supplement });
+    const localEntry = report.entries.find((entry) => entry.id === "local-medical-clinvar-1");
+
+    expect(localEntry?.sources.map((source) => source.id)).toEqual(["clinvar", "clingen"]);
+    expect(localEntry?.relatedContexts).toHaveLength(1);
+    expect(localEntry?.clingenClassification).toBeUndefined();
+    expect(localEntry?.matchedMarkers).toHaveLength(1);
+  });
+
   it("extracts legacy ClinGen classifications from local evidence titles", () => {
     const dna = makeParsedDnaFile();
     const supplement: EvidenceSupplement = {
