@@ -7,7 +7,7 @@ import {
   MatchedMarker,
 } from "../types";
 
-export const LOCAL_EVIDENCE_PACK_VERSION = "2026-05-core-2";
+export const LOCAL_EVIDENCE_PACK_VERSION = "2026-05-core-3";
 export const LOCAL_EVIDENCE_PACK_BASE = `/evidence-packs/${LOCAL_EVIDENCE_PACK_VERSION}`;
 
 const DEFAULT_SHARD_MODULO = 256;
@@ -25,12 +25,7 @@ function alleleCount(genotype: string | null, allele?: string): number | null {
   return genotype.split("").filter((value) => value === allele.toUpperCase()).length;
 }
 
-const COMPLEMENT: Record<string, string> = { A: "T", T: "A", C: "G", G: "C" };
 const CONSTRAINT_REQUIRED_SOURCES = new Set(["clingen", "clinvar", "cpic", "pharmgkb"]);
-
-function complementGenotype(genotype: string): string {
-  return genotype.toUpperCase().split("").map((a) => COMPLEMENT[a] ?? a).join("");
-}
 
 function validRiskAllele(allele?: string): string | null {
   if (!allele || !/^[ACGT]$/i.test(allele)) return null;
@@ -65,8 +60,7 @@ function markerMatchesRecord(
 
   if (record.genotype) {
     const stored = canonicalGenotype(record.genotype);
-    const comp = canonicalGenotype(complementGenotype(record.genotype));
-    return genotype === stored || (comp !== null && genotype === comp);
+    return genotype === stored;
   }
 
   const riskAllele = riskAlleleForBuild(record, build);
