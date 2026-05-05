@@ -1,5 +1,5 @@
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; deana-evidence-sync/1.0; +https://github.com/steve228uk/deana)";
+  "Mozilla/5.0 (compatible; deana-evidence-sync/1.0; +https://github.com/DeanaDNA/deana)";
 
 async function fetchClinGen(url: string, accept: string): Promise<Response> {
   const res = await fetch(url, {

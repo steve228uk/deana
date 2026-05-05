@@ -2,7 +2,7 @@ import type { DragEvent } from "react";
 import type { DnaParseProgress, EvidenceProgressSnapshot, ParsedDnaFile } from "../../types";
 import { DeanaWordmark, Icon } from "./ui";
 
-export const DEANA_GITHUB_URL = "https://github.com/steve228uk/deana";
+export const DEANA_GITHUB_URL = "https://github.com/DeanaDNA/deana";
 export const DEANA_LICENSE_URL = `${DEANA_GITHUB_URL}/blob/HEAD/LICENSE.md`;
 export const DEANA_SUBREDDIT_URL = "https://www.reddit.com/r/deanadna";
 export const DEANA_SUPPORT_URL = "https://ko-fi.com/steve228uk";
