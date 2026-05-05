@@ -121,52 +121,26 @@ If a preview deployment hides the AI tab or returns a generic chat error, check 
 
 ## Evidence Packs
 
-Evidence packs are generated static JSON assets. The browser loads the manifest for the current pack version and then fetches only the rsID shard buckets needed for the uploaded markers.
+Evidence packs are generated static JSON assets. The browser loads the manifest for the pinned pack version and then fetches only the rsID shard buckets needed for the uploaded markers.
 
-The canonical full update command is:
+Evidence ingestion and pack assembly now live in the separate `DeanaDNA/evidence` repo. This app consumes a released pack archive pinned by `evidence-pack.lock.json`.
 
-```bash
-bun run evidence:update
-```
-
-That runs:
+Install or verify the pinned pack locally:
 
 ```bash
-bun run evidence:sources:sync
-bun run evidence:cpic:sync
-bun run evidence:snpedia:sync
-bun run evidence:pharmgkb:sync
-bun run evidence:clingen:sync
-bun run evidence:pack:build
-```
-
-`evidence:clingen:sync` imports the ClinGen gene-disease validity, dosage sensitivity, clinical actionability, and variant pathogenicity feeds. Each feed can also be refreshed directly with `evidence:clingen:gene-disease:sync`, `evidence:clingen:dosage:sync`, `evidence:clingen:actionability:sync`, or `evidence:clingen:variant-pathogenicity:sync`.
-
-The monthly automation also refreshes dbSNP references for GRCh37 and GRCh38 so unannotated VCF imports can be annotated locally against evidence-relevant rsIDs:
-
-```bash
-bun run evidence:update:monthly
-```
-
-That command downloads large NCBI dbSNP VCFs into `.evidence-cache/dbsnp`, maps them against the current evidence pack, and writes compact annotation indexes into the checked-in static pack. The full dbSNP files stay out of git.
-
-Source caches are written under `.evidence-cache`, which is intentionally ignored. Generated candidate dumps under `docs/evidence-candidates` are also ignored. The shipped static pack in `public/evidence-packs` is tracked because the browser app serves it directly.
-
-`public/evidence-packs/<version>/records.json` is a hand-maintained curated seed layer loaded by the build script before bulk ClinVar, GWAS, and SNPedia records. It contains high-priority entries (specific ClinVar variants, CPIC pharmacogenomics records, and curated associations) that the automated pipeline does not produce in the correct form. When editing a curated record's fields, the corresponding shard file and the shard's SHA-256 in `manifest.json` must be updated to match — see `AGENTS.md` for the three-file update pattern.
-
-GWAS sync is optional unless a current association export URL is supplied. The sync script accepts the current GWAS Catalog ZIP release and extracts the associations TSV into `.evidence-cache/gwas/associations.tsv`:
-
-```bash
-GWAS_ASSOCIATIONS_URL="https://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/gwas-catalog-associations-full.zip" bun run evidence:sources:sync
-```
-
-Validate the checked-in evidence pack without rewriting files:
-
-```bash
+bun run evidence:install
 bun run evidence:check
 ```
 
-The monthly GitHub Actions workflow runs the full evidence update, checks the pack, runs tests, builds the app, and opens a pull request when files changed.
+The installer verifies the archive SHA-256, extracts the pack to `public/evidence-packs/<version>`, checks the manifest and every shard checksum, and regenerates `src/lib/evidencePackConfig.ts`.
+
+Builds install the pinned pack automatically:
+
+```bash
+bun run build
+```
+
+`public/evidence-packs` is ignored in this repo because it is generated from the pinned release artifact at build time. When a new pack is released, the evidence repo should open a small PR here that updates only the lockfile and generated config version.
 
 ## Project Structure
 
@@ -175,8 +149,8 @@ The monthly GitHub Actions workflow runs the full evidence update, checks the pa
 - `src/lib`: parsing-adjacent domain logic, report generation, evidence matching, storage, normalization, and exporters.
 - `src/workers`: browser workers for DNA parsing and evidence enrichment.
 - `src/test`: shared Vitest and React Testing Library setup and fixtures.
-- `scripts`: maintainer scripts for evidence-source sync and evidence-pack generation.
-- `public/evidence-packs`: tracked static evidence-pack assets.
+- `scripts`: app-local maintainer scripts, including pinned evidence-pack installation.
+- `public/evidence-packs`: ignored static evidence-pack assets installed from `evidence-pack.lock.json`.
 - `docs`: research notes, status notes, and generated evidence-candidate scratch space.
 
 ## Contributing

@@ -1,0 +1,9 @@
+{
+  "version": "2026-05-core-3",
+  "schemaVersion": 1,
+  "url": "https://github.com/DeanaDNA/evidence/releases/download/2026-05-core-3/deana-evidence-pack-2026-05-core-3.tgz",
+  "localArchivePath": "../deana-evidence/dist/releases/deana-evidence-pack-2026-05-core-3.tgz",
+  "archiveName": "deana-evidence-pack-2026-05-core-3.tgz",
+  "archiveSha256": "72d149e6991f1ceeac738fd2fcb904f149d7ae5e403bf1b68f4ca63e205781c0",
+  "manifestSha256": "c371d0442d55fa9f3e8d578bc04ee40d7f686175c561c7ae24202135a24a03bf"
+}

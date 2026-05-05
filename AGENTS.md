@@ -17,7 +17,7 @@ Application code lives in `src/`:
 - `src/types.ts`: shared app, report, storage, and evidence-pack types.
 - `src/test`: Vitest and React Testing Library setup and reusable DNA/profile fixtures.
 
-Static evidence packs live in `public/evidence-packs`. The app reads `src/lib/evidencePackData.ts` for the current local pack version, loads that pack's manifest, and fetches only the shard buckets needed for uploaded rsIDs.
+Static evidence packs are installed into `public/evidence-packs` from the pinned release artifact in `evidence-pack.lock.json`. The app reads `src/lib/evidencePackConfig.ts` for the current local pack version, loads that pack's manifest, and fetches only the shard buckets needed for uploaded rsIDs.
 
 Project notes and research live in `docs/`. Generated evidence candidates under `docs/evidence-candidates` are scratch artifacts and should stay untracked.
 
@@ -32,8 +32,8 @@ Project notes and research live in `docs/`. Generated evidence candidates under 
 - `bun run vercel:login`: authenticate the Vercel CLI for local AI Gateway setup.
 - `bun run vercel:link`: link the local checkout to the Vercel project.
 - `bun run vercel:env`: pull Vercel environment variables, including local OIDC values, into `.env.local`.
-- `bun run evidence:update`: sync source caches, sync SNPedia, and rebuild the sharded evidence pack.
-- `bun run evidence:check`: validate the checked-in evidence pack without rewriting files.
+- `bun run evidence:install`: download or use the local pinned evidence archive, verify checksums, extract it into `public/evidence-packs`, and regenerate the pack config.
+- `bun run evidence:check`: validate the installed pinned evidence pack and generated config without rewriting files.
 
 Use Bun for package scripts to match the README, lockfile, and GitHub Actions workflow.
 
@@ -54,24 +54,13 @@ Do not add non-local AI tools. The `searchReportFindings` tool is a planner only
 
 ## Evidence Pack Workflow
 
-`scripts/buildEvidencePack.ts` is the canonical pack builder for the current sharded static pack. It writes `public/evidence-packs/<YYYY-MM-core>/manifest.json`, shard files, and the pack-version constants in `src/lib/evidencePack.ts` and `src/lib/evidencePackData.ts`.
+Evidence ingestion and pack assembly live in the separate `DeanaDNA/evidence` repo. Do not add evidence-source downloaders, pack builders, source caches, or generated evidence records back into this app repo.
 
-`scripts/syncEvidenceSources.ts` downloads public ClinVar data and optionally GWAS data into `.evidence-cache`. GWAS is skipped unless `GWAS_ASSOCIATIONS_URL` or `--gwas-url=...` is provided; the current GWAS Catalog association export is published as a ZIP, and the script extracts the associations TSV into `.evidence-cache/gwas/associations.tsv`. `scripts/syncSnpedia.ts` caches SNPedia pages under `.evidence-cache/snpedia`.
+This app consumes a pinned release archive. `scripts/installEvidencePack.ts` verifies the archive SHA-256, extracts `public/evidence-packs/<version>`, verifies the manifest and shard checksums, and regenerates `src/lib/evidencePackConfig.ts`. `bun run build` runs the installer before Vite builds.
 
-Keep `.evidence-cache`, generated seed/bulk candidate JSON, and local DNA files out of git. Keep `public/evidence-packs` tracked because the deployed static app serves those files directly.
+Keep `.evidence-cache`, generated candidate JSON, local DNA files, and `public/evidence-packs` out of git. The deployed static app still serves `public/evidence-packs`, but those files are installed at build time rather than tracked here.
 
-### Curated Records (`records.json`)
-
-`public/evidence-packs/<version>/records.json` is a hand-maintained seed layer. The build script loads it first before ClinVar, GWAS, and SNPedia bulk records; curated records take precedence when IDs collide. It is **not** auto-generated — changes must be made manually.
-
-When editing a curated record's `riskAllele` or any other field, three files must be updated together:
-
-1. Edit `records.json`.
-2. Find the correct shard: `rsid_numeric % 256` gives the bucket (e.g. rs6025 → 6025 % 256 = 137 → `shards/m137.json`).
-3. Apply the same change to the matching record in the shard file.
-4. Recalculate the shard's SHA-256 and update `manifest.json` under that shard's `recordsSha256` entry.
-
-The browser validates every shard's content against the manifest checksum on load; a mismatch causes a hard error.
+When changing evidence data, make the change in `DeanaDNA/evidence`, publish a new release archive, and update this repo's `evidence-pack.lock.json`. The IndexedDB auto-refresh path depends on the pinned pack version changing, so do not bypass the lockfile/config update.
 
 ### Strand Orientation in Evaluate Functions
 

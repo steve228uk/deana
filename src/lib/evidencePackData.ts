@@ -6,9 +6,10 @@ import {
   GenomeBuild,
   MatchedMarker,
 } from "../types";
+import { LOCAL_EVIDENCE_PACK_BASE, LOCAL_EVIDENCE_PACK_VERSION } from "./evidencePackConfig";
 
-export const LOCAL_EVIDENCE_PACK_VERSION = "2026-05-core-3";
-export const LOCAL_EVIDENCE_PACK_BASE = `/evidence-packs/${LOCAL_EVIDENCE_PACK_VERSION}`;
+// Preserve the existing module-level import surface while the version source is generated from the lockfile.
+export { LOCAL_EVIDENCE_PACK_BASE, LOCAL_EVIDENCE_PACK_VERSION } from "./evidencePackConfig";
 
 const DEFAULT_SHARD_MODULO = 256;
 

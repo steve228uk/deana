@@ -11,9 +11,10 @@ import {
   ReputeStatus,
   ReportEntry,
 } from "../types";
+import { LOCAL_EVIDENCE_PACK_VERSION } from "./evidencePackConfig";
 import { normalizeClinicalSignificance } from "./normalization";
 import { calculateFindingRank, evidenceTierSortValue } from "./ranking";
-export const EVIDENCE_PACK_VERSION = "2026-05-core-3";
+export const EVIDENCE_PACK_VERSION = LOCAL_EVIDENCE_PACK_VERSION;
 
 export const SOURCE_LIBRARY: Record<string, EvidenceSource> = {
   clinvar: {
