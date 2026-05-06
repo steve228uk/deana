@@ -285,6 +285,42 @@ describe("fetchLocalEvidencePack", () => {
     expect(matchEvidenceRecords([["rs1", "1", 1, "AA"]], [record], "Unknown")).toHaveLength(0);
   });
 
+  it("matches ClinVar deletion records only against explicit deletion genotypes", () => {
+    const deletionConstraint = {
+      type: "deletion" as const,
+      ref: "CG",
+      alt: "C",
+      matchAllele: "D" as const,
+    };
+    const record: EvidencePackRecord = {
+      ...makeRecord("clinvar-deletion", "rs137853281"),
+      sourceId: "clinvar",
+      variantConstraintsByBuild: {
+        GRCh37: deletionConstraint,
+        GRCh38: deletionConstraint,
+      },
+    };
+
+    expect(matchEvidenceRecords([["rs137853281", "13", 52516532, "CC"]], [record], "GRCh37")).toHaveLength(0);
+    expect(matchEvidenceRecords([["rs137853281", "13", 52516532, "II"]], [record], "GRCh37")).toHaveLength(0);
+    expect(matchEvidenceRecords([["rs137853281", "13", 52516532, "--"]], [record], "GRCh37")).toHaveLength(0);
+
+    const heterozygousMatches = matchEvidenceRecords([["rs137853281", "13", 52516532, "DI"]], [record], "GRCh37");
+    expect(heterozygousMatches).toHaveLength(1);
+    expect(heterozygousMatches[0].matchedMarkers[0]).toMatchObject({
+      matchedAllele: "D",
+      matchedAlleleCount: 1,
+    });
+
+    const homozygousMatches = matchEvidenceRecords([["rs137853281", "13", 52516532, "DD"]], [record], "GRCh37");
+    expect(homozygousMatches).toHaveLength(1);
+    expect(homozygousMatches[0].matchedMarkers[0].matchedAlleleCount).toBe(2);
+
+    const dashMatches = matchEvidenceRecords([["rs137853281", "13", 52516532, "-C"]], [record], "GRCh37");
+    expect(dashMatches).toHaveLength(1);
+    expect(dashMatches[0].matchedMarkers[0].matchedAlleleCount).toBe(1);
+  });
+
   it("allows buildless matching when build-specific risk alleles are unambiguous", () => {
     const matches = matchEvidenceRecords(
       [["rs1", "1", 1, "AT"]],

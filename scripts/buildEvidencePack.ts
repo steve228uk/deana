@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type {
   EvidencePackManifest,
   EvidencePackRecord,
+  EvidencePackVariantConstraint,
   EvidenceSourceRole,
   EvidenceTier,
   GenomeBuild,
@@ -464,8 +465,56 @@ function plainClinvarTitle(gene: string, significance: string, conditions: strin
   return `${gene} variant reported for ${condition}`;
 }
 
+interface ClinvarVariantMatchMetadata {
+  riskAllele?: string;
+  riskAllelesByBuild?: Partial<Record<GenomeBuild, string>>;
+  variantConstraintsByBuild?: Partial<Record<GenomeBuild, EvidencePackVariantConstraint>>;
+  note?: string;
+}
 
-function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, string[]>): EvidencePackRecord | null {
+function clinvarVariantMatchMetadata(row: Record<string, string>): ClinvarVariantMatchMetadata {
+  const assembly = column(row, ["Assembly"]);
+  if (assembly !== "GRCh37" && assembly !== "GRCh38") return {};
+
+  const variantType = column(row, ["Type"]).toLowerCase();
+  const ref = column(row, ["ReferenceAlleleVCF"]).toUpperCase();
+  const alt = column(row, ["AlternateAlleleVCF"]).toUpperCase();
+  const refBase = singleBaseAllele(ref);
+  const altBase = singleBaseAllele(alt);
+
+  if (refBase && altBase) {
+    return {
+      riskAllele: altBase,
+      riskAllelesByBuild: { [assembly]: altBase },
+      note: `Reported alternate allele: ${altBase}.`,
+    };
+  }
+
+  const isDeletion = variantType === "deletion";
+  const isInsertion = variantType === "insertion" || variantType === "duplication";
+  let constraintType: EvidencePackVariantConstraint["type"] | null = null;
+  if (isDeletion) {
+    constraintType = "deletion";
+  } else if (isInsertion) {
+    constraintType = "insertion";
+  }
+  if (!constraintType || !ref || !alt || ref === "-" || alt === "-") return {};
+
+  const matchAllele = constraintType === "deletion" ? "D" : "I";
+  const constraint: EvidencePackVariantConstraint = {
+    type: constraintType,
+    ref,
+    alt,
+    matchAllele,
+  };
+
+  return {
+    variantConstraintsByBuild: { [assembly]: constraint },
+    note: `Reported ${constraintType}: ${ref}>${alt}.`,
+  };
+}
+
+export function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, string[]>): EvidencePackRecord | null {
   const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
   if (!rawRsid || rawRsid === "-1") return null;
   const rsid = normalizeRsid(rawRsid.startsWith("rs") ? rawRsid : `rs${rawRsid}`);
@@ -485,11 +534,7 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
   const traits = conditionList(column(row, ["PhenotypeList"]));
   const category = categoryForClinvar(significance);
   const condition = primaryCondition(traits, "the reported condition");
-  const assembly = column(row, ["Assembly"]);
-  const riskAllele = singleBaseAllele(column(row, ["AlternateAlleleVCF", "AlternateAllele"]));
-  const riskAllelesByBuild = riskAllele && (assembly === "GRCh37" || assembly === "GRCh38")
-    ? { [assembly]: riskAllele }
-    : undefined;
+  const { riskAllele, riskAllelesByBuild, variantConstraintsByBuild, note: variantNote } = clinvarVariantMatchMetadata(row);
   const title = plainClinvarTitle(gene, significance, traits, category);
   const reviewStars = clinvarStarsForReviewStatus(reviewStatus);
   const pmids = clinvarCitationPmidsForRow(row, citationPmids, variationId);
@@ -524,6 +569,7 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
     tone: category === "drug" ? "caution" : "neutral",
     riskAllele,
     riskAllelesByBuild,
+    variantConstraintsByBuild,
     clinvarVariationId: variationId,
     riskSummary: /reviewed by expert panel|practice guideline/i.test(reviewStatus)
       ? riskSummaryForClinvar(gene, significance, condition)
@@ -537,7 +583,7 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
       `ClinVar review stars: ${reviewStars}.`,
       ...(submitterNote ? [submitterNote] : []),
       ...(lastEvaluated && lastEvaluated !== "-" ? [`Last evaluated: ${lastEvaluated}.`] : []),
-      ...(riskAllele ? [`Reported alternate allele: ${riskAllele}.`] : []),
+      ...(variantNote ? [variantNote] : []),
       "Generated from bulk ClinVar data; clinical interpretation requires human review and confirmatory testing.",
     ],
   };
@@ -942,18 +988,25 @@ async function buildClinvarRecords(maxRecords: number, citationPmids: Map<string
   if (!existsSync(sourceFile)) return [];
 
   const records = new Map<string, EvidencePackRecord>();
+  const mergeBuildMap = <T>(
+    existing: Partial<Record<GenomeBuild, T>> | undefined,
+    next: Partial<Record<GenomeBuild, T>> | undefined,
+  ): Partial<Record<GenomeBuild, T>> | undefined => {
+    if (!existing && !next) return undefined;
+    return { ...(existing ?? {}), ...(next ?? {}) };
+  };
+
   for await (const row of tsvRows(sourceFile)) {
     const record = clinvarRecord(row, citationPmids);
     if (!record) continue;
     const existing = records.get(record.id);
     if (existing) {
-      const riskAllelesByBuild = {
-        ...(existing.riskAllelesByBuild ?? {}),
-        ...(record.riskAllelesByBuild ?? {}),
-      };
-      const distinctAlleles = Array.from(new Set(Object.values(riskAllelesByBuild).filter(Boolean)));
-      existing.riskAllelesByBuild = Object.keys(riskAllelesByBuild).length > 0 ? riskAllelesByBuild : undefined;
+      const riskAllelesByBuild = mergeBuildMap(existing.riskAllelesByBuild, record.riskAllelesByBuild);
+      const variantConstraintsByBuild = mergeBuildMap(existing.variantConstraintsByBuild, record.variantConstraintsByBuild);
+      const distinctAlleles = Array.from(new Set(Object.values(riskAllelesByBuild ?? {}).filter(Boolean)));
+      existing.riskAllelesByBuild = riskAllelesByBuild;
       existing.riskAllele = distinctAlleles.length === 1 ? distinctAlleles[0] : undefined;
+      existing.variantConstraintsByBuild = variantConstraintsByBuild;
       existing.pmids = Array.from(new Set([...existing.pmids, ...record.pmids]));
       existing.notes = Array.from(new Set([...existing.notes, ...record.notes]));
       continue;

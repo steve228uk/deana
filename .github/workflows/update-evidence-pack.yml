@@ -9,6 +9,10 @@ on:
         description: 'Force re-download of all cached evidence sources'
         type: boolean
         default: false
+      pack_version:
+        description: 'Optional evidence pack version override, e.g. 2026-05-core-4'
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -67,6 +71,31 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Resolve evidence pack version
+        env:
+          PACK_VERSION_INPUT: ${{ inputs.pack_version || '' }}
+        run: |
+          PACK_VERSION="$(printf '%s' "$PACK_VERSION_INPUT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ "$PACK_VERSION" != "$PACK_VERSION_INPUT" ]; then
+            echo "Invalid pack_version: leading or trailing whitespace is not allowed." >&2
+            exit 1
+          fi
+
+          if [ -z "$PACK_VERSION" ]; then
+            echo "EVIDENCE_PACK_VERSION_ARG=" >> "$GITHUB_ENV"
+            echo "Using default evidence pack version."
+            exit 0
+          fi
+
+          if ! printf '%s' "$PACK_VERSION" | grep -Eq '^[0-9]{4}-[0-9]{2}-core(-[0-9]+)?$'; then
+            echo "Invalid pack_version: $PACK_VERSION" >&2
+            echo "Expected YYYY-MM-core or YYYY-MM-core-N, for example 2026-05-core-4." >&2
+            exit 1
+          fi
+
+          echo "EVIDENCE_PACK_VERSION_ARG=--version=$PACK_VERSION" >> "$GITHUB_ENV"
+          echo "Using evidence pack version override: $PACK_VERSION"
+
       - name: Update evidence pack
         run: |
           FORCE="${{ inputs.force_refresh && '--force' || '' }}"
@@ -76,10 +105,10 @@ jobs:
           bun run scripts/syncDbsnp.ts $FORCE
           bun run scripts/syncPharmgkb.ts $FORCE
           bun run scripts/importClinGen.ts $FORCE
-          bun run scripts/buildEvidencePack.ts
+          bun run scripts/buildEvidencePack.ts $EVIDENCE_PACK_VERSION_ARG
 
       - name: Check evidence pack
-        run: bun run evidence:check
+        run: bun run scripts/buildEvidencePack.ts --check $EVIDENCE_PACK_VERSION_ARG
 
       - name: Run tests
         run: bun run test
@@ -96,8 +125,8 @@ jobs:
         with:
           branch: automation/update-evidence-pack
           delete-branch: true
-          title: Update monthly evidence pack
-          commit-message: Update monthly evidence pack
+          title: ${{ inputs.pack_version && format('Update evidence pack {0}', inputs.pack_version) || 'Update monthly evidence pack' }}
+          commit-message: ${{ inputs.pack_version && format('Update evidence pack {0}', inputs.pack_version) || 'Update monthly evidence pack' }}
           body: |
             ## Summary
             - Syncs public evidence source caches.
@@ -105,11 +134,12 @@ jobs:
             - Syncs GRCh37 and GRCh38 dbSNP references for local VCF annotation.
             - Rebuilds the sharded static evidence pack.
             - Updates evidence-pack manifests, shard and annotation checksums, and app pack-version constants when needed.
+            - Evidence pack version: `${{ inputs.pack_version || 'default monthly version' }}`.
 
             GWAS sync uses the repository `GWAS_ASSOCIATIONS_URL` variable when it is configured. If the variable is empty, the GWAS source sync step is skipped by the evidence tooling.
 
             ## Checks
-            - `bun run evidence:update:monthly`
-            - `bun run evidence:check`
+            - `bun run scripts/buildEvidencePack.ts${{ inputs.pack_version && format(' --version={0}', inputs.pack_version) || '' }}`
+            - `bun run scripts/buildEvidencePack.ts --check${{ inputs.pack_version && format(' --version={0}', inputs.pack_version) || '' }}`
             - `bun run test`
             - `bun run build`

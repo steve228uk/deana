@@ -3,6 +3,7 @@ import {
   EvidencePackManifest,
   EvidencePackMatch,
   EvidencePackRecord,
+  EvidencePackVariantConstraint,
   GenomeBuild,
   MatchedMarker,
 } from "../types";
@@ -34,9 +35,20 @@ function canonicalGenotype(genotype: string | null): string | null {
   return genotype.toUpperCase();
 }
 
+function countGenotypeSymbols(genotype: string | null, matches: (value: string) => boolean): number | null {
+  if (!genotype) return null;
+  return genotype.split("").filter(matches).length;
+}
+
 function alleleCount(genotype: string | null, allele?: string): number | null {
   if (!genotype || !allele || allele.length !== 1) return null;
-  return genotype.split("").filter((value) => value === allele.toUpperCase()).length;
+  const normalizedAllele = allele.toUpperCase();
+  return countGenotypeSymbols(genotype, (value) => value === normalizedAllele);
+}
+
+interface MatchedAlleleResult {
+  allele: string;
+  alleleCount: number;
 }
 
 const CONSTRAINT_REQUIRED_SOURCES = new Set(["clingen", "clinvar", "cpic", "pharmgkb"]);
@@ -50,54 +62,114 @@ function supportedGenomeBuild(build?: string): GenomeBuild | null {
   return build === "GRCh37" || build === "GRCh38" ? build : null;
 }
 
-function riskAlleleForBuild(record: EvidencePackRecord, build?: string): string | null {
-  const supportedBuild = supportedGenomeBuild(build);
-  if (record.riskAllelesByBuild) {
-    if (supportedBuild) return validRiskAllele(record.riskAllelesByBuild[supportedBuild]);
+function valueForBuildOrUnambiguous<T>(
+  valuesByBuild: Partial<Record<GenomeBuild, T>> | undefined,
+  build: string | undefined,
+  normalize: (value?: T) => T | null,
+  keyForValue: (value: T) => string,
+): T | null {
+  if (!valuesByBuild) return null;
 
-    const alleles = Array.from(
-      new Set(Object.values(record.riskAllelesByBuild).map(validRiskAllele).filter((allele): allele is string => Boolean(allele))),
-    );
-    return alleles.length === 1 ? alleles[0] : null;
+  const supportedBuild = supportedGenomeBuild(build);
+  if (supportedBuild) return normalize(valuesByBuild[supportedBuild]);
+
+  let foundValue: T | null = null;
+  let foundKey: string | null = null;
+  for (const value of Object.values(valuesByBuild)) {
+    const normalized = normalize(value);
+    if (!normalized) continue;
+
+    const key = keyForValue(normalized);
+    if (foundKey && foundKey !== key) return null;
+    foundKey = key;
+    foundValue = normalized;
+  }
+
+  return foundValue;
+}
+
+function riskAlleleForBuild(record: EvidencePackRecord, build?: string): string | null {
+  if (record.riskAllelesByBuild) {
+    return valueForBuildOrUnambiguous(record.riskAllelesByBuild, build, validRiskAllele, (allele) => allele);
   }
 
   return validRiskAllele(record.riskAllele);
 }
 
-function markerMatchesRecord(
-  marker: CompactMarker | undefined,
+function validVariantConstraint(constraint?: EvidencePackVariantConstraint): EvidencePackVariantConstraint | null {
+  if (!constraint) return null;
+  const type = constraint.type === "deletion" || constraint.type === "insertion" ? constraint.type : null;
+  const matchAllele = constraint.matchAllele === "D" || constraint.matchAllele === "I" ? constraint.matchAllele : null;
+  const ref = constraint.ref?.toUpperCase();
+  const alt = constraint.alt?.toUpperCase();
+  if (!type || !matchAllele || !ref || !alt) return null;
+  if ((type === "deletion" && matchAllele !== "D") || (type === "insertion" && matchAllele !== "I")) return null;
+  return { type, matchAllele, ref, alt };
+}
+
+function variantConstraintForBuild(record: EvidencePackRecord, build?: string): EvidencePackVariantConstraint | null {
+  return valueForBuildOrUnambiguous(
+    record.variantConstraintsByBuild,
+    build,
+    validVariantConstraint,
+    (constraint) => `${constraint.type}:${constraint.ref}:${constraint.alt}:${constraint.matchAllele}`,
+  );
+}
+
+function variantConstraintAlleleCount(genotype: string | null, constraint: EvidencePackVariantConstraint): number | null {
+  if (constraint.type === "deletion") {
+    return countGenotypeSymbols(genotype, (value) => value === "D" || value === "-");
+  }
+  return countGenotypeSymbols(genotype, (value) => value === "I");
+}
+
+function matchedEvidenceAllele(
+  genotype: string | null,
   record: EvidencePackRecord,
   build?: string,
-): boolean {
+): MatchedAlleleResult | null {
+  const riskAllele = riskAlleleForBuild(record, build);
+  if (riskAllele) {
+    const count = alleleCount(genotype, riskAllele);
+    return count !== null ? { allele: riskAllele, alleleCount: count } : null;
+  }
+
+  const variantConstraint = variantConstraintForBuild(record, build);
+  if (variantConstraint) {
+    const count = variantConstraintAlleleCount(genotype, variantConstraint);
+    return count !== null ? { allele: variantConstraint.matchAllele, alleleCount: count } : null;
+  }
+
+  return null;
+}
+
+function matchedMarkerForRecord(
+  marker: CompactMarker | undefined,
+  rsid: string,
+  record: EvidencePackRecord,
+  gene?: string,
+  build?: string,
+): MatchedMarker | null {
   const genotype = canonicalGenotype(marker?.[3] ?? null);
-  if (!genotype) return false;
+  if (!genotype) return null;
 
   if (record.genotype) {
     const stored = canonicalGenotype(record.genotype);
-    return genotype === stored;
+    if (genotype !== stored) return null;
+    return {
+      rsid,
+      genotype,
+      chromosome: marker?.[1] ?? null,
+      position: marker?.[2] ?? null,
+      gene,
+      matchedAllele: undefined,
+      matchedAlleleCount: null,
+    };
   }
 
-  const riskAllele = riskAlleleForBuild(record, build);
-  if (riskAllele) {
-    return alleleCount(genotype, riskAllele) !== 0;
-  }
-
-  if (CONSTRAINT_REQUIRED_SOURCES.has(record.sourceId)) {
-    return false;
-  }
-
-  return true;
-}
-
-function markerToMatchedMarker(
-  marker: CompactMarker | undefined,
-  rsid: string,
-  gene?: string,
-  record?: EvidencePackRecord,
-  build?: string,
-): MatchedMarker {
-  const genotype = canonicalGenotype(marker?.[3] ?? null);
-  const matchedAllele = record ? riskAlleleForBuild(record, build) ?? undefined : undefined;
+  const matchedAllele = matchedEvidenceAllele(genotype, record, build);
+  if (matchedAllele && matchedAllele.alleleCount === 0) return null;
+  if (!matchedAllele && CONSTRAINT_REQUIRED_SOURCES.has(record.sourceId)) return null;
 
   return {
     rsid,
@@ -105,8 +177,8 @@ function markerToMatchedMarker(
     chromosome: marker?.[1] ?? null,
     position: marker?.[2] ?? null,
     gene,
-    matchedAllele,
-    matchedAlleleCount: matchedAllele ? alleleCount(genotype, matchedAllele) : null,
+    matchedAllele: matchedAllele?.allele,
+    matchedAlleleCount: matchedAllele?.alleleCount ?? null,
   };
 }
 
@@ -230,10 +302,8 @@ function matchEvidenceRecord(
   for (let index = 0; index < record.markerIds.length; index += 1) {
     const rsid = record.markerIds[index];
     const marker = markerLookup.get(rsid.toLowerCase());
-    if (!markerMatchesRecord(marker, record, build)) continue;
-
-    const matchedMarker = markerToMatchedMarker(marker, rsid, record.genes[index] ?? record.genes[0], record, build);
-    if (matchedMarker.genotype) {
+    const matchedMarker = matchedMarkerForRecord(marker, rsid, record, record.genes[index] ?? record.genes[0], build);
+    if (matchedMarker) {
       matchedMarkers.push(matchedMarker);
     }
   }
