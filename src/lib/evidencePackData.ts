@@ -37,7 +37,11 @@ function canonicalGenotype(genotype: string | null): string | null {
 
 function countGenotypeSymbols(genotype: string | null, matches: (value: string) => boolean): number | null {
   if (!genotype) return null;
-  return genotype.split("").filter(matches).length;
+  let count = 0;
+  for (const symbol of genotype) {
+    if (matches(symbol)) count += 1;
+  }
+  return count;
 }
 
 function alleleCount(genotype: string | null, allele?: string): number | null {
@@ -51,7 +55,7 @@ interface MatchedAlleleResult {
   alleleCount: number;
 }
 
-const CONSTRAINT_REQUIRED_SOURCES = new Set(["clingen", "clinvar", "cpic", "pharmgkb"]);
+const CONSTRAINT_REQUIRED_SOURCES = new Set(["clingen", "clinvar", "cpic", "gwas", "pharmgkb"]);
 
 function validRiskAllele(allele?: string): string | null {
   if (!allele || !/^[ACGT]$/i.test(allele)) return null;
