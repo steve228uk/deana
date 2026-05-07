@@ -102,6 +102,13 @@ export interface EvidencePackManifest {
   }>;
 }
 
+export interface EvidencePackVariantConstraint {
+  type: "deletion" | "insertion";
+  ref: string;
+  alt: string;
+  matchAllele: "D" | "I";
+}
+
 export interface EvidencePackRecord {
   id: string;
   entryId: string;
@@ -126,6 +133,7 @@ export interface EvidencePackRecord {
   tone?: InsightTone;
   riskAllele?: string;
   riskAllelesByBuild?: Partial<Record<GenomeBuild, string>>;
+  variantConstraintsByBuild?: Partial<Record<GenomeBuild, EvidencePackVariantConstraint>>;
   clinvarVariationId?: string;
   relatedContexts?: RelatedEvidenceContext[];
   genotype?: string;

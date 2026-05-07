@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type {
   EvidencePackManifest,
   EvidencePackRecord,
+  EvidencePackVariantConstraint,
   EvidenceSourceRole,
   EvidenceTier,
   GenomeBuild,
@@ -28,6 +29,7 @@ const sourceCacheFiles = {
   clinvarCitations: path.join(cacheRoot, "clinvar", "var_citations.txt"),
   gwas: path.join(cacheRoot, "gwas", "associations.tsv"),
   gwasStudies: path.join(cacheRoot, "gwas", "studies.tsv"),
+  gwasPmidAlleles: path.join(cacheRoot, "gwas", "pmid-alleles", "resolved.json"),
   snpedia: path.join(cacheRoot, "snpedia", "pages.json"),
   cpicVariants: path.join(cacheRoot, "cpic", "variants.json"),
   cpicPairs: path.join(cacheRoot, "cpic", "pairs.json"),
@@ -464,8 +466,56 @@ function plainClinvarTitle(gene: string, significance: string, conditions: strin
   return `${gene} variant reported for ${condition}`;
 }
 
+interface ClinvarVariantMatchMetadata {
+  riskAllele?: string;
+  riskAllelesByBuild?: Partial<Record<GenomeBuild, string>>;
+  variantConstraintsByBuild?: Partial<Record<GenomeBuild, EvidencePackVariantConstraint>>;
+  note?: string;
+}
 
-function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, string[]>): EvidencePackRecord | null {
+function clinvarVariantMatchMetadata(row: Record<string, string>): ClinvarVariantMatchMetadata {
+  const assembly = column(row, ["Assembly"]);
+  if (assembly !== "GRCh37" && assembly !== "GRCh38") return {};
+
+  const variantType = column(row, ["Type"]).toLowerCase();
+  const ref = column(row, ["ReferenceAlleleVCF"]).toUpperCase();
+  const alt = column(row, ["AlternateAlleleVCF"]).toUpperCase();
+  const refBase = singleBaseAllele(ref);
+  const altBase = singleBaseAllele(alt);
+
+  if (refBase && altBase) {
+    return {
+      riskAllele: altBase,
+      riskAllelesByBuild: { [assembly]: altBase },
+      note: `Reported alternate allele: ${altBase}.`,
+    };
+  }
+
+  const isDeletion = variantType === "deletion";
+  const isInsertion = variantType === "insertion" || variantType === "duplication";
+  let constraintType: EvidencePackVariantConstraint["type"] | null = null;
+  if (isDeletion) {
+    constraintType = "deletion";
+  } else if (isInsertion) {
+    constraintType = "insertion";
+  }
+  if (!constraintType || !ref || !alt || ref === "-" || alt === "-") return {};
+
+  const matchAllele = constraintType === "deletion" ? "D" : "I";
+  const constraint: EvidencePackVariantConstraint = {
+    type: constraintType,
+    ref,
+    alt,
+    matchAllele,
+  };
+
+  return {
+    variantConstraintsByBuild: { [assembly]: constraint },
+    note: `Reported ${constraintType}: ${ref}>${alt}.`,
+  };
+}
+
+export function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, string[]>): EvidencePackRecord | null {
   const rawRsid = column(row, ["RS# (dbSNP)", "RS#"]);
   if (!rawRsid || rawRsid === "-1") return null;
   const rsid = normalizeRsid(rawRsid.startsWith("rs") ? rawRsid : `rs${rawRsid}`);
@@ -485,11 +535,7 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
   const traits = conditionList(column(row, ["PhenotypeList"]));
   const category = categoryForClinvar(significance);
   const condition = primaryCondition(traits, "the reported condition");
-  const assembly = column(row, ["Assembly"]);
-  const riskAllele = singleBaseAllele(column(row, ["AlternateAlleleVCF", "AlternateAllele"]));
-  const riskAllelesByBuild = riskAllele && (assembly === "GRCh37" || assembly === "GRCh38")
-    ? { [assembly]: riskAllele }
-    : undefined;
+  const { riskAllele, riskAllelesByBuild, variantConstraintsByBuild, note: variantNote } = clinvarVariantMatchMetadata(row);
   const title = plainClinvarTitle(gene, significance, traits, category);
   const reviewStars = clinvarStarsForReviewStatus(reviewStatus);
   const pmids = clinvarCitationPmidsForRow(row, citationPmids, variationId);
@@ -524,6 +570,7 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
     tone: category === "drug" ? "caution" : "neutral",
     riskAllele,
     riskAllelesByBuild,
+    variantConstraintsByBuild,
     clinvarVariationId: variationId,
     riskSummary: /reviewed by expert panel|practice guideline/i.test(reviewStatus)
       ? riskSummaryForClinvar(gene, significance, condition)
@@ -537,7 +584,7 @@ function clinvarRecord(row: Record<string, string>, citationPmids: Map<string, s
       `ClinVar review stars: ${reviewStars}.`,
       ...(submitterNote ? [submitterNote] : []),
       ...(lastEvaluated && lastEvaluated !== "-" ? [`Last evaluated: ${lastEvaluated}.`] : []),
-      ...(riskAllele ? [`Reported alternate allele: ${riskAllele}.`] : []),
+      ...(variantNote ? [variantNote] : []),
       "Generated from bulk ClinVar data; clinical interpretation requires human review and confirmatory testing.",
     ],
   };
@@ -568,6 +615,50 @@ interface GwasStudyMetadata {
   fullSummaryStats?: boolean;
 }
 
+type GwasEffectDirection = "increase" | "decrease";
+
+interface GwasResolvedPmidAllele {
+  pmid: string;
+  rsid: string;
+  riskAllele: string;
+  sourceType: string;
+  sourceUrl: string;
+  sourceLabel: string;
+  studyAccession?: string;
+  trait?: string;
+  confidence: string;
+}
+
+type GwasResolvedPmidAlleleMap = Map<string, GwasResolvedPmidAllele>;
+
+export interface GwasKnownAlleleContext {
+  riskAllele: string;
+  trait: string;
+  pmid: string;
+  effectDirection?: GwasEffectDirection;
+}
+
+export type GwasKnownAlleleIndex = Map<string, GwasKnownAlleleContext[]>;
+
+const GWAS_TRAIT_STOP_WORDS = new Set([
+  "adult",
+  "association",
+  "associations",
+  "diffuse",
+  "disease",
+  "genetic",
+  "genome",
+  "gwas",
+  "human",
+  "mutation",
+  "only",
+  "study",
+  "trait",
+  "variant",
+  "variants",
+  "with",
+]);
+
 function parseBooleanish(value: string): boolean | undefined {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return undefined;
@@ -597,7 +688,172 @@ async function readGwasStudyMetadata(): Promise<Map<string, GwasStudyMetadata>> 
   return studies;
 }
 
-function gwasRecords(row: Record<string, string>, index: number, studyMetadata: Map<string, GwasStudyMetadata>): EvidencePackRecord[] {
+async function readGwasResolvedPmidAlleles(): Promise<GwasResolvedPmidAlleleMap> {
+  const sourceFile = sourceCacheFiles.gwasPmidAlleles;
+  if (!existsSync(sourceFile)) return new Map();
+
+  const rows = JSON.parse(await readFile(sourceFile, "utf8")) as GwasResolvedPmidAllele[];
+  const resolved = new Map<string, GwasResolvedPmidAllele>();
+  for (const row of rows) {
+    const rsid = normalizeRsid(row.rsid);
+    const riskAllele = singleBaseAllele(row.riskAllele);
+    if (!row.pmid || !rsid || !riskAllele || row.confidence !== "structured-table") continue;
+    const key = gwasResolvedPmidAlleleKey(row.pmid, rsid);
+    const existing = resolved.get(key);
+    if (existing && existing.riskAllele !== riskAllele) {
+      resolved.delete(key);
+      continue;
+    }
+    resolved.set(key, { ...row, rsid, riskAllele });
+  }
+  return resolved;
+}
+
+function gwasResolvedPmidAlleleKey(pmid: string, rsid: string): string {
+  return `${pmid}|${rsid}`;
+}
+
+function gwasRiskAllelesByRsid(strongestAllele: string): Map<string, string> {
+  const alleles = new Map<string, string>();
+  for (const match of strongestAllele.matchAll(/\b(rs\d+)-([ACGT])\b/gi)) {
+    alleles.set(match[1].toLowerCase(), match[2].toUpperCase());
+  }
+  return alleles;
+}
+
+function gwasEffectDirection(orBetaRaw: string, ci: string): GwasEffectDirection | undefined {
+  const effectText = `${orBetaRaw} ${ci}`.toLowerCase();
+  if (/\bdecrease\b/.test(effectText)) return "decrease";
+  if (/\bincrease\b/.test(effectText)) return "increase";
+
+  const effect = Number(orBetaRaw);
+  if (!Number.isFinite(effect)) return undefined;
+  if (effect > 1.05) return "increase";
+  if (effect < 0 || (effect > 0 && effect < 0.95)) return "decrease";
+  return undefined;
+}
+
+function gwasTraitTokens(trait: string): Set<string> {
+  return new Set(
+    trait
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 4 && !GWAS_TRAIT_STOP_WORDS.has(token)),
+  );
+}
+
+function gwasTraitTokensOverlap(leftTokens: Set<string>, right: string): boolean {
+  if (leftTokens.size === 0) return false;
+  for (const token of gwasTraitTokens(right)) {
+    if (leftTokens.has(token)) return true;
+  }
+  return false;
+}
+
+export function gwasKnownAlleleIndexFromRows(rows: Record<string, string>[]): GwasKnownAlleleIndex {
+  const index: GwasKnownAlleleIndex = new Map();
+  for (const row of rows) addGwasKnownAlleleRow(index, row);
+  return index;
+}
+
+function addGwasKnownAlleleRow(index: GwasKnownAlleleIndex, row: Record<string, string>): void {
+  if (!includeGwas(row)) return;
+
+  const strongestAllele = column(row, ["STRONGEST SNP-RISK ALLELE"]);
+  const allelesByRsid = gwasRiskAllelesByRsid(strongestAllele);
+  if (allelesByRsid.size === 0) return;
+
+  const trait = column(row, ["MAPPED_TRAIT", "DISEASE/TRAIT"]) || "GWAS association";
+  const pmid = column(row, ["PUBMEDID", "PUBMED ID"]);
+  const effectDirection = gwasEffectDirection(
+    column(row, ["OR or BETA"]),
+    column(row, ["95% CI (TEXT)"]),
+  );
+
+  for (const [rsid, riskAllele] of allelesByRsid) {
+    const context: GwasKnownAlleleContext = {
+      riskAllele,
+      trait,
+      pmid,
+      effectDirection,
+    };
+    pushMapValue(index, rsid, context);
+  }
+}
+
+async function buildGwasKnownAlleleIndex(): Promise<GwasKnownAlleleIndex> {
+  const sourceFile = sourceCacheFiles.gwas;
+  if (!existsSync(sourceFile)) return new Map();
+
+  const index: GwasKnownAlleleIndex = new Map();
+  for await (const row of tsvRows(sourceFile)) addGwasKnownAlleleRow(index, row);
+  return index;
+}
+
+function gwasCatalogRiskAlleleForRsid(
+  rsid: string,
+  trait: string,
+  orBetaRaw: string,
+  ci: string,
+  knownAlleleIndex: GwasKnownAlleleIndex,
+): { riskAllele: string; resolvedNote: string } | null {
+  const contexts = knownAlleleIndex.get(rsid) ?? [];
+  if (contexts.length === 0) return null;
+
+  const targetDirection = gwasEffectDirection(orBetaRaw, ci);
+  const targetTraitTokens = gwasTraitTokens(trait);
+  const compatible = contexts.filter((context) => {
+    if (!gwasTraitTokensOverlap(targetTraitTokens, context.trait)) return false;
+    return !targetDirection || !context.effectDirection || context.effectDirection === targetDirection;
+  });
+  if (compatible.length < 2) return null;
+
+  const alleles = Array.from(new Set(compatible.map((context) => context.riskAllele)));
+  if (alleles.length !== 1) return null;
+
+  const pmids = Array.from(new Set(compatible.map((context) => context.pmid).filter(Boolean))).slice(0, 3);
+  const sourceNote = pmids.length > 0 ? ` Supporting PMID${pmids.length === 1 ? "" : "s"}: ${pmids.join(", ")}.` : "";
+  const directionNote = targetDirection ? ` and ${targetDirection} effect direction` : "";
+  return {
+    riskAllele: alleles[0],
+    resolvedNote: `Risk allele inferred from ${compatible.length} compatible GWAS Catalog rows for ${rsid} with overlapping trait terms${directionNote}.${sourceNote}`,
+  };
+}
+
+function gwasRiskAlleleForRsid(
+  rsid: string,
+  parsedRiskAllelesByRsid: Map<string, string>,
+  pmid: string,
+  trait: string,
+  orBetaRaw: string,
+  ci: string,
+  resolvedPmidAlleles: GwasResolvedPmidAlleleMap,
+  knownAlleleIndex: GwasKnownAlleleIndex,
+): { riskAllele: string; resolvedNote?: string } | null {
+  const parsedRiskAllele = parsedRiskAllelesByRsid.get(rsid);
+  if (parsedRiskAllele) return { riskAllele: parsedRiskAllele };
+
+  const resolved = resolvedPmidAlleles.get(gwasResolvedPmidAlleleKey(pmid, rsid));
+  if (resolved) {
+    return {
+      riskAllele: resolved.riskAllele,
+      resolvedNote: `Risk allele resolved from structured PMID evidence: ${resolved.sourceLabel}.`,
+    };
+  }
+
+  const catalogResolved = gwasCatalogRiskAlleleForRsid(rsid, trait, orBetaRaw, ci, knownAlleleIndex);
+  if (catalogResolved) return catalogResolved;
+
+  return null;
+}
+
+export function gwasRecords(
+  row: Record<string, string>,
+  index: number,
+  studyMetadata: Map<string, GwasStudyMetadata>,
+  resolvedPmidAlleles: GwasResolvedPmidAlleleMap = new Map(),
+  knownAlleleIndex: GwasKnownAlleleIndex = new Map(),
+): EvidencePackRecord[] {
   if (!includeGwas(row)) return [];
   const rsids = extractRsids([
     column(row, ["SNPS", "SNP_ID_CURRENT", "SNP_ID"]),
@@ -609,7 +865,7 @@ function gwasRecords(row: Record<string, string>, index: number, studyMetadata: 
   const mappedGene = column(row, ["MAPPED_GENE", "REPORTED GENE(S)"]) || "Unknown";
   const pmid = column(row, ["PUBMEDID", "PUBMED ID"]);
   const strongestAllele = column(row, ["STRONGEST SNP-RISK ALLELE"]);
-  const riskAllele = singleBaseAllele(strongestAllele.split("-").pop() ?? "");
+  const parsedRiskAllelesByRsid = gwasRiskAllelesByRsid(strongestAllele);
 
   const pValue = Number(column(row, ["P-VALUE"]));
   const orBetaRaw = column(row, ["OR or BETA"]);
@@ -659,41 +915,58 @@ function gwasRecords(row: Record<string, string>, index: number, studyMetadata: 
   const isTier1Gwas = pValue <= 1e-10 && Boolean(replicationSampleSize) && Number.isFinite(orBeta);
   const gwasRiskSummary = isTier1Gwas ? riskSummaryForGwas(genes[0] ?? mappedGene, trait, orBeta, ci) : undefined;
 
-  return rsids.map((rsid) => ({
-    id: `gwas-${rsid}-${index}`,
-    entryId: `local-trait-gwas-${rsid}-${index}`,
-    sourceId: "gwas",
-    role: "primary",
-    category: "traits" as const,
-    subcategory: "association",
-    markerIds: [rsid],
-    genes,
-    title: `${trait} association near ${genes[0] || rsid}`,
-    technicalName: `${rsid} ${trait}`,
-    summary: `GWAS Catalog links ${riskAllele ? `${rsid}-${riskAllele}` : rsid} with ${trait}.`,
-    detail: detailParts.join(" "),
-    whyItMatters: "This common-variant association is matched locally against the uploaded genotype and should be treated as a tendency signal, not a prediction.",
-    topics: ["GWAS", "Association"],
-    conditions: trait.split(",").map((v) => v.trim()).filter(Boolean),
-    url: normalizeGwasUrl(rawUrl) || `https://www.ebi.ac.uk/gwas/search?query=${encodeURIComponent(rsid)}`,
-    release: "GWAS Catalog association export",
-    evidenceLevel: gwasEvidenceTier(pValue),
-    clinicalSignificance: "trait-association",
-    repute: Number.isFinite(orBeta) ? gwasRepute(orBeta) : "not-set",
-    riskAllele,
-    gwasPValue: pValue,
-    gwasEffect: Number.isFinite(orBeta) ? orBeta : null,
-    gwasHasReplication: Boolean(replicationSampleSize),
-    gwasInitialSampleSize: sampleSize || undefined,
-    gwasReplicationSampleSize: replicationSampleSize || undefined,
-    gwasStudyAccession: studyAccession || undefined,
-    gwasFullSummaryStats: metadata?.fullSummaryStats,
-    riskSummary: gwasRiskSummary,
-    qualityTier: isTier1Gwas ? "tier-1" : undefined,
-    pmids: pmid ? [pmid] : [],
-    frequencyNote,
-    notes,
-  }));
+  const records: EvidencePackRecord[] = [];
+  for (const rsid of rsids) {
+    const riskMatch = gwasRiskAlleleForRsid(
+      rsid,
+      parsedRiskAllelesByRsid,
+      pmid,
+      trait,
+      orBetaRaw,
+      ci,
+      resolvedPmidAlleles,
+      knownAlleleIndex,
+    );
+    if (!riskMatch) continue;
+
+    records.push({
+      id: `gwas-${rsid}-${index}`,
+      entryId: `local-trait-gwas-${rsid}-${index}`,
+      sourceId: "gwas",
+      role: "primary",
+      category: "traits" as const,
+      subcategory: "association",
+      markerIds: [rsid],
+      genes,
+      title: `${trait} association near ${genes[0] || rsid}`,
+      technicalName: `${rsid} ${trait}`,
+      summary: `GWAS Catalog links ${rsid}-${riskMatch.riskAllele} with ${trait}.`,
+      detail: detailParts.join(" "),
+      whyItMatters: "This common-variant association is matched locally against the uploaded genotype and should be treated as a tendency signal, not a prediction.",
+      topics: ["GWAS", "Association"],
+      conditions: [trait],
+      url: normalizeGwasUrl(rawUrl) || `https://www.ebi.ac.uk/gwas/search?query=${encodeURIComponent(rsid)}`,
+      release: "GWAS Catalog association export",
+      evidenceLevel: gwasEvidenceTier(pValue),
+      clinicalSignificance: "trait-association",
+      repute: Number.isFinite(orBeta) ? gwasRepute(orBeta) : "not-set",
+      riskAllele: riskMatch.riskAllele,
+      gwasPValue: pValue,
+      gwasEffect: Number.isFinite(orBeta) ? orBeta : null,
+      gwasHasReplication: Boolean(replicationSampleSize),
+      gwasInitialSampleSize: sampleSize || undefined,
+      gwasReplicationSampleSize: replicationSampleSize || undefined,
+      gwasStudyAccession: studyAccession || undefined,
+      gwasFullSummaryStats: metadata?.fullSummaryStats,
+      riskSummary: gwasRiskSummary,
+      qualityTier: isTier1Gwas ? "tier-1" : undefined,
+      pmids: pmid ? [pmid] : [],
+      frequencyNote,
+      notes: riskMatch.resolvedNote ? [...notes, riskMatch.resolvedNote] : notes,
+    });
+  }
+
+  return records;
 }
 
 interface CachedSnpediaPage {
@@ -942,18 +1215,25 @@ async function buildClinvarRecords(maxRecords: number, citationPmids: Map<string
   if (!existsSync(sourceFile)) return [];
 
   const records = new Map<string, EvidencePackRecord>();
+  const mergeBuildMap = <T>(
+    existing: Partial<Record<GenomeBuild, T>> | undefined,
+    next: Partial<Record<GenomeBuild, T>> | undefined,
+  ): Partial<Record<GenomeBuild, T>> | undefined => {
+    if (!existing && !next) return undefined;
+    return { ...(existing ?? {}), ...(next ?? {}) };
+  };
+
   for await (const row of tsvRows(sourceFile)) {
     const record = clinvarRecord(row, citationPmids);
     if (!record) continue;
     const existing = records.get(record.id);
     if (existing) {
-      const riskAllelesByBuild = {
-        ...(existing.riskAllelesByBuild ?? {}),
-        ...(record.riskAllelesByBuild ?? {}),
-      };
-      const distinctAlleles = Array.from(new Set(Object.values(riskAllelesByBuild).filter(Boolean)));
-      existing.riskAllelesByBuild = Object.keys(riskAllelesByBuild).length > 0 ? riskAllelesByBuild : undefined;
+      const riskAllelesByBuild = mergeBuildMap(existing.riskAllelesByBuild, record.riskAllelesByBuild);
+      const variantConstraintsByBuild = mergeBuildMap(existing.variantConstraintsByBuild, record.variantConstraintsByBuild);
+      const distinctAlleles = Array.from(new Set(Object.values(riskAllelesByBuild ?? {}).filter(Boolean)));
+      existing.riskAllelesByBuild = riskAllelesByBuild;
       existing.riskAllele = distinctAlleles.length === 1 ? distinctAlleles[0] : undefined;
+      existing.variantConstraintsByBuild = variantConstraintsByBuild;
       existing.pmids = Array.from(new Set([...existing.pmids, ...record.pmids]));
       existing.notes = Array.from(new Set([...existing.notes, ...record.notes]));
       continue;
@@ -966,7 +1246,12 @@ async function buildClinvarRecords(maxRecords: number, citationPmids: Map<string
   return Array.from(records.values());
 }
 
-async function buildGwasRecords(maxRecords: number, studyMetadata: Map<string, GwasStudyMetadata>): Promise<EvidencePackRecord[]> {
+async function buildGwasRecords(
+  maxRecords: number,
+  studyMetadata: Map<string, GwasStudyMetadata>,
+  resolvedPmidAlleles: GwasResolvedPmidAlleleMap,
+  knownAlleleIndex: GwasKnownAlleleIndex,
+): Promise<EvidencePackRecord[]> {
   const sourceFile = sourceCacheFiles.gwas;
   if (!existsSync(sourceFile)) return [];
 
@@ -976,12 +1261,17 @@ async function buildGwasRecords(maxRecords: number, studyMetadata: Map<string, G
   let rowIndex = 0;
   for await (const row of tsvRows(sourceFile)) {
     rowIndex += 1;
-    for (const record of gwasRecords(row, rowIndex, studyMetadata)) {
-      const key = `${record.markerIds[0]}|${record.conditions[0] ?? ""}`;
+    for (const record of gwasRecords(row, rowIndex, studyMetadata, resolvedPmidAlleles, knownAlleleIndex)) {
+      const key = gwasDedupeKey(record);
       if (!seen.has(key)) seen.set(key, record);
     }
+    if (Number.isFinite(maxRecords) && seen.size >= maxRecords) break;
   }
   return Array.from(seen.values()).slice(0, maxRecords);
+}
+
+export function gwasDedupeKey(record: EvidencePackRecord): string {
+  return `${record.markerIds[0]}|${record.conditions.join("\0")}`;
 }
 
 interface CpicVariant {
@@ -1456,6 +1746,7 @@ async function sourceChecksums(): Promise<Record<string, string | null>> {
     "clinvar-citations": sourceCacheFiles.clinvarCitations,
     gwas: sourceCacheFiles.gwas,
     "gwas-studies": sourceCacheFiles.gwasStudies,
+    "gwas-pmid-alleles": sourceCacheFiles.gwasPmidAlleles,
     snpedia: sourceCacheFiles.snpedia,
     cpic: sourceCacheFiles.cpicVariants,
     pharmgkb: sourceCacheFiles.pharmgkb,
@@ -1481,14 +1772,16 @@ function replaceVersionConstant(source: string, exportName: string, version: str
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const targetDir = path.join(packRoot, options.version);
-  const [clinvarCitationPmids, gwasStudyMetadata] = await Promise.all([
+  const [clinvarCitationPmids, gwasStudyMetadata, gwasResolvedPmidAlleles, gwasKnownAlleleIndex] = await Promise.all([
     readClinvarCitationPmids(),
     readGwasStudyMetadata(),
+    readGwasResolvedPmidAlleles(),
+    buildGwasKnownAlleleIndex(),
   ]);
   const [definitionRecords, clinvarRecords, gwasRecords, snpediaRecords, cpicRecords, pharmgkbRecords] = await Promise.all([
     buildDefinitionRecords(clinvarCitationPmids),
     buildClinvarRecords(options.maxClinvarRecords, clinvarCitationPmids),
-    buildGwasRecords(options.maxGwasRecords, gwasStudyMetadata),
+    buildGwasRecords(options.maxGwasRecords, gwasStudyMetadata, gwasResolvedPmidAlleles, gwasKnownAlleleIndex),
     buildSnpediaRecords(),
     buildCpicRecords(),
     buildPharmgkbRecords(),

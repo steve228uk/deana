@@ -245,6 +245,16 @@ function summaryForLocalEvidence(
   return null;
 }
 
+function riskCountForLocalEvidence(
+  matchedMarker: ReportEntry["matchedMarkers"][number] | undefined,
+  riskAllele: string | undefined,
+  genotype: string | null,
+): number | null {
+  if (typeof matchedMarker?.matchedAlleleCount === "number") return matchedMarker.matchedAlleleCount;
+  if (!riskAllele || !genotype) return null;
+  return [...genotype].filter((a) => a === riskAllele).length;
+}
+
 function localEvidenceGenotypeSummary(match: EvidencePackMatch): string {
   const genotype = match.record.genotype ? `Source genotype: ${match.record.genotype}. ` : "";
   return `${genotype}${match.matchedMarkers.map(markerLabel).join(" • ")}`;
@@ -286,8 +296,7 @@ function createLocalEvidenceEntries(supplement?: EvidenceSupplement): ReportEntr
       const matchedMarker = match.matchedMarkers[0];
       const genotype = matchedMarker?.genotype ?? null;
       const riskAllele = matchedMarker?.matchedAllele ?? record.riskAllele;
-      const riskCount =
-        riskAllele && genotype ? [...genotype].filter((a) => a === riskAllele).length : null;
+      const riskCount = riskCountForLocalEvidence(matchedMarker, riskAllele, genotype);
 
       const repute = record.repute ?? "not-set";
       const coverage: CoverageStatus = genotype ? "full" : "missing";

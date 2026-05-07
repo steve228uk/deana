@@ -162,8 +162,8 @@ describe("fetchLocalEvidencePack", () => {
   });
 
   it("reports shard matching progress as each selected shard completes", async () => {
-    const firstRecords = [makeRecord("first", "rs1")];
-    const secondRecords = [makeRecord("second", "rs2")];
+    const firstRecords = [{ ...makeRecord("first", "rs1"), riskAllele: "A" }];
+    const secondRecords = [{ ...makeRecord("second", "rs2"), riskAllele: "G" }];
     const firstText = text(firstRecords);
     const secondText = text(secondRecords);
     const manifest: EvidencePackManifest = {
@@ -230,7 +230,7 @@ describe("fetchLocalEvidencePack", () => {
   it("normalizes uploaded genotypes when matching local records", () => {
     const matches = matchEvidenceRecords(
       [["rs762551", "15", 75041917, "CA"]],
-      [makeRecord("caffeine", "rs762551")],
+      [{ ...makeRecord("caffeine", "rs762551"), sourceId: "snpedia" }],
     );
 
     expect(matches).toHaveLength(1);
@@ -285,6 +285,42 @@ describe("fetchLocalEvidencePack", () => {
     expect(matchEvidenceRecords([["rs1", "1", 1, "AA"]], [record], "Unknown")).toHaveLength(0);
   });
 
+  it("matches ClinVar deletion records only against explicit deletion genotypes", () => {
+    const deletionConstraint = {
+      type: "deletion" as const,
+      ref: "CG",
+      alt: "C",
+      matchAllele: "D" as const,
+    };
+    const record: EvidencePackRecord = {
+      ...makeRecord("clinvar-deletion", "rs137853281"),
+      sourceId: "clinvar",
+      variantConstraintsByBuild: {
+        GRCh37: deletionConstraint,
+        GRCh38: deletionConstraint,
+      },
+    };
+
+    expect(matchEvidenceRecords([["rs137853281", "13", 52516532, "CC"]], [record], "GRCh37")).toHaveLength(0);
+    expect(matchEvidenceRecords([["rs137853281", "13", 52516532, "II"]], [record], "GRCh37")).toHaveLength(0);
+    expect(matchEvidenceRecords([["rs137853281", "13", 52516532, "--"]], [record], "GRCh37")).toHaveLength(0);
+
+    const heterozygousMatches = matchEvidenceRecords([["rs137853281", "13", 52516532, "DI"]], [record], "GRCh37");
+    expect(heterozygousMatches).toHaveLength(1);
+    expect(heterozygousMatches[0].matchedMarkers[0]).toMatchObject({
+      matchedAllele: "D",
+      matchedAlleleCount: 1,
+    });
+
+    const homozygousMatches = matchEvidenceRecords([["rs137853281", "13", 52516532, "DD"]], [record], "GRCh37");
+    expect(homozygousMatches).toHaveLength(1);
+    expect(homozygousMatches[0].matchedMarkers[0].matchedAlleleCount).toBe(2);
+
+    const dashMatches = matchEvidenceRecords([["rs137853281", "13", 52516532, "-C"]], [record], "GRCh37");
+    expect(dashMatches).toHaveLength(1);
+    expect(dashMatches[0].matchedMarkers[0].matchedAlleleCount).toBe(1);
+  });
+
   it("allows buildless matching when build-specific risk alleles are unambiguous", () => {
     const matches = matchEvidenceRecords(
       [["rs1", "1", 1, "AT"]],
@@ -305,38 +341,57 @@ describe("fetchLocalEvidencePack", () => {
     expect(matches[0].matchedMarkers[0].matchedAllele).toBe("T");
   });
 
-  it("fails closed for unconstrained ClinGen, ClinVar, CPIC, and PharmGKB records", () => {
+  it("fails closed for unconstrained ClinGen, ClinVar, CPIC, GWAS, and PharmGKB records", () => {
     const matches = matchEvidenceRecords(
       [["rs1", "1", 1, "AA"]],
       [
         { ...makeRecord("clingen", "rs1"), sourceId: "clingen" },
         { ...makeRecord("clinvar", "rs1"), sourceId: "clinvar" },
         { ...makeRecord("cpic", "rs1"), sourceId: "cpic" },
-        { ...makeRecord("pharmgkb", "rs1"), sourceId: "pharmgkb" },
         { ...makeRecord("gwas", "rs1"), sourceId: "gwas" },
+        { ...makeRecord("pharmgkb", "rs1"), sourceId: "pharmgkb" },
       ],
     );
 
-    expect(matches.map((match) => match.record.id)).toEqual(["gwas"]);
+    expect(matches).toEqual([]);
   });
 
-  it("allows constrained ClinGen, ClinVar, CPIC, and PharmGKB records to match", () => {
+  it("allows constrained ClinGen, ClinVar, CPIC, GWAS, and PharmGKB records to match", () => {
     const matches = matchEvidenceRecords(
       [
         ["rs1", "1", 1, "AG"],
         ["rs2", "1", 2, "CT"],
         ["rs3", "1", 3, "TT"],
-        ["rs4", "1", 4, "AC"],
+        ["rs4", "1", 4, "GG"],
+        ["rs5", "1", 5, "AC"],
       ],
       [
         { ...makeRecord("clingen", "rs1"), sourceId: "clingen", riskAllele: "G" },
         { ...makeRecord("clinvar", "rs2"), sourceId: "clinvar", riskAllele: "T" },
         { ...makeRecord("cpic", "rs3"), sourceId: "cpic", riskAllele: "T" },
-        { ...makeRecord("pharmgkb", "rs4"), sourceId: "pharmgkb", genotype: "AC" },
+        { ...makeRecord("gwas", "rs4"), sourceId: "gwas", riskAllele: "G" },
+        { ...makeRecord("pharmgkb", "rs5"), sourceId: "pharmgkb", genotype: "AC" },
       ],
     );
 
-    expect(matches.map((match) => match.record.id)).toEqual(["clingen", "clinvar", "cpic", "pharmgkb"]);
+    expect(matches.map((match) => match.record.id)).toEqual(["clingen", "clinvar", "cpic", "gwas", "pharmgkb"]);
+  });
+
+  it("matches rs55705857 GWAS records only when the G risk allele is present", () => {
+    const record = { ...makeRecord("rs55705857-gwas", "rs55705857"), sourceId: "gwas", riskAllele: "G" };
+
+    expect(matchEvidenceRecords([["rs55705857", "8", 130645692, "AA"]], [record])).toHaveLength(0);
+
+    const heterozygousMatches = matchEvidenceRecords([["rs55705857", "8", 130645692, "AG"]], [record]);
+    expect(heterozygousMatches).toHaveLength(1);
+    expect(heterozygousMatches[0].matchedMarkers[0]).toMatchObject({
+      matchedAllele: "G",
+      matchedAlleleCount: 1,
+    });
+
+    const homozygousMatches = matchEvidenceRecords([["rs55705857", "8", 130645692, "GG"]], [record]);
+    expect(homozygousMatches).toHaveLength(1);
+    expect(homozygousMatches[0].matchedMarkers[0].matchedAlleleCount).toBe(2);
   });
 
   it("matches genotype pages by exact canonical genotype", () => {
